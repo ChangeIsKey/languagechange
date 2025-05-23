@@ -86,7 +86,7 @@ class LanguageChange():
             url = self.resource_hub[resource_type][resource_name][dataset][version]
             destination_path = os.path.join(self.resources_dir,resource_type,resource_name,dataset,version)
             Path(destination_path).mkdir(parents=True, exist_ok=True)
-            dload.save_unzip(url, destination_path)
+            dload.save_unzip(url, destination_path, delete_after=True)
             return os.path.join(self.resources_dir,resource_type,resource_name,dataset,version)
         except:
             logger.error('ERROR: Cannot download the resource.')
