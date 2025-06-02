@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "languagechange"
+version = "0.0.1"
+description = "Python Library for Language Change"
+authors = [
+    { name = "Change is Key!" }
+]
+readme = ""
+requires-python = ">=3.8"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+dependencies = [
+    "dload",
+    "LSCDetection @ git+https://github.com/pierluigic/LSCDetection.git",
+    "WordTransformer @ git+https://github.com/pierluigic/xl-lexeme.git",
+    "sortedcontainers",
+    "bs4",
+    "lxml",
+    "gensim",
+    "torch==2.0.1",
+    "torchvision",
+    "torchaudio",
+    "trankit",
+    "openai",
+    "langchain",
+    "pydantic"
+]
+
+[project.urls]
+Homepage = "https://github.com/pierluigic/languagechange"
+
+[tool.setuptools.packages.find]
+where = ["."]
