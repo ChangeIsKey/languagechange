@@ -1,0 +1,4 @@
+matplotlib==3.10.3
+plotly==6.1.2
+umap-learn==0.5.7
+nltk==3.9.1
