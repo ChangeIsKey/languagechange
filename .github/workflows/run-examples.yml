@@ -1,0 +1,15 @@
+name: Run examples
+run-name: Run the example scripts in examples/
+on: [push, pull_request]
+jobs:
+  Run-Examples:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Install module
+        run: pip install .
+      - name: Run examples of comparing embeddings
+        run: python examples/compare-representations/run_compare_representations.py
+      - name: Run examples of visualizations
+        run: python examples/visualizations/run_visualizations.py
