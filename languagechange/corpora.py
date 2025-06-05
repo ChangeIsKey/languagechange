@@ -98,7 +98,7 @@ class Line:
                 search_term : SearchTerm
             Returns: A TargetUsageList of all matches.
         """
-        time  = self.date if self.date else time
+        time  = getattr(self, 'date', time)
         tul = TargetUsageList()
         for feat in search_term.word_feature:
             if search_term.regex:
@@ -112,9 +112,8 @@ class Line:
                         return offsets
                 raw_text_by_feature = self.raw_text_by_feature(feat)
                 for offsets in search_func(search_term.term, raw_text_by_feature):
-                    tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
+                    tu = TargetUsage(self.raw_text(), offsets, time, id=getattr(self, 'id', 0))
                     tul.append(tu)
-                    n_usages = n_usages + 1
             else:
                 token_features = self.tokens_by_feature(feat)
                 for idx, token in enumerate(token_features):
@@ -123,7 +122,7 @@ class Line:
                         if not idx == 0:
                             offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
                         offsets[1] = offsets[0] + len(self.tokens()[idx])
-                        tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
+                        tu = TargetUsage(self.raw_text(), offsets, time, id=getattr(self, 'id', 0))
                         tul.append(tu)
         return tul
 
@@ -565,42 +564,42 @@ class Corpus:
 
 class LinebyLineCorpus(Corpus):
 
-    def __init__(self, path, **args):
-        if not 'name' in args:
-            name = path
-        super().__init__(name,**args)
+    def __init__(self, path, **kwargs):
+        if 'name' not in kwargs:
+            kwargs['name'] = path
+        super().__init__(**kwargs)
         self.path = path
 
-        if 'is_sentence_tokenized' in args:
-            self.is_sentence_tokenized = args['is_sentence_tokenized']
+        if 'is_sentence_tokenized' in kwargs:
+            self.is_sentence_tokenized = kwargs['is_sentence_tokenized']
         else:
             self.is_sentence_tokenized = False
 
         if self.is_sentence_tokenized:
-            if 'is_tokenized' in args:
-                self.is_tokenized = args['is_tokenized']
+            if 'is_tokenized' in kwargs:
+                self.is_tokenized = kwargs['is_tokenized']
         else:
-            if 'is_tokenized' in args and args['is_tokenized']:
+            if 'is_tokenized' in kwargs and kwargs['is_tokenized']:
                 self.is_sentence_tokenized = True
                 self.is_tokenized = True
             else:
                 self.is_sentence_tokenized = False
                 self.is_tokenized = False
 
-        if 'is_tokenized' in args and args['is_tokenized']:
-            if 'is_lemmatized' in args:
-                self.is_lemmatized = args['is_lemmatized']
-            if 'tokens_splitter' in args:
-                self.tokens_splitter = args.tokens_splitter
+        if 'is_tokenized' in kwargs and kwargs['is_tokenized']:
+            if 'is_lemmatized' in kwargs:
+                self.is_lemmatized = kwargs['is_lemmatized']
+            if 'tokens_splitter' in kwargs:
+                self.tokens_splitter = kwargs.tokens_splitter
             else:
                 self.tokens_splitter = ' '
         else:
-            if 'is_lemmatized' in args and args['is_lemmatized']:
+            if 'is_lemmatized' in kwargs and kwargs['is_lemmatized']:
                 self.is_sentence_tokenized = True
                 self.is_tokenized = True
                 self.is_lemmatized = True
-                if 'tokens_splitter' in args:
-                    self.tokens_splitter = args.tokens_splitter
+                if 'tokens_splitter' in kwargs:
+                    self.tokens_splitter = kwargs.tokens_splitter
                 else:
                     self.tokens_splitter = ' '
             else:
