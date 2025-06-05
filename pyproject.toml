@@ -28,6 +28,7 @@ dependencies = [
     "torch==2.0.1",
     "torchvision",
     "torchaudio",
+    "transformers==4.48.3",
     "trankit",
     "openai",
     "langchain",
