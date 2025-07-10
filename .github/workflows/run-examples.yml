@@ -1,0 +1,31 @@
+name: Run examples
+run-name: Run the example scripts in examples/
+on: [push, pull_request]
+jobs:
+  Run-Examples:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11.5'  # Choose your required version
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install .
+      - run: pip show torch
+      - name: Show module
+        run: pip show languagechange
+      - name: Run examples of comparing embeddings
+        run: |
+          pip install -r examples/compare-representations/requirements.txt
+          python examples/compare-representations/run_compare_representations.py
