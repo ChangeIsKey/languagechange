@@ -18,6 +18,8 @@ import pandas as pd
 import torch
 import tqdm
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from sentence_transformers import SentenceTransformer
+import getpass
 
 # Define types for chat dialog outside the class for clarity
 Role = Literal["system", "user"]
@@ -272,7 +274,8 @@ class ChatModelDefinitionGenerator:
     """
     def __init__(self, model_name: str, model_provider: str, 
                  langsmith_key: str = None, provider_key_name: str = None, 
-                 provider_key: str = None, language: str = None):
+                 provider_key: str = None, language: str = None,
+                 embedding_model: str = "all-mpnet-base-v2"):
         """
         Initializes the DefinitionModel.
 
@@ -325,8 +328,11 @@ class ChatModelDefinitionGenerator:
         # Configure the model to use structured output with the DefinitionOutput schema.
         self.model = llm.with_structured_output(DefinitionOutput)
 
+        self.embedding_model = SentenceTransformer(embedding_model)
+
     def generate_definitions(self, target_usages: List[TargetUsage],
-                        user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}")
+                        user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}"),
+                        encode = False
                        ) -> List[str]:
         """
         Generates definitions for each TargetUsage using a chat model.
@@ -362,6 +368,8 @@ class ChatModelDefinitionGenerator:
             except Exception as e:
                 logging.error(f"Could not run chat completion: {e}")
                 definitions.append("")
+        if encode:
+            definitions = self.embedding_model.encode(definitions)
         return definitions
 
 
