@@ -81,6 +81,11 @@
       "MCL-WiC":{
         "no-version": "https://github.com/SapienzaNLP/mcl-wic/archive/refs/heads/master.zip"
       }
+    },
+    "WSD":{
+      "XL-WSD":{
+        "no-version":"https://drive.usercontent.google.com/download?id=19YTL-Uq95hjiFZfgwEpXRgcYGCR_PQY0&export=download&authuser=0&confirm=t&uuid=f89bb3b8-f35e-4082-ad74-d111754cee01&at=ALoNOgkscV7W0czFcUavRT23Mmu4:1749482444512"
+      }
     }
   }
 }
