@@ -1,6 +1,6 @@
 from languagechange.resource_manager import LanguageChange
 from languagechange.corpora import LinebyLineCorpus
-from languagechange.usages import Target, TargetUsageList, DWUGUsage
+from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
 from languagechange.utils import NumericalTime, LiteralTime
 import webbrowser
 import os
@@ -15,7 +15,7 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
-from typing import List, Dict, Union, Callable
+from typing import List, Dict, Union, Callable, Tuple
 
 
 class Benchmark():
@@ -56,7 +56,7 @@ class Benchmark():
                 all_data += dataset
             return all_data
         
-    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True):
+    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True, epsilon = 1e-6):
         for s in ['train','dev','test']:
             if s in self.data.keys():
                 logging.info(f'Dataset already contains a {s} set.')
@@ -66,7 +66,7 @@ class Benchmark():
                 self.data['all'].extend(dataset)
         
         try:
-            assert train_prop + dev_prop + test_prop == 1
+            assert abs(1 - (train_prop + dev_prop + test_prop)) < epsilon
         except AssertionError:
             logging.error('Train, dev and test proportions must add upp to 1.')
             return None
@@ -338,7 +338,6 @@ class DWUG(Benchmark):
             Args:
                 only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
         """
-        wic = WiC(language=self.language)
         data = []
         for word in self.target_words:
             excluded_instances = set()
@@ -369,7 +368,7 @@ class DWUG(Benchmark):
                     if not j == 0:
                         line = line.replace('\n','').split('\t')
                         idx1, idx2 = line[0], line[1]
-                        label = int(line[3])
+                        label = float(line[3])
                         if (label != 0 or not exclude_non_judgments) and not idx1 in excluded_instances and not idx2 in excluded_instances:
                             if not frozenset([idx1,idx2]) in temp_labels:
                                 temp_labels[frozenset([idx1,idx2])] = []
@@ -396,7 +395,7 @@ class DWUG(Benchmark):
                             'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
                             'label': label})
 
-        wic.load_from_data(data)
+        wic = WiC(dataset=data, language=self.language)
         return wic
     
     def get_usages_and_senses(self, remove_outliers = True):
@@ -425,14 +424,12 @@ class DWUG(Benchmark):
         
     def cast_to_WSD(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsd = WSD()
-        wsd.load_from_data(data)
+        wsd = WSD(dataset=data)
         return wsd
 
     def cast_to_WSI(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsi = WSI()
-        wsi.load_from_data(data)
+        wsi = WSI(dataset=data)
         return wsi
     
     def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):
@@ -488,44 +485,64 @@ class WiC(Benchmark):
     """
         Dataset handling for the Word-in-Context (WiC) task.
         Parameters:
-            dataset (str) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 'AM2iCo'] if
-                downloading from the language change resource hub, or empty if loading manually.
-            version (str) : the version of the dataset if loading from the resource hub.
-            language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset from the resource hub.
+            path (str) : a path to the dataset, if it is not stored by the resource hub.
+            dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 'AM2iCo'] if using a dataset in the language change resource hub, or a list or a dict if loading from a datastructure already describing a WiC dataset.
+            version (str) : the version of the dataset if using a dataset from the resource hub.
+            language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
             crosslingual (bool) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
     """
-    def __init__(self, dataset=None, version=None, language=None, crosslingual = False):
+    def __init__(self, 
+                 path : str = None, 
+                 dataset : str | list | dict = None, 
+                 version : str = None, 
+                 language : str = None, 
+                 crosslingual = False):
         self.data = {}
         self.dataset = dataset
         self.version = version
         self.language = language
         self.target_words = set()
 
+        # Get the dataset from the resource hub, or load a locally stored dataset from files
         if dataset != None and version != None and (dataset == 'WiC' or dataset == 'TempoWiC' or language != None):
-            lc = LanguageChange()
-            home_path = lc.get_resource('benchmarks', 'WiC', dataset, version)
-            
-            if dataset == 'XL-WiC' or dataset == 'TempoWiC' or dataset == 'MCL-WiC' or dataset == 'AM2iCo':
-                wic_folder = os.listdir(home_path)[0]
-                home_path = os.path.join(home_path, wic_folder)
-                if dataset == 'MCL-WiC':
-                    if os.path.exists(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip")):
-                        with zipfile.ZipFile(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip"), 'r') as f:
-                            f.extractall(home_path)
-                    self.home_path = os.path.join(home_path, 'MCL-WiC')
+            # Let the resource hub find the path
+            if path == None:
+                lc = LanguageChange()
+                home_path = lc.get_resource('benchmarks', 'WiC', dataset, version)
+                
+                if dataset == 'XL-WiC' or dataset == 'TempoWiC' or dataset == 'MCL-WiC' or dataset == 'AM2iCo':
+                    wic_folder = os.listdir(home_path)[0]
+                    home_path = os.path.join(home_path, wic_folder)
+                    if dataset == 'MCL-WiC':
+                        if os.path.exists(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip")):
+                            with zipfile.ZipFile(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip"), 'r') as f:
+                                f.extractall(home_path)
+                        self.home_path = os.path.join(home_path, 'MCL-WiC')
+                    else:
+                        self.home_path = home_path
                 else:
                     self.home_path = home_path
+            # Pre-defined path
             else:
-                self.home_path = home_path
-            
-            self.load_from_resource_hub(dataset, language, crosslingual = crosslingual)
+                self.home_path = path
+                
+            self.load_from_resource_hub(dataset, language, crosslingual = crosslingual) 
+
+        # Loads from a dictionary or list
+        elif dataset != None and (type(dataset) == list or type(dataset) == dict):
+            try:
+                self.load_from_data(dataset)
+            except Exception:
+                logging.error('Could not load from dataset.')
     
-    # Loads already formatted data, with each example as in self.load()
+    # Loads from a list or a dict containing a WiC dataset, with each example as in self.load_from_resource_hub()
     def load_from_data(self, data):
         if type(data) == list:
             self.data = {'all': data}
         elif type(data) == dict:
             self.data = data
+        else:
+            raise TypeError('Could not load the dataset as a WiC dataset.')
 
         # Add the lemma in each data example to the set of target words
         for dataset in self.data.values():
@@ -676,7 +693,7 @@ class WiC(Benchmark):
         # XL-WiC, containing WiC datasets for 12 more languages other than English.
         elif dataset == 'XL-WiC':
             # There is something unusual in the offsets of the XL-WiC dataset for Farsi.
-            # The first index is for some reason a word index while the difference between the first and the second denotes
+            # The first index is a word index while the difference between the first and the second denotes
             # the length of the word.
             if language == 'FA':
                 def get_start_end(text, start, end):
@@ -798,6 +815,23 @@ class WiC(Benchmark):
     def load_from_resource_hub(self, dataset, language, crosslingual = False):
         data_paths = self.find_data_paths(dataset, language, crosslingual)
         self.load_from_files(data_paths, dataset, language, crosslingual)
+
+    # Loads from a list of pairs of target usages
+    def load_from_target_usages(self, target_usages : List[Union[Tuple[TargetUsage], List[TargetUsage], TargetUsageList]], labels):
+        data = []
+        for i, target_usage_pair in enumerate(target_usages):
+            tu1, tu2 = target_usage_pair
+            example = {'word': tu1.text()[tu1.offsets[0]:tu1.offsets[1]],
+                       'text1': tu1.text(),
+                       'text2': tu2.text(),
+                       'start1': tu1.offsets[0],
+                       'end1': tu1.offsets[1],
+                       'start2': tu2.offsets[0],
+                       'end2': tu2.offsets[1],
+                       'label': labels[i]}
+            data.append(example)
+        self.load_from_data(data)
+
     
     def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric : Callable, word = None):
         """
@@ -841,25 +875,47 @@ class WiC(Benchmark):
         return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
     
 
-# Dataset handling for the Word Sense Disambiguation (WSD) task
 class WSD(Benchmark):
-    def __init__(self, path = None, dataset = None, language = None, version = None):
-        if path == None and dataset != None and language != None and version != None:
-            lc = LanguageChange()
-            path = lc.get_resource('benchmarks', 'WSD', dataset, version)
-
-            if dataset == 'XL-WSD':
-                self.home_path = os.path.join(path, 'xl-wsd')
-        else:
-            self.home_path = path
-
+    """
+        Dataset handling for the Word Sense Disambiguation (WSD) task.
+        Parameters:
+            path (str) : a path to the dataset, if it is not stored by the resource hub in the cache folder.
+            dataset (str|list|dict) : the dataset to be loaded. 'XL-WSD' if using a dataset from the language change resource hub, or a list or a dict if loading from a datastructure already describing a WSD dataset.
+            version (str) : the version of the dataset if using a dataset in the resource hub.
+            language (str) : the language code (e.g. BG).
+    """
+    def __init__(self, 
+                 path : str = None, 
+                 dataset : str | list | dict = None, 
+                 language : str = None, 
+                 version : str = None):
+        self.data = {}
         self.target_words = set()
 
-        if self.home_path != None:
+        # Loads from the resource hub or a local path containing the necessary files
+        if dataset != None and language != None and version != None:
+            # Let the resource manager find the path
+            if path == None:
+                lc = LanguageChange()
+                path = lc.get_resource('benchmarks', 'WSD', dataset, version)
+
+                if dataset == 'XL-WSD':
+                    self.home_path = os.path.join(path, 'xl-wsd')
+            # Pre-defined path
+            else:
+                self.home_path = path
+
             logging.info(f'Home path:{self.home_path}')
             self.load(dataset, language)
 
-    # Loads already formatted data, with each example as in self.load()
+        # Loads from a dictionary or list already containing a WSD dataset
+        elif dataset != None and (type(dataset) == list or type(dataset) == dict):
+            try:
+                self.load_from_data(dataset)
+            except Exception:
+                logging.error('Could not load from dataset.')
+
+    # Loads from a dict or list containing a WSD dataset, with each example as in self.load()
     def load_from_data(self, data):
         if type(data) == list:
             self.data = {'all': data}
@@ -962,8 +1018,16 @@ class WSD(Benchmark):
                             line_data = line.strip("\n").split(" ")
                             id = line_data[0]
                             labels = line_data[1:]
-                            data_by_id[id]['label'] = labels
-                            data_by_id[id]['id'] = id
+                            if len(labels) > 1:
+                                # If there are multiple lables, create new examples for each.
+                                for i, label in enumerate(labels):
+                                    data_by_id[f'{id}:{i}'] = data_by_id[id]
+                                    data_by_id[f'{id}:{i}']['label'] = label
+                                    data_by_id[f'{id}:{i}']['id'] = f'{id}:{i}'
+                                del data_by_id[id]
+                            else:
+                                data_by_id[id]['label'] = labels[0]
+                                data_by_id[id]['id'] = id
 
                 data[key] = list(data_by_id.values())
 
@@ -972,6 +1036,26 @@ class WSD(Benchmark):
     def load(self, dataset, language):
         data_paths = self.find_data_paths(dataset, language)
         self.load_from_files(data_paths, dataset)
+
+    # Loads from a list of target usages
+    def load_from_target_usages(self, target_usages : Union[List[TargetUsage], TargetUsageList], labels):
+        data = []
+        for i, tu in enumerate(target_usages):
+            example = {'word': tu.text()[tu.offsets[0]:tu.offsets[1]],
+                       'text': tu.text(),
+                       'start': tu.offsets[0],
+                       'end': tu.offsets[1],
+                       'label': labels[i]}
+            if hasattr(tu, 'id'):
+                example['id'] = tu.id
+            data.append(example)
+        self.load_from_data(data)
+
+    # Casts to a WSI object with the same data
+    def cast_to_WSI(self):
+        wsi = WSI()
+        wsi.load_from_data(self.data)
+        return wsi
 
     def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric, word = None):
         """
@@ -1021,13 +1105,19 @@ class WSD(Benchmark):
         return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
 
 
-# Dataset handling for the Word Sense Induction (WSI) task (to be implemented)
 class WSI(Benchmark):
-    def __init__(self):
+    """
+        Dataset handling for the Word Sense Induction (WSI) task.
+        Parameters:
+            dataset (list|dict) : a datastructure describing a WSI dataset.
+    """
+    def __init__(self, dataset : list | dict = None):
         self.data = {}
         self.target_words = set()
+        if dataset is not None:
+            self.load_from_data(dataset)
 
-    # Loads already formatted data, with each example as in self.load()
+    # Loads from a list or dict containing a WSI dataset
     def load_from_data(self, data):
         if type(data) == list:
             self.data = {'all': data}
@@ -1039,6 +1129,20 @@ class WSI(Benchmark):
             for d in dataset:
                 if 'word' in d.keys():
                     self.target_words.add(d['word'])
+
+    # Loads from a list of target usages
+    def load_from_target_usages(self, target_usages : Union[List[TargetUsage], TargetUsageList], labels):
+        data = []
+        for i, tu in enumerate(target_usages):
+            example = {'word': tu.text()[tu.offsets[0]:tu.offsets[1]],
+                       'text': tu.text(),
+                       'start': tu.offsets[0],
+                       'end': tu.offsets[1],
+                       'label': labels[i]}
+            if hasattr(tu, 'id'):
+                example['id'] = tu.id
+            data.append(example)
+        self.load_from_data(data)
 
     def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all'):
         """
@@ -1060,7 +1164,7 @@ class WSI(Benchmark):
                 labels_per_word[d['word']][0].append(d['label'])
                 labels_per_word[d['word']][1].append(predictions[d['id']])
 
-        elif type(predictions) == list:
+        elif type(predictions) == list or type(predictions) == np.ndarray:
             for i, d in enumerate(self.get_dataset(dataset)):
                 if not d['word'] in labels_per_word:
                     labels_per_word[d['word']] = [[],[]]

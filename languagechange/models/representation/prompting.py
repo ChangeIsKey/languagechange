@@ -18,7 +18,7 @@ class SCDURel(BaseModel):
 
 
 class PromptModel:
-    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", language : str = None, **kwargs):
+    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", language : str = None, lemmatize = False, **kwargs):
         self.model_name = model_name
         self.language = language
 
@@ -106,11 +106,12 @@ class PromptModel:
         else:
             self.model = llm
 
+        self.lemmatize = lemmatize
+
 
     def get_response(self, target_usages : List[TargetUsage], 
                      system_message = 'You are a lexicographer',
-                     user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-                     lemmatize = True):
+                     user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}'):
         """
         Takes as input two target usages and returns the degree of semantic change between them, using a chat model with structured output.
         Args:
@@ -135,7 +136,7 @@ class PromptModel:
                 if token['span'] == tuple(usage.offsets):
                     return(token['lemma'])
                 
-        if lemmatize:
+        if self.lemmatize:
             if self.language == None:
                 logging.error("Could not lemmatize using trankit because no language is set. Please pass a value to 'language' when initializing the model.")
                 raise Exception

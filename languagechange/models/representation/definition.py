@@ -214,6 +214,7 @@ class LlamaDefinitionGenerator:
                 definitions.extend([self.extract_definition(answer) for answer in answers])
             except Exception as e:
                 warnings.warn(f"Failed generation for batch starting at index {i}: {e}")
+                logging.info(e)
                 batch_size = batch_input_ids.size(0)
                 definitions.extend([''] * batch_size)
         
@@ -332,7 +333,7 @@ class ChatModelDefinitionGenerator:
 
     def generate_definitions(self, target_usages: List[TargetUsage],
                         user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}"),
-                        encode = False
+                        encode_definitions : str = None
                        ) -> List[str]:
         """
         Generates definitions for each TargetUsage using a chat model.
@@ -368,8 +369,12 @@ class ChatModelDefinitionGenerator:
             except Exception as e:
                 logging.error(f"Could not run chat completion: {e}")
                 definitions.append("")
-        if encode:
-            definitions = self.embedding_model.encode(definitions)
+        if encode_definitions is not None:
+            vectors = self.embedding_model.encode(definitions)
+            if encode_definitions == 'both':
+                return definitions, vectors
+            elif encode_definitions == 'vectors':
+                return vectors
         return definitions
 
 
