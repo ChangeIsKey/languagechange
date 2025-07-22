@@ -1,5 +1,5 @@
 from languagechange.models.representation.contextualized import ContextualizedModel
-from languagechange.models.representation.definition import ChatModelDefinitionGenerator
+from languagechange.models.representation.definition import DefinitionGenerator, ChatModelDefinitionGenerator, LlamaDefinitionGenerator, T5DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.models.meaning.clustering import Clustering
 from languagechange.usages import TargetUsage, TargetUsageList
@@ -8,18 +8,47 @@ from languagechange.benchmark import WiC, WSD, WSI, SemEval2020Task1, DWUG
 from pydantic import BaseModel, Field
 from typing import List, Set, Union
 import numpy as np
+import json
 import logging
 import inspect
+import os
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
+
+# Utility function to update a dictionary recursively
+def deep_update(d, u):
+    for k, v in u.items():
+        if type(v) == dict:
+            if k in d:
+                d[k] = deep_update(d[k], v)
+            else:
+                d[k] = v
+        else:
+            d[k] = v
+    return d
+
 
 class Pipeline:
     def __init__(self):
         pass
 
+    def save_evaluation_results(self, results, outfile):
+        if os.path.exists(outfile):
+            with open(outfile, 'r+') as f:
+                curr_results = json.load(f)
+                updated_results = deep_update(curr_results, results)
+                f.seek(0)
+                json.dump(updated_results, f, indent=4)
+                logging.info(f'Evaluation results saved to {outfile}') 
+        else:
+            with open(outfile, 'w') as f:
+                json.dump(results, f, indent=4)
+                logging.info(f'Evaluation results saved to {outfile}') 
+            
+
     def generate_latex_table(self, scores_per_model,
                    path,
-                   scores_to_compute = {"WSD": ["Accuracy","F1"], "WSI":["ARI","Purity"], "WiC":["Accuracy","F1","Spearman"], "GCD":["Spearman"]}):
+                   scores_to_compute = {"WSI":["ARI","Purity"], "WiC":["Accuracy","F1","Spearman"], "GCD":["Spearman"]}):
         metrics_per_task = [len(t) for t in scores_to_compute.values()]
         columns_str = "|"+"|".join(["c"] + ["c"*t for t in metrics_per_task])+"|"
 
@@ -66,12 +95,12 @@ class Pipeline:
 
 
 class WSIPipeline(Pipeline):
-    def __init__(self, dataset, usage_encoding, clustering, partition = 'test', shuffle = True, labels=[]):
+    def __init__(self, dataset, usage_encoding, clustering, partition = 'test', shuffle = True, labels=[], dataset_name = None):
         super().__init__()
         if isinstance(dataset, WSI):
             self.dataset = dataset
         else:
-            self.dataset = WSI() #TODO: exceptions
+            self.dataset = WSI(name=dataset_name) #TODO: exceptions
             self.dataset.load_from_target_usages(dataset, labels)
             self.dataset.split_train_dev_test(shuffle=shuffle)
 
@@ -80,7 +109,7 @@ class WSIPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False):
+    def evaluate(self, return_labels = False, save = False, path = None):
         """
             Evaluate on the WSI task. Returns the ARI and purity scores and optionally the clustering labels.
         """
@@ -92,7 +121,7 @@ class WSIPipeline(Pipeline):
             else:
                 target_usages.append(TargetUsage(example['text'], [example['start'],example['end']]))
 
-        if isinstance(self.usage_encoding, ChatModelDefinitionGenerator): #TODO: make a more general definition generation class and add this as the instance type here
+        if isinstance(self.usage_encoding, DefinitionGenerator):
             encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors')
 
         elif isinstance(self.usage_encoding, PromptModel):
@@ -110,6 +139,19 @@ class WSIPipeline(Pipeline):
 
         # Compute ARI and purity scores
         scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition)
+
+        if save:
+            if path == None:
+                logging.error("Tried to save results but no path was specified.")
+            else:
+                #name = getattr(self.dataset, 'name', str(self.dataset))
+                #d = {'WSI': {name: {type(self.usage_encoding).__name__: scores}}}
+                if hasattr(self.dataset, 'name'):
+                    self.save_evaluation_results({'WSI': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}, path)
+                elif hasattr(self.dataset, 'dataset') and hasattr(self.dataset, 'version') and hasattr(self.dataset, 'language'):
+                    self.save_evaluation_results({'WSI': {self.dataset.dataset: {self.dataset.version: {self.dataset.language: {type(self.usage_encoding).__name__: scores}}}}}, path)
+                else:
+                    logging.error("Dataset has no 'name' attribute, nor 'dataset', 'version' and 'language' attributes. Scores could therefore not be saved.")
 
         if return_labels:
             return scores, clustering_results.labels
@@ -130,7 +172,7 @@ class WiCPipeline(Pipeline):
         self.evaluation_set = self.dataset.get_dataset(self.partition)
         self.usage_encoding = usage_encoding
 
-    def evaluate(self, task, label_func = None):
+    def evaluate(self, task, label_func = None, save = False, path = None):
         """
             Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if task='graded'.
         """
@@ -140,7 +182,7 @@ class WiCPipeline(Pipeline):
         
         labels = []
 
-        if isinstance(self.usage_encoding, ChatModelDefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel): #TODO: make a more general definition generation class and add this here
+        if isinstance(self.usage_encoding, DefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
             # Find the unique usages among all pairs
             index = dict() # Index to point to the right position in the usage/embeddings list when comparing usages in pairs
             i = 0
@@ -159,7 +201,7 @@ class WiCPipeline(Pipeline):
             if isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
-            elif isinstance(self.usage_encoding, ChatModelDefinitionGenerator):
+            elif isinstance(self.usage_encoding, DefinitionGenerator):
                 encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions = 'vectors')
 
             if label_func == None:
@@ -194,7 +236,7 @@ class WiCPipeline(Pipeline):
         elif isinstance(self.usage_encoding, PromptModel):
             if task == "graded":
                 class WiCGraded(BaseModel):
-                    change : float = Field(description='How similar the two occurrences of the word are.',le=1, ge=0) #perhaps rename change to something else
+                    change : float = Field(description='How similar the two occurrences of the word are.',le=1, ge=0)#perhaps rename change to something else
                 self.usage_encoding.structure = WiCGraded
                 for pair in self.evaluation_set:
                     target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
@@ -217,11 +259,33 @@ class WiCPipeline(Pipeline):
         if task == 'binary':
             acc = self.dataset.evaluate_accuracy(labels, self.partition)
             f1 = self.dataset.evaluate_f1(labels, self.partition)
-            return acc, f1
-        
+            scores = {'accuracy': acc, 'f1': f1}
+
         elif task == 'graded':
             spearman_r = self.dataset.evaluate_spearman(labels, self.partition)
-            return spearman_r
+            scores = {'spearman_r': spearman_r}
+
+        if save:
+            if path == None:
+                logging.error("Tried to save results but no path was specified.")
+            else:
+                if hasattr(self.dataset, 'name'):
+                    scores_dict = {'WiC': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}
+                    self.save_evaluation_results(scores_dict, path)
+
+                elif hasattr(self.dataset, 'dataset') and hasattr(self.dataset, 'version') and hasattr(self.dataset, 'language'):
+                    if (self.dataset.dataset == "MCL-WiC" and hasattr(self.dataset, 'crosslingual')):
+                        crosslingual = "crosslingual" if self.dataset.crosslingual else "multilingual"
+                        scores_dict = {'WiC': {self.dataset.dataset: {self.dataset.version: {self.dataset.language: {crosslingual: {type(self.usage_encoding).__name__: scores}}}}}}
+                        self.save_evaluation_results(scores_dict, path)
+                    else:
+                        scores_dict = {'WiC': {self.dataset.dataset: {self.dataset.version: {self.dataset.language: {type(self.usage_encoding).__name__: scores}}}}}
+                        self.save_evaluation_results(scores_dict, path)
+
+                else:
+                    logging.error("Dataset has no 'name' attribute, nor 'dataset', 'version' and 'language' attributes. Scores could therefore not be saved.")
+        
+        return scores
 
 
 class GCDPipeline(Pipeline):
@@ -236,7 +300,7 @@ class GCDPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.metric = metric
 
-    def evaluate(self):
+    def evaluate(self, save = False, path = None):
         """
             Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
         """
@@ -245,20 +309,20 @@ class GCDPipeline(Pipeline):
         if isinstance(self.usage_encoding, PromptModel):
             return None # Is this possible?
         
-        elif isinstance(self.usage_encoding, ChatModelDefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
+        elif isinstance(self.usage_encoding, DefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
             for target in self.dataset.graded_task.keys():
                 word = target.target
                 target_usages = self.dataset.get_word_usages(word)
                 target_usages_t1 = [u for u in target_usages if u.grouping == "1" ]
                 target_usages_t2 = [u for u in target_usages if u.grouping == "2" ]
 
-                if isinstance(self.usage_encoding, ChatModelDefinitionGenerator):
+                if isinstance(self.usage_encoding, DefinitionGenerator):
                     encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1[:1], encode_definitions='vectors')
                     encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2[:1], encode_definitions='vectors')
 
                 elif isinstance(self.usage_encoding, ContextualizedModel):
                     encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1[:1])
-                    encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2[:1]) #change!
+                    encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2[:1])
 
                 # Measure the change using the metric
                 change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
@@ -269,6 +333,22 @@ class GCDPipeline(Pipeline):
             logging.error('Model not supported.')
             return None
 
-        spearman_score = self.dataset.evaluate_gcd(change_scores)
+        spearman_r = self.dataset.evaluate_gcd(change_scores)
+        scores = {'spearman_r': spearman_r}
 
-        return spearman_score
+        if save:
+                if path == None:
+                    logging.error("Tried to save results but no path was specified.")
+                else:
+                    if hasattr(self.dataset, 'name'):
+                        scores_dict = {'GCD': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}
+                        self.save_evaluation_results(scores_dict, path)
+
+                    elif hasattr(self.dataset, 'language') and hasattr(self.dataset, 'version'):
+                        scores_dict = {'GCD': {type(self.dataset).__name__: {self.dataset.language: {self.dataset.version: {type(self.usage_encoding).__name__: scores}}}}}
+                        self.save_evaluation_results(scores_dict, path)
+
+                    else:
+                        logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
+
+        return scores

@@ -30,7 +30,28 @@ class Message(TypedDict):
 
 Dialog = Sequence[Message]
 
-class LlamaDefinitionGenerator:
+class DefinitionGenerator:
+    def __init__(self, embedding_model: str = "all-mpnet-base-v2"):
+        if embedding_model != None and embedding_model != "":
+            self.embedding_model = SentenceTransformer(embedding_model)
+        else:
+            self.embedding_model = None
+
+    def encode_definitions(self, definitions, encode = 'both'):
+        if self.embedding_model != None:
+            vectors = self.embedding_model.encode(definitions)
+        else:
+            return definitions
+        
+        if encode == 'both':
+            return definitions, vectors
+        elif encode == 'vectors':
+            return vectors
+        else:
+            return definitions
+        
+
+class LlamaDefinitionGenerator(DefinitionGenerator):
     """
     A tool to create short, clear definitions for words based on example sentences
     using fine-tuned Llama models.
@@ -49,7 +70,7 @@ class LlamaDefinitionGenerator:
     """
     def __init__(self, model_name: str, ft_model_name: str, hf_token: str, 
                  max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
-                 temperature: float = 0.7):
+                 temperature: float = 0.7, embedding_model: str = "all-mpnet-base-v2"):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
@@ -62,6 +83,7 @@ class LlamaDefinitionGenerator:
             max_time (float): Maximum time in seconds per batch (default is 4.5).
             temperature (float): Generation temperature (default is 0.7).
         """
+        super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
         self.ft_model_name = ft_model_name
         self.hf_token = hf_token
@@ -149,7 +171,8 @@ class LlamaDefinitionGenerator:
 
     def generate_definitions(self, target_usages: List[TargetUsage],
                              system_message: str = "You are a lexicographer familiar with providing concise definitions of word meanings.",
-                             template: str = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}'
+                             template: str = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}',
+                             encode_definitions : str = None
                              ) -> List[str]:
         """
         Generates definitions for all examples in batches using the model.
@@ -160,7 +183,7 @@ class LlamaDefinitionGenerator:
             template (str): The template for the user prompt with placeholders {target} and {example}.
 
         Returns:
-            List[str]: Generated definitions corresponding to each TargetUsage.
+            Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
         """
         prompts = []
         
@@ -220,7 +243,7 @@ class LlamaDefinitionGenerator:
         
         if len(definitions) != total:
             raise ValueError(f"Generated definitions count ({len(definitions)}) doesn't match input count ({total}).")
-        return definitions
+        return self.encode_definitions(definitions, encode=encode_definitions)
 
     def print_results(self, target_usages: List[TargetUsage], definitions: List[str]) -> None:
         """
@@ -266,7 +289,7 @@ class DefinitionOutput(BaseModel):
     example: str = Field(description="The example sentence")
     definition: str = Field(description="The definition of the target word as used in the sentence")
 
-class ChatModelDefinitionGenerator:
+class ChatModelDefinitionGenerator(DefinitionGenerator):
     """
     A model to generate concise definitions for target words using a chat model with structured output.
 
@@ -288,6 +311,7 @@ class ChatModelDefinitionGenerator:
             provider_key (str, optional): The provider API key. Defaults to None.
             language (str, optional): Language code for potential lemmatization. Defaults to None.
         """
+        super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
         self.language = language
 
@@ -329,8 +353,6 @@ class ChatModelDefinitionGenerator:
         # Configure the model to use structured output with the DefinitionOutput schema.
         self.model = llm.with_structured_output(DefinitionOutput)
 
-        self.embedding_model = SentenceTransformer(embedding_model)
-
     def generate_definitions(self, target_usages: List[TargetUsage],
                         user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}"),
                         encode_definitions : str = None
@@ -343,7 +365,7 @@ class ChatModelDefinitionGenerator:
             user_prompt_template (str): Template for the user prompt.
         
         Returns:
-            List[str]: List of generated definitions.
+            Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
         """
         definitions = []
         system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
@@ -369,17 +391,11 @@ class ChatModelDefinitionGenerator:
             except Exception as e:
                 logging.error(f"Could not run chat completion: {e}")
                 definitions.append("")
-        if encode_definitions is not None:
-            vectors = self.embedding_model.encode(definitions)
-            if encode_definitions == 'both':
-                return definitions, vectors
-            elif encode_definitions == 'vectors':
-                return vectors
-        return definitions
+        return self.encode_definitions(definitions, encode=encode_definitions)
 
 
 
-class T5DefinitionGenerator:
+class T5DefinitionGenerator(DefinitionGenerator):
     """Generates word definitions using a T5 model."""
 
     def __init__(self, model_path, bsize=4, max_length=256, filter_target=True,
@@ -399,6 +415,7 @@ class T5DefinitionGenerator:
             num_beams (int): Number of beams for beam search. Defaults to 1.
             num_beam_groups (int): Number of beam groups for diversity. Defaults to 1.
         """
+        super().__init__()
         self.logger = logging.getLogger(__name__)
         logging.basicConfig(format="%(asctime)s : %(levelname)s : %(message)s", level=logging.INFO)
 
