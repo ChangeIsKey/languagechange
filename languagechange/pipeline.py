@@ -347,12 +347,12 @@ class GCDPipeline(Pipeline):
                     target_usages_t2 = self.dataset.target_usages_t2[word]
 
                 if isinstance(self.usage_encoding, DefinitionGenerator):
-                    encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1[:1], encode_definitions='vectors')
-                    encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2[:1], encode_definitions='vectors')
+                    encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1, encode_definitions='vectors')
+                    encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2, encode_definitions='vectors')
 
                 elif isinstance(self.usage_encoding, ContextualizedModel):
-                    encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1[:1])
-                    encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2[:1])
+                    encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1)
+                    encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2)
 
                 # Measure the change using the metric
                 change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
