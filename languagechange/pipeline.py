@@ -4,7 +4,7 @@ from languagechange.models.representation.prompting import PromptModel
 from languagechange.models.meaning.clustering import Clustering
 from languagechange.usages import TargetUsage, TargetUsageList
 from languagechange.models.change.metrics import GradedChange
-from languagechange.benchmark import WiC, WSD, WSI, SemEval2020Task1, DWUG
+from languagechange.benchmark import WiC, WSD, WSI, CD, SemEval2020Task1, DWUG
 from pydantic import BaseModel, Field
 from typing import List, Set, Union
 import numpy as np
@@ -46,6 +46,7 @@ class Pipeline:
                 logging.info(f'Evaluation results saved to {outfile}') 
             
 
+    # Preliminary function, not yet compatible with the results produced by save_evaluation_results
     def generate_latex_table(self, scores_per_model,
                    path,
                    scores_to_compute = {"WSI":["ARI","Purity"], "WiC":["Accuracy","F1","Spearman"], "GCD":["Spearman"]}):
@@ -144,14 +145,23 @@ class WSIPipeline(Pipeline):
             if path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
-                #name = getattr(self.dataset, 'name', str(self.dataset))
-                #d = {'WSI': {name: {type(self.usage_encoding).__name__: scores}}}
+
                 if hasattr(self.dataset, 'name'):
                     self.save_evaluation_results({'WSI': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}, path)
-                elif hasattr(self.dataset, 'dataset') and hasattr(self.dataset, 'version') and hasattr(self.dataset, 'language'):
-                    self.save_evaluation_results({'WSI': {self.dataset.dataset: {self.dataset.version: {self.dataset.language: {type(self.usage_encoding).__name__: scores}}}}}, path)
+
+                elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
+                    parameters = ['dataset', 'language', 'version']
+                    dataset_info = {}
+                    d = dataset_info
+                    for param in parameters:
+                        if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                            d[getattr(self.dataset, param)] = {}
+                            d = d[getattr(self.dataset, param)]
+                    d[type(self.usage_encoding).__name__] = scores
+                    self.save_evaluation_results({'WSI': dataset_info}, path)
+
                 else:
-                    logging.error("Dataset has no 'name' attribute, nor 'dataset', 'version' and 'language' attributes. Scores could therefore not be saved.")
+                    logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
 
         if return_labels:
             return scores, clustering_results.labels
@@ -210,7 +220,6 @@ class WiCPipeline(Pipeline):
                 elif task == "binary":
                     label_func = lambda e1, e2 : int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
             
-            # else: check if callable
             elif callable(label_func):
                 signature = inspect.signature(label_func)
                 n_req_args = sum([int(p.default == p.empty) for p in signature.parameters.values()])
@@ -273,17 +282,20 @@ class WiCPipeline(Pipeline):
                     scores_dict = {'WiC': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}
                     self.save_evaluation_results(scores_dict, path)
 
-                elif hasattr(self.dataset, 'dataset') and hasattr(self.dataset, 'version') and hasattr(self.dataset, 'language'):
-                    if (self.dataset.dataset == "MCL-WiC" and hasattr(self.dataset, 'crosslingual')):
-                        crosslingual = "crosslingual" if self.dataset.crosslingual else "multilingual"
-                        scores_dict = {'WiC': {self.dataset.dataset: {self.dataset.version: {self.dataset.language: {crosslingual: {type(self.usage_encoding).__name__: scores}}}}}}
-                        self.save_evaluation_results(scores_dict, path)
-                    else:
-                        scores_dict = {'WiC': {self.dataset.dataset: {self.dataset.version: {self.dataset.language: {type(self.usage_encoding).__name__: scores}}}}}
-                        self.save_evaluation_results(scores_dict, path)
+                elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
+                    parameters = ['dataset', 'language', 'version', 'crosslingual']
+                    dataset_info = {}
+                    d = dataset_info
+                    for param in parameters:
+                        if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                            d[getattr(self.dataset, param)] = {}
+                            d = d[getattr(self.dataset, param)]
+                    d[type(self.usage_encoding).__name__] = scores
+                    scores_dict = {'WiC': dataset_info}
+                    self.save_evaluation_results(scores_dict, path)
 
                 else:
-                    logging.error("Dataset has no 'name' attribute, nor 'dataset', 'version' and 'language' attributes. Scores could therefore not be saved.")
+                    logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
         
         return scores
 
@@ -291,12 +303,16 @@ class WiCPipeline(Pipeline):
 class GCDPipeline(Pipeline):
     def __init__(self, dataset : Union[DWUG, List[Set[TargetUsage]]],
                  usage_encoding,
-                 metric : GradedChange):
+                 metric : GradedChange,
+                 scores : List = None,
+                 dataset_name : str = None):
         super().__init__()
-        if isinstance(dataset, DWUG):
+        if isinstance(dataset, DWUG) or isinstance(dataset, SemEval2020Task1):
             self.dataset = dataset
         else:
-            pass
+            self.dataset = CD(name=dataset_name)
+            self.dataset.load_from_target_usages(dataset, scores)
+
         self.usage_encoding = usage_encoding
         self.metric = metric
 
@@ -310,11 +326,25 @@ class GCDPipeline(Pipeline):
             return None # Is this possible?
         
         elif isinstance(self.usage_encoding, DefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
+            if isinstance(self.dataset, SemEval2020Task1):
+                target_usages_t1_all_words = self.dataset.corpus1_lemma.search([target.target for target in self.dataset.graded_task.keys()])
+                target_usages_t2_all_words = self.dataset.corpus2_lemma.search([target.target for target in self.dataset.graded_task.keys()])
+
             for target in self.dataset.graded_task.keys():
                 word = target.target
-                target_usages = self.dataset.get_word_usages(word)
-                target_usages_t1 = [u for u in target_usages if u.grouping == "1" ]
-                target_usages_t2 = [u for u in target_usages if u.grouping == "2" ]
+
+                if isinstance(self.dataset, DWUG):
+                    target_usages = self.dataset.get_word_usages(word)
+                    target_usages_t1 = [u for u in target_usages if u.grouping == "1" ]
+                    target_usages_t2 = [u for u in target_usages if u.grouping == "2" ]
+
+                elif isinstance(self.dataset, SemEval2020Task1):
+                    target_usages_t1 = target_usages_t1_all_words[word]
+                    target_usages_t2 = target_usages_t2_all_words[word]
+
+                elif isinstance(self.dataset, CD):
+                    target_usages_t1 = self.dataset.target_usages_t1[word]
+                    target_usages_t2 = self.dataset.target_usages_t2[word]
 
                 if isinstance(self.usage_encoding, DefinitionGenerator):
                     encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1[:1], encode_definitions='vectors')
@@ -344,8 +374,16 @@ class GCDPipeline(Pipeline):
                         scores_dict = {'GCD': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}
                         self.save_evaluation_results(scores_dict, path)
 
-                    elif hasattr(self.dataset, 'language') and hasattr(self.dataset, 'version'):
-                        scores_dict = {'GCD': {type(self.dataset).__name__: {self.dataset.language: {self.dataset.version: {type(self.usage_encoding).__name__: scores}}}}}
+                    elif hasattr(self.dataset, 'dataset'):
+                        parameters = ['dataset', 'language', 'version']
+                        dataset_info = {}
+                        d = dataset_info
+                        for param in parameters:
+                            if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                                d[getattr(self.dataset, param)] = {}
+                                d = d[getattr(self.dataset, param)]
+                        d[type(self.usage_encoding).__name__] = scores
+                        scores_dict = {'GCD': dataset_info}
                         self.save_evaluation_results(scores_dict, path)
 
                     else:
