@@ -12,6 +12,8 @@ import json
 import logging
 import inspect
 import os
+from queue import Queue
+import re
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -32,67 +34,145 @@ class Pipeline:
     def __init__(self):
         pass
 
-    def save_evaluation_results(self, results, outfile):
+    def save_evaluation_results(self, results, outfile, latex_path = None, decimals = None):
         if os.path.exists(outfile):
             with open(outfile, 'r+') as f:
-                curr_results = json.load(f)
-                updated_results = deep_update(curr_results, results)
+                previous_results = json.load(f)
+                results = deep_update(previous_results, results)
                 f.seek(0)
-                json.dump(updated_results, f, indent=4)
+                json.dump(results, f, indent=4)
                 logging.info(f'Evaluation results saved to {outfile}') 
         else:
             with open(outfile, 'w') as f:
                 json.dump(results, f, indent=4)
-                logging.info(f'Evaluation results saved to {outfile}') 
+                logging.info(f'Evaluation results saved to {outfile}')
+        if latex_path != None:
+            self.generate_latex_table(results, latex_path, decimals)
             
 
-    # Preliminary function, not yet compatible with the results produced by save_evaluation_results
-    def generate_latex_table(self, scores_per_model,
-                   path,
-                   scores_to_compute = {"WSI":["ARI","Purity"], "WiC":["Accuracy","F1","Spearman"], "GCD":["Spearman"]}):
-        metrics_per_task = [len(t) for t in scores_to_compute.values()]
-        columns_str = "|"+"|".join(["c"] + ["c"*t for t in metrics_per_task])+"|"
-
-        score_names = []
-        for s in scores_to_compute.values():
-            score_names.extend(s)
-
-        table_beginning = """\\begin{table}[h]
-        \\centering
-        \\begin{tabular}{"""+ columns_str +"""}
-            \hline
-            model\t& """ + "\t&".join("\\multicolumn{"+str(len(s))+"}{|c|}{"+t+"}" for t, s in scores_to_compute.items())+"\\\\\n"+ "\t&" + "\t&".join(score_names) + "\\\\ \\hline\n"
-        
-        table_end = """
-            \hline
-        \\end{tabular}
-    \\end{table}
+    def generate_latex_table(self, data, save_path, decimals=None):
+        """
+            Generates a table of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
         """
 
-        table_data = ""
-        table_scores = {}
-        for model in scores_per_model:
-            model_scores = scores_per_model[model]
-            for task in scores_to_compute.keys():
-                table_scores[task] = {}
-                if task not in model_scores:
-                    for metric in scores_to_compute[task]:
-                        table_scores[task][metric] = "--"
-                else:
-                    for metric in scores_to_compute[task]:
-                        if metric not in model_scores[task] or model_scores[task][metric] == None:
-                            table_scores[task][metric] = "--"
-                        else:
-                            table_scores[task][metric] = str(model_scores[task][metric])
-            scores_list = []
-            for t in table_scores.values():
-                scores_list.extend(t.values())
-            table_data += model.replace('_', '\_') + "\t&" + "\t&".join(scores_list) + " \\\\\n"
+        # Calculates the maximum depth of a nested dictionary
+        def depth(d):
+            if isinstance(d, dict):
+                return 1 + max(depth(v) for v in d.values())
+            return 1
         
-        latex_string = table_beginning + table_data + table_end
+        # Counts the amount of leaves for each sub-dictionary of a nested dictionary
+        def count_leaves(data):
+            tree = [0, []]
+            # Find the amount of leaves in each subtree of d
+            for v in data.values():
+                # If we found the final {model: score} dict, return 1, as all models share 1 column in the table
+                if type(v) != dict:
+                    return 1
+                subtree = count_leaves(v)
+                tree[1].append(subtree)
+                # A subtree which is more than a leaf
+                if type(subtree) == list:
+                    tree[0] += subtree[0]
+                # A leaf
+                else:
+                    tree[0] += subtree
+            return tree
 
-        with open(path,'w+') as f:
-            f.write(latex_string)
+        # Find the column width needed for each row in the table header, given previously calculated leaf counts
+        def get_column_widths(tree, max_depth):
+
+            # Each row is initialized as an empty queue
+            columns = [Queue() for _ in range(max_depth)]
+
+            # Recursively finds the width needed for all columns
+            def get_cols_rec(cols, tree, depth):
+                if type(tree) == list:
+                    # Add the value in the right row
+                    cols[depth].put(tree[0])
+                    for subtree in tree[1]:
+                        # Recursive call for all sub-columns
+                        get_cols_rec(cols, subtree, depth + 1)
+                else:
+                    for d in range(depth, max_depth):
+                        # Add 1s for the rest of the rows (for columns with shorter content than the maximum)
+                        cols[d].put(tree)
+
+            get_cols_rec(columns, tree, 0)
+
+            # We don't keep the first row
+            return columns[1:]
+
+        # Prints columns in LaTeX format, given the original data with column names
+        def get_table_rows(data, column_widths):
+            table_rows = [[] for _ in range(len(column_widths) - 1)]
+
+            scores = []
+            models = set()
+
+            def get_rows_rec(data, column_widths, depth):
+                for k, v in data.items():
+                    if type(v) == dict:
+                        # Normal case
+                        if sum(int(type(vv) == dict) for vv in v.values()) != 0:
+                            table_rows[depth].append("\\multicolumn{" + str(column_widths[depth].get()) + "}{|c|}{" + k + "}")
+                            get_rows_rec(v, column_widths, depth + 1)
+                        # The case where we have reached the last row before the model and score, i.e. the row describing the metric.
+                        else:
+                            # Add the metric name to the last row
+                            table_rows[-1].append("\\multicolumn{" + str(column_widths[depth].get()) + "}{|c|}{" + k + "}")
+                            scores.append(v.copy())
+                            for model in v.keys():
+                                models.add(model)
+                            for d in range(depth, len(table_rows) - 1):
+                                table_rows[d].append("") # Add empty space to accommodate for longer columns
+            
+            get_rows_rec(data, column_widths, 0)
+
+            return table_rows, scores, models
+
+        max_depth = depth(data)
+
+        tree = count_leaves(data)
+
+        column_widths = get_column_widths(tree, max_depth)
+
+        columns_str = "|c|"+"|".join(["c"] * tree[0])+"|"
+
+        table_beginning = """\\begin{table}[h]
+            \\centering
+            \\begin{tabular}{"""+ columns_str +"}\hline"
+            
+        table_end = """
+                \hline
+            \\end{tabular}
+        \\end{table}
+            """
+
+        table_rows, scores, models = get_table_rows(data, column_widths)
+
+        # If decimals is provided, round each score to the amount of decimals set
+        if decimals != None and type(decimals) == int:
+            for model_scores in scores:
+                for model, score in model_scores.items():
+                    model_scores[model] = round(score, decimals)
+
+        scores_per_model = {model: [s.get(model, '--') for s in scores] for model in models}
+
+        print(scores_per_model)
+
+        scores_string = "\\\\".join(model + "\t&" + "\t&".join(str(s) for s in scores) for model, scores in scores_per_model.items())
+
+        table_string = table_beginning + "\\\\\n".join("\t&" + "\t&".join(row) for row in table_rows) + "\\\\\n" + scores_string + "\\\\\n" + table_end
+
+        table_string = re.sub("_", "\_", table_string)
+
+        # Save the LaTeX string to a .tex file
+        if save_path.endswith(".tex"):
+            with open(save_path,'w+') as f:
+                f.write(table_string)
+        else:
+            raise Exception("The file needs to end in .tex")
 
 
 class WSIPipeline(Pipeline):
@@ -147,7 +227,7 @@ class WSIPipeline(Pipeline):
             else:
 
                 if hasattr(self.dataset, 'name'):
-                    self.save_evaluation_results({'WSI': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}, path)
+                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}, path)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version']
@@ -157,7 +237,8 @@ class WSIPipeline(Pipeline):
                         if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
                             d[getattr(self.dataset, param)] = {}
                             d = d[getattr(self.dataset, param)]
-                    d[type(self.usage_encoding).__name__] = scores
+                    for metric, score in scores.items():
+                        d[metric] = {type(self.usage_encoding).__name__: score}
                     self.save_evaluation_results({'WSI': dataset_info}, path)
 
                 else:
@@ -169,12 +250,12 @@ class WSIPipeline(Pipeline):
 
         
 class WiCPipeline(Pipeline):
-    def __init__(self, dataset, usage_encoding, partition = 'test', shuffle = True, labels=[]):
+    def __init__(self, dataset, usage_encoding, partition = 'test', shuffle = True, labels=[], dataset_name = None):
         super().__init__()
         if isinstance(dataset, WiC):
             self.dataset = dataset
         else:
-            self.dataset = WiC() #TODO: exceptions
+            self.dataset = WiC(name=dataset_name) #TODO: exceptions
             self.dataset.load_from_target_usages(dataset, labels)
             self.dataset.split_train_dev_test(shuffle=shuffle)
 
@@ -279,7 +360,7 @@ class WiCPipeline(Pipeline):
                 logging.error("Tried to save results but no path was specified.")
             else:
                 if hasattr(self.dataset, 'name'):
-                    scores_dict = {'WiC': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}
+                    scores_dict = {'WiC': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}
                     self.save_evaluation_results(scores_dict, path)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
@@ -290,7 +371,8 @@ class WiCPipeline(Pipeline):
                         if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
                             d[getattr(self.dataset, param)] = {}
                             d = d[getattr(self.dataset, param)]
-                    d[type(self.usage_encoding).__name__] = scores
+                    for metric, score in scores.items():
+                        d[metric] = {type(self.usage_encoding).__name__: score}
                     scores_dict = {'WiC': dataset_info}
                     self.save_evaluation_results(scores_dict, path)
 
@@ -371,7 +453,7 @@ class GCDPipeline(Pipeline):
                     logging.error("Tried to save results but no path was specified.")
                 else:
                     if hasattr(self.dataset, 'name'):
-                        scores_dict = {'GCD': {self.dataset.name: {type(self.usage_encoding).__name__: scores}}}
+                        scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}
                         self.save_evaluation_results(scores_dict, path)
 
                     elif hasattr(self.dataset, 'dataset'):
@@ -382,7 +464,8 @@ class GCDPipeline(Pipeline):
                             if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
                                 d[getattr(self.dataset, param)] = {}
                                 d = d[getattr(self.dataset, param)]
-                        d[type(self.usage_encoding).__name__] = scores
+                        for metric, score in scores.items():
+                            d[metric] = {type(self.usage_encoding).__name__: score}
                         scores_dict = {'GCD': dataset_info}
                         self.save_evaluation_results(scores_dict, path)
 
