@@ -21,7 +21,7 @@ logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=lo
 def deep_update(d, u):
     for k, v in u.items():
         if type(v) == dict:
-            if k in d:
+            if k in d and type(d[k]) == dict:
                 d[k] = deep_update(d[k], v)
             else:
                 d[k] = v
@@ -34,18 +34,19 @@ class Pipeline:
     def __init__(self):
         pass
 
-    def save_evaluation_results(self, results, outfile, latex_path = None, decimals = None):
-        if os.path.exists(outfile):
-            with open(outfile, 'r+') as f:
-                previous_results = json.load(f)
-                results = deep_update(previous_results, results)
-                f.seek(0)
-                json.dump(results, f, indent=4)
-                logging.info(f'Evaluation results saved to {outfile}') 
-        else:
-            with open(outfile, 'w') as f:
-                json.dump(results, f, indent=4)
-                logging.info(f'Evaluation results saved to {outfile}')
+    def save_evaluation_results(self, results, json_path : str = None, latex_path : str = None, decimals = None):
+        if json_path != None:
+            if os.path.exists(json_path):
+                with open(json_path, 'r+') as f:
+                    previous_results = json.load(f)
+                    results = deep_update(previous_results, results)
+                    f.seek(0)
+                    json.dump(results, f, indent=4)
+                    logging.info(f'Evaluation results saved to {json_path}') 
+            else:
+                with open(json_path, 'w') as f:
+                    json.dump(results, f, indent=4)
+                    logging.info(f'Evaluation results saved to {json_path}')
         if latex_path != None:
             self.generate_latex_table(results, latex_path, decimals)
             
@@ -137,11 +138,11 @@ class Pipeline:
 
         column_widths = get_column_widths(tree, max_depth)
 
-        columns_str = "|c|"+"|".join(["c"] * tree[0])+"|"
+        columns_str = "c|"+"|".join(["c"] * tree[0])+"|"
 
         table_beginning = """\\begin{table}[h]
             \\centering
-            \\begin{tabular}{"""+ columns_str +"}\hline"
+            \\begin{tabular}{"""+ columns_str +"}\\cline{2-"+str(tree[0]+1)+"}"
             
         table_end = """
                 \hline
@@ -155,15 +156,16 @@ class Pipeline:
         if decimals != None and type(decimals) == int:
             for model_scores in scores:
                 for model, score in model_scores.items():
-                    model_scores[model] = round(score, decimals)
+                    try:
+                        model_scores[model] = round(score, decimals)
+                    except:
+                        continue
 
         scores_per_model = {model: [s.get(model, '--') for s in scores] for model in models}
 
-        print(scores_per_model)
+        scores_string = "\\\\".join("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores) for model, scores in scores_per_model.items())
 
-        scores_string = "\\\\".join(model + "\t&" + "\t&".join(str(s) for s in scores) for model, scores in scores_per_model.items())
-
-        table_string = table_beginning + "\\\\\n".join("\t&" + "\t&".join(row) for row in table_rows) + "\\\\\n" + scores_string + "\\\\\n" + table_end
+        table_string = table_beginning + ("\\\\\\cline{2-"+str(tree[0]+1)+"}\n").join("\t&" + "\t&".join(row) for row in table_rows) + "\\\\\\hline\n" + scores_string + "\\\\\n" + table_end
 
         table_string = re.sub("_", "\_", table_string)
 
@@ -187,10 +189,13 @@ class WSIPipeline(Pipeline):
 
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
+        if len(self.evaluation_set) == 0:
+            logging.error('Dataset used for evaluating does not contain any examples.')
+            raise Exception
         self.usage_encoding = usage_encoding
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False, save = False, path = None):
+    def evaluate(self, return_labels = False, save = False, json_path = None, latex_path = None):
         """
             Evaluate on the WSI task. Returns the ARI and purity scores and optionally the clustering labels.
         """
@@ -221,13 +226,15 @@ class WSIPipeline(Pipeline):
         # Compute ARI and purity scores
         scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition)
 
+        scores = {metric: np.mean(list(score.values())) for metric, score in scores.items()}
+
         if save:
-            if path == None:
+            if json_path == None and latex_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
 
                 if hasattr(self.dataset, 'name'):
-                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}, path)
+                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}, json_path, latex_path)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version']
@@ -239,7 +246,7 @@ class WSIPipeline(Pipeline):
                             d = d[getattr(self.dataset, param)]
                     for metric, score in scores.items():
                         d[metric] = {type(self.usage_encoding).__name__: score}
-                    self.save_evaluation_results({'WSI': dataset_info}, path)
+                    self.save_evaluation_results({'WSI': dataset_info}, json_path, latex_path)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
@@ -261,9 +268,12 @@ class WiCPipeline(Pipeline):
 
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
+        if len(self.evaluation_set) == 0:
+            logging.error('Dataset used for evaluating does not contain any examples.')
+            raise Exception
         self.usage_encoding = usage_encoding
 
-    def evaluate(self, task, label_func = None, save = False, path = None):
+    def evaluate(self, task, label_func = None, save = False, json_path = None, latex_path = None):
         """
             Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if task='graded'.
         """
@@ -353,15 +363,15 @@ class WiCPipeline(Pipeline):
 
         elif task == 'graded':
             spearman_r = self.dataset.evaluate_spearman(labels, self.partition)
-            scores = {'spearman_r': spearman_r}
+            scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
         if save:
-            if path == None:
+            if json_path == None and latex_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
                 if hasattr(self.dataset, 'name'):
                     scores_dict = {'WiC': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}
-                    self.save_evaluation_results(scores_dict, path)
+                    self.save_evaluation_results(scores_dict, json_path, latex_path)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version', 'crosslingual']
@@ -374,7 +384,7 @@ class WiCPipeline(Pipeline):
                     for metric, score in scores.items():
                         d[metric] = {type(self.usage_encoding).__name__: score}
                     scores_dict = {'WiC': dataset_info}
-                    self.save_evaluation_results(scores_dict, path)
+                    self.save_evaluation_results(scores_dict, json_path, latex_path)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
@@ -395,10 +405,13 @@ class GCDPipeline(Pipeline):
             self.dataset = CD(name=dataset_name)
             self.dataset.load_from_target_usages(dataset, scores)
 
+        if len(self.dataset) == 0:
+            logging.error('Dataset used for evaluating does not contain any examples.')
+            raise Exception
         self.usage_encoding = usage_encoding
         self.metric = metric
 
-    def evaluate(self, save = False, path = None):
+    def evaluate(self, save = False, json_path = None, latex_path = None):
         """
             Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
         """
@@ -446,15 +459,15 @@ class GCDPipeline(Pipeline):
             return None
 
         spearman_r = self.dataset.evaluate_gcd(change_scores)
-        scores = {'spearman_r': spearman_r}
+        scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
         if save:
-                if path == None:
+                if json_path == None and latex_path == None:
                     logging.error("Tried to save results but no path was specified.")
                 else:
                     if hasattr(self.dataset, 'name'):
                         scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}
-                        self.save_evaluation_results(scores_dict, path)
+                        self.save_evaluation_results(scores_dict, json_path, latex_path)
 
                     elif hasattr(self.dataset, 'dataset'):
                         parameters = ['dataset', 'language', 'version']
@@ -467,7 +480,7 @@ class GCDPipeline(Pipeline):
                         for metric, score in scores.items():
                             d[metric] = {type(self.usage_encoding).__name__: score}
                         scores_dict = {'GCD': dataset_info}
-                        self.save_evaluation_results(scores_dict, path)
+                        self.save_evaluation_results(scores_dict, json_path, latex_path)
 
                     else:
                         logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     

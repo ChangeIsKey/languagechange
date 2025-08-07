@@ -681,6 +681,7 @@ class WiC(Benchmark):
             # Pre-defined path
             else:
                 self.home_path = path
+            logging.info(f"WiC home path: {self.home_path}")
                 
             self.load_from_resource_hub(dataset, language, crosslingual = crosslingual)
 
@@ -1070,7 +1071,7 @@ class WSD(Benchmark):
             else:
                 self.home_path = path
 
-            logging.info(f'Home path:{self.home_path}')
+            logging.info(f"WSD home path: {self.home_path}")
             self.load(dataset, language)
 
         # Loads from a dictionary or list already containing a WSD dataset
