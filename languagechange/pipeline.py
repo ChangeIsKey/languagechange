@@ -327,7 +327,7 @@ class WiCPipeline(Pipeline):
 
                 for j in range(1,3):
                     if f'id{j}' in pair:
-                        id = pair[f'id1']
+                        id = pair[f'id{j}']
                     else:
                         id = (pair[f'text{j}'], pair[f'start{j}'], pair[f'end{j}'])
                     embedding_pair.append(encoded_usages[index[id]])

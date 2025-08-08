@@ -418,12 +418,23 @@ class DWUG(CD):
 
             if remove_outliers:
                 try:
-                    with open(os.path.join(self.home_path,f'clusters/{self.config}',f'{word}.csv')) as f:
-                        for line in islice(f, 1, None):
-                            line = line.replace('\n','').split('\t')
-                            id, label = line
-                            if int(label) == -1:
-                                excluded_instances.add(id)
+                    if self.dataset == "DWUG Sense":
+                        with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')) as f:
+                            for line in islice(f, 1, None):
+                                line = line.replace('\n','').split('\t')
+                                id, label = line
+                                try:
+                                    if int(label) == -1:
+                                        excluded_instances.add(id)
+                                except ValueError:
+                                    continue
+                    else:
+                        with open(os.path.join(self.home_path,f'clusters/{self.config}',f'{word}.csv')) as f:
+                            for line in islice(f, 1, None):
+                                line = line.replace('\n','').split('\t')
+                                id, label = line
+                                if int(label) == -1:
+                                    excluded_instances.add(id)
                 except Exception as e:
                     logging.error(f"Could not remove outlier usages of '{word}' due to the following error: {e}")
                     raise e
@@ -464,19 +475,34 @@ class DWUG(CD):
 
             temp_labels = {}
             try:
-                with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
-                    for line in islice(f, 0, 1):
-                        columns = line.replace('\n','').split('\t')
-                        column_ids = {c : i for i,c in enumerate(columns)}
-                    for line in f:
-                        line = line.replace('\n','').split('\t')
-                        id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
-                        if id1 != id2:
-                            label = float(line[column_ids['judgment']])
-                            if not (label == 0 and exclude_non_judgments) and not id1 in excluded_instances and not id2 in excluded_instances:
-                                if not frozenset([id1,id2]) in temp_labels:
-                                    temp_labels[frozenset([id1,id2])] = []
-                                temp_labels[frozenset([id1,id2])].append(label)
+                if self.dataset == "DWUG Sense":
+                    with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_proximity.csv')) as f:
+                        for line in islice(f, 0, 1):
+                            columns = line.replace('\n','').split('\t')
+                            column_ids = {c : i for i,c in enumerate(columns)}
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
+                            if id1 != id2:
+                                label = float(line[column_ids['label']])
+                                if not id1 in excluded_instances and not id2 in excluded_instances:
+                                    if not frozenset([id1,id2]) in temp_labels:
+                                        temp_labels[frozenset([id1,id2])] = []
+                                    temp_labels[frozenset([id1,id2])].append(label)
+                else:
+                    with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
+                        for line in islice(f, 0, 1):
+                            columns = line.replace('\n','').split('\t')
+                            column_ids = {c : i for i,c in enumerate(columns)}
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
+                            if id1 != id2:
+                                label = float(line[column_ids['judgment']])
+                                if not (label == 0 and exclude_non_judgments) and not id1 in excluded_instances and not id2 in excluded_instances:
+                                    if not frozenset([id1,id2]) in temp_labels:
+                                        temp_labels[frozenset([id1,id2])] = []
+                                    temp_labels[frozenset([id1,id2])].append(label)
             except Exception as e:
                 logging.error(f"Could not load judgment data for '{word}' due to the following error: {e}")
                 raise e
@@ -506,7 +532,7 @@ class DWUG(CD):
                 logging.error(f"Could not combine usage and judgment data for '{word}' due to the following error: {e}")
                 raise e
 
-        wic = WiC(wic_data=data, dataset=f'{self.dataset}_WiC', language=self.language, version=self.version)
+        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC', language=self.language, version=self.version)
         return wic
     
     def get_usages_and_senses(self, remove_outliers = True):
@@ -573,12 +599,12 @@ class DWUG(CD):
         
     def cast_to_WSD(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsd = WSD(wsd_data=data, dataset=f'{self.dataset}_WSD', language=self.language, version=self.version)
+        wsd = WSD(wsd_data=data, dataset=f'{self.dataset} WSD', language=self.language, version=self.version)
         return wsd
 
     def cast_to_WSI(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsi = WSI(wsi_data=data, dataset=f'{self.dataset}_WSD', language=self.language, version=self.version)
+        wsi = WSI(wsi_data=data, dataset=f'{self.dataset} WSI', language=self.language, version=self.version)
         return wsi
     
     def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):

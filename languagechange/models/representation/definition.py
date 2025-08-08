@@ -533,7 +533,20 @@ class T5DefinitionGenerator(DefinitionGenerator):
             definitions.extend(self.tokenizer.batch_decode(outputs, skip_special_tokens=True))
         return definitions
 
-    def generate_definitions(self, df, prompt_index=8):
+    def encode_definitions(self, df, encode = 'both'):
+        if self.embedding_model != None:
+            vectors = self.embedding_model.encode(df["Generated_Definition"].tolist())
+        else:
+            return df
+        
+        if encode == 'both':
+            return df, vectors
+        elif encode == 'vectors':
+            return vectors
+        else:
+            return df
+
+    def generate_definitions(self, target_usage_list=None, df=None, prompt_index=8, encode_definitions : str = None):
         """
         Generate definitions for words in the DataFrame.
 
@@ -549,6 +562,14 @@ class T5DefinitionGenerator(DefinitionGenerator):
         """
         if prompt_index < 0 or prompt_index >= len(self.prompts):
             raise ValueError(f"Prompt index {prompt_index} is out of range (0-{len(self.prompts)-1})")
+
+        if target_usage_list is not None:
+            targets = [u.text()[u.offsets[0]:u.offsets[1]] for u in target_usage_list]
+            contexts = [u.text() for u in target_usage_list]
+            df = pd.DataFrame({"Targets": targets, "Context": contexts})
+        elif df == None:
+            raise ValueError("Either target_usage_list or df must be provided")
+
         if "Targets" not in df.columns or ("Context" not in df.columns and "Real_Contexts" not in df.columns):
             raise ValueError("DataFrame must contain 'Targets' and either 'Context' or 'Real_Contexts'")
 
@@ -560,7 +581,7 @@ class T5DefinitionGenerator(DefinitionGenerator):
                    for tgt, ctx in zip(df["Targets"], df[context_col])]
         df["Generated_Definition"] = self._generate_definitions(prompts, df["Targets"].tolist())
         df["Real_Contexts"] = prompts
-        return df
+        return self.encode_definitions(df, encode=encode_definitions)
 
     def save_definitions(self, df, output_file):
         """Save the DataFrame with definitions to a TSV file."""
