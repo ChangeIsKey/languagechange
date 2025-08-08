@@ -425,7 +425,7 @@ class DWUG(CD):
                             if int(label) == -1:
                                 excluded_instances.add(id)
                 except Exception as e:
-                    logging.error(f"Could not remove outlier usages of '{word}' due to the following error:")
+                    logging.error(f"Could not remove outlier usages of '{word}' due to the following error: {e}")
                     raise e
 
             usages_by_key = {}
@@ -458,7 +458,7 @@ class DWUG(CD):
                                 start, end = int(start), int(end)
                                 usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
             except Exception as e:
-                logging.error(f"Could not load usage data for '{word}' due to the following error:")
+                logging.error(f"Could not load usage data for '{word}' due to the following error: {e}")
                 raise e
                         
 
@@ -478,7 +478,7 @@ class DWUG(CD):
                                     temp_labels[frozenset([id1,id2])] = []
                                 temp_labels[frozenset([id1,id2])].append(label)
             except Exception as e:
-                logging.error(f"Could not load judgment data for '{word}' due to the following error:")
+                logging.error(f"Could not load judgment data for '{word}' due to the following error: {e}")
                 raise e
 
             try:
@@ -503,7 +503,7 @@ class DWUG(CD):
                                 'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
                                 'label': label})
             except Exception as e:
-                logging.error(f"Could not combine usage and judgment data for '{word}' due to the following error:")
+                logging.error(f"Could not combine usage and judgment data for '{word}' due to the following error: {e}")
                 raise e
 
         wic = WiC(wic_data=data, dataset=f'{self.dataset}_WiC', language=self.language, version=self.version)
@@ -535,7 +535,7 @@ class DWUG(CD):
                         except ValueError:
                             usages_by_id[id] = {'id': id, 'label': label}
             except Exception as e:
-                logging.error(f"Could not load sense labels for '{word}' due to the following error:")
+                logging.error(f"Could not load sense labels for '{word}' due to the following error: {e}")
                 raise e
 
             try:
@@ -565,7 +565,7 @@ class DWUG(CD):
                                 start, end = int(start), int(end)
                                 usages_by_id[id].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
             except Exception as e:
-                logging.error(f"Could not load usages for '{word}' due to the following error:")
+                logging.error(f"Could not load usages for '{word}' due to the following error: {e}")
                 raise e
             
             data.extend(list(usages_by_id.values()))

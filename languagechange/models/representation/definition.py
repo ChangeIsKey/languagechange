@@ -86,6 +86,7 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
         self.ft_model_name = ft_model_name
+        self.name = "ChatModelDefinitionGenerator_" + self.model_name + "_" + self.ft_model_name
         self.hf_token = hf_token
         self.max_length = max_length
         self.batch_size = batch_size
@@ -313,6 +314,7 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
         """
         super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
+        self.name = "ChatModelDefinitionGenerator_" + self.model_name
         self.language = language
 
         os.environ["LANGSMITH_TRACING"] = "true"
@@ -420,6 +422,7 @@ class T5DefinitionGenerator(DefinitionGenerator):
         logging.basicConfig(format="%(asctime)s : %(levelname)s : %(message)s", level=logging.INFO)
 
         self.model_path = model_path
+        self.name = "T5DefinitionGenerator_" + self.model_path
         self.bsize = bsize
         self.max_length = max_length
         self.filter_target = filter_target

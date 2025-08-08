@@ -20,6 +20,7 @@ class SCDURel(BaseModel):
 class PromptModel:
     def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", language : str = None, lemmatize = False, **kwargs):
         self.model_name = model_name
+        self.name = "PromptModel_" + self.model_name
         self.language = language
 
         os.environ["LANGSMITH_TRACING"] = "true"

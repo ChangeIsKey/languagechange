@@ -157,7 +157,7 @@ class Pipeline:
             for model_scores in scores:
                 for model, score in model_scores.items():
                     try:
-                        model_scores[model] = round(score, decimals)
+                        model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
                     except:
                         continue
 
@@ -195,7 +195,7 @@ class WSIPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False, save = False, json_path = None, latex_path = None):
+    def evaluate(self, return_labels = False, save = False, json_path = None, latex_path = None, decimals = None):
         """
             Evaluate on the WSI task. Returns the ARI and purity scores and optionally the clustering labels.
         """
@@ -232,9 +232,10 @@ class WSIPipeline(Pipeline):
             if json_path == None and latex_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
+                model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
 
                 if hasattr(self.dataset, 'name'):
-                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}, json_path, latex_path)
+                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version']
@@ -245,8 +246,8 @@ class WSIPipeline(Pipeline):
                             d[getattr(self.dataset, param)] = {}
                             d = d[getattr(self.dataset, param)]
                     for metric, score in scores.items():
-                        d[metric] = {type(self.usage_encoding).__name__: score}
-                    self.save_evaluation_results({'WSI': dataset_info}, json_path, latex_path)
+                        d[metric] = {model_name: score}
+                    self.save_evaluation_results({'WSI': dataset_info}, json_path, latex_path, decimals)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
@@ -273,7 +274,7 @@ class WiCPipeline(Pipeline):
             raise Exception
         self.usage_encoding = usage_encoding
 
-    def evaluate(self, task, label_func = None, save = False, json_path = None, latex_path = None):
+    def evaluate(self, task, label_func = None, save = False, json_path = None, latex_path = None, decimals = None):
         """
             Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if task='graded'.
         """
@@ -369,9 +370,10 @@ class WiCPipeline(Pipeline):
             if json_path == None and latex_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
+                model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
                 if hasattr(self.dataset, 'name'):
-                    scores_dict = {'WiC': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}
-                    self.save_evaluation_results(scores_dict, json_path, latex_path)
+                    scores_dict = {f'{task.title()} WiC': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
+                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version', 'crosslingual']
@@ -382,9 +384,9 @@ class WiCPipeline(Pipeline):
                             d[getattr(self.dataset, param)] = {}
                             d = d[getattr(self.dataset, param)]
                     for metric, score in scores.items():
-                        d[metric] = {type(self.usage_encoding).__name__: score}
-                    scores_dict = {'WiC': dataset_info}
-                    self.save_evaluation_results(scores_dict, json_path, latex_path)
+                        d[metric] = {model_name: score}
+                    scores_dict = {f'{task.title()} WiC': dataset_info}
+                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
@@ -411,7 +413,7 @@ class GCDPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.metric = metric
 
-    def evaluate(self, save = False, json_path = None, latex_path = None):
+    def evaluate(self, save = False, json_path = None, latex_path = None, decimals = None):
         """
             Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
         """
@@ -462,27 +464,28 @@ class GCDPipeline(Pipeline):
         scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
         if save:
-                if json_path == None and latex_path == None:
-                    logging.error("Tried to save results but no path was specified.")
+            if json_path == None and latex_path == None:
+                logging.error("Tried to save results but no path was specified.")
+            else:
+                model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
+                if hasattr(self.dataset, 'name'):
+                    scores_dict = {'GCD': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
+                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
+
+                elif hasattr(self.dataset, 'dataset'):
+                    parameters = ['dataset', 'language', 'version']
+                    dataset_info = {}
+                    d = dataset_info
+                    for param in parameters:
+                        if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                            d[getattr(self.dataset, param)] = {}
+                            d = d[getattr(self.dataset, param)]
+                    for metric, score in scores.items():
+                        d[metric] = {model_name: score}
+                    scores_dict = {'GCD': dataset_info}
+                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
+
                 else:
-                    if hasattr(self.dataset, 'name'):
-                        scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.usage_encoding).__name__: score} for metric, score in scores.items()}}}
-                        self.save_evaluation_results(scores_dict, json_path, latex_path)
-
-                    elif hasattr(self.dataset, 'dataset'):
-                        parameters = ['dataset', 'language', 'version']
-                        dataset_info = {}
-                        d = dataset_info
-                        for param in parameters:
-                            if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                                d[getattr(self.dataset, param)] = {}
-                                d = d[getattr(self.dataset, param)]
-                        for metric, score in scores.items():
-                            d[metric] = {type(self.usage_encoding).__name__: score}
-                        scores_dict = {'GCD': dataset_info}
-                        self.save_evaluation_results(scores_dict, json_path, latex_path)
-
-                    else:
-                        logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
+                    logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
 
         return scores
