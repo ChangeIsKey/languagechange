@@ -1,6 +1,6 @@
 from languagechange.resource_manager import LanguageChange
 from languagechange.corpora import LinebyLineCorpus
-from languagechange.usages import Target, TargetUsageList, DWUGUsage
+from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
 from languagechange.utils import NumericalTime, LiteralTime
 import webbrowser
 import os
@@ -15,7 +15,24 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
-from typing import List, Dict, Union, Callable
+from typing import List, Dict, Union, Callable, Tuple
+
+
+def purity(labels_true, cluster_labels):
+    assert len(labels_true) == len(cluster_labels)
+    N = len(labels_true)
+
+    # Count the amount of usages of each label in each cluster.
+    gold_labeled_clusters = {c : {} for c in set(cluster_labels)}
+    for i in range(N):
+        if labels_true[i] not in gold_labeled_clusters[cluster_labels[i]]:
+            gold_labeled_clusters[cluster_labels[i]][labels_true[i]] = 0
+        gold_labeled_clusters[cluster_labels[i]][labels_true[i]] += 1
+
+    # Select the majority label of each cluster and save its count.
+    majority_counts = [max(gold_labeled_clusters[c].values()) if len(gold_labeled_clusters[c]) != 0 else 0 for c in gold_labeled_clusters.keys()]
+    # The purity is the sum of these counts divided by the total amount of samples.
+    return sum(majority_counts) / N
 
 
 class Benchmark():
@@ -56,7 +73,7 @@ class Benchmark():
                 all_data += dataset
             return all_data
         
-    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True):
+    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True, epsilon = 1e-6):
         for s in ['train','dev','test']:
             if s in self.data.keys():
                 logging.info(f'Dataset already contains a {s} set.')
@@ -66,7 +83,7 @@ class Benchmark():
                 self.data['all'].extend(dataset)
         
         try:
-            assert train_prop + dev_prop + test_prop == 1
+            assert abs(1 - (train_prop + dev_prop + test_prop)) < epsilon
         except AssertionError:
             logging.error('Train, dev and test proportions must add upp to 1.')
             return None
@@ -96,21 +113,93 @@ class Benchmark():
         return start, end
 
 
-class SemEval2020Task1(Benchmark):
+class CD(Benchmark):
+    def __init__(self, dataset = None, language = None, version = None, name = None):
+        self.dataset = dataset
+        self.language = language
+        self.version = version
+        self.name = name
+
+    def load_from_target_usages(self, target_usages : Dict[str, List[TargetUsage]], scores):
+        self.target_words = target_usages.keys()
+        self.target_usages_t1 = {}
+        self.target_usages_t2 = {}
+        for word, tu in target_usages.items():
+            tu1, tu2 = tu
+            self.target_usages_t1[word] = TargetUsageList(tu1)
+            self.target_usages_t2[word] = TargetUsageList(tu2)
+
+        
+        if sum([int(type(s) == int and s == 1 or s == 0) for s in scores.values()]) == len(scores.values()):
+            self.binary_task = {Target(word): score for word, score in scores.items()}
+            self.graded_task = {}
+        else:
+            self.binary_task = {}
+            self.graded_task = {Target(word): score for word, score in scores.items()}
+
+
+    def evaluate_cd(self, predictions):
+        """
+            Evaluates binary change detection by comparing the predictions to the change scores in self.binary_task.
+
+            Args:
+                predictions (Union[List[Int], Dict[Str: Int]]): either a list of predictions (0 or 1) in the same order as the keys of self.stats_groupings or a dictionary {target_word: prediction}.
+
+            Returns:
+                (numpy.float64) An accuracy score: the percentage of correct predictions.
+        """
+        if self.binary_task == {}:
+            logging.error('The dataset does not contain binary change scores; nothing to evaluate on.')
+            return
+
+        if type(predictions) == list:
+            return accuracy_score(list(self.binary_task.values()), predictions)
+        
+        elif type(predictions) == dict:
+            sorted_binary_scores = [i[1] for i in sorted(self.binary_task.items(), key = lambda i : getattr(i[0], 'lemma', str(i[0])))]
+            sorted_predictions = [i[1] for i in sorted(predictions.items(), key = lambda i : i[0])]
+            return accuracy_score(sorted_binary_scores, sorted_predictions)
+    
+    def evaluate_gcd(self, predictions):
+        """
+            Evaluates graded change detection by comparing the predictions to the change scores in self.graded_task.
+
+            Args:
+                predictions (Union[List[Int], Dict[Str: Int]]): either a list of predictions (0 or 1) in the same order as the keys of self.stats_groupings or a dictionary {target_word: prediction}.
+
+            Returns:
+                (scipy.stats._stats_py.SignificanceResult[numpy.float64, numpy.float64]) The Spearman correlation (rho, p) between the predictions and the gold labels.
+        """
+        if self.graded_task == {}:
+            logging.error('The dataset does not contain graded change scores; nothing to evaluate on.')
+            return
+        
+        if type(predictions) == list:
+            return spearmanr(list(self.graded_task.values()), predictions)
+        
+        elif type(predictions) == dict:
+            sorted_graded_scores = [i[1] for i in sorted(self.graded_task.items(), key = lambda i : getattr(i[0], 'lemma', str(i[0])))]
+            sorted_predictions = [i[1] for i in sorted(predictions.items(), key = lambda i : i[0])]
+            return spearmanr(sorted_graded_scores, sorted_predictions)
+
+
+class SemEval2020Task1(CD):
 
     def __init__(self, language):
         lc = LanguageChange()
         self.language = language
         if self.language == 'NO':
             home_path = lc.get_resource('benchmarks', 'NorDiaChange', self.language, 'no-version')
+            self.dataset = 'NorDiaChange'
         elif self.language == 'RU':
             home_path = lc.get_resource('benchmarks', 'RuShiftEval', self.language, 'no-version')
+            self.dataset = 'RuShiftEval'
         else:
             home_path = lc.get_resource('benchmarks', 'SemEval 2020 Task 1', self.language, 'no-version')
+            self.dataset = 'SemEval 2020 Task 1'
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path,semeval_folder)
         self.load()
-
 
     def load(self):
         self.corpus1_lemma = LinebyLineCorpus(os.path.join(self.home_path, 'corpus1', 'lemma'), name='corpus1_lemma', language=self.language, time=NumericalTime(1), is_lemmatized=True)
@@ -153,54 +242,33 @@ class SemEval2020Task1(Benchmark):
                     self.graded_task[word] = float(score)
 
 
-# Gets the character offsets from a tokenized sentence string and an index of the word in question.
-def word_index_to_char_indices(text, word_index):
-    split_text = text.split(" ")
-    start = sum(len(s)+1 for s in split_text[:word_index])
-    end = start + len(split_text[word_index])
-    return start, end
+class DWUG(CD):
 
-def purity(labels_true, cluster_labels):
-    assert len(labels_true) == len(cluster_labels)
-    N = len(labels_true)
-
-    # Count the amount of usages of each label in each cluster.
-    gold_labeled_clusters = {c : {} for c in set(cluster_labels)}
-    for i in range(N):
-        if labels_true[i] not in gold_labeled_clusters[cluster_labels[i]]:
-            gold_labeled_clusters[cluster_labels[i]][labels_true[i]] = 0
-        gold_labeled_clusters[cluster_labels[i]][labels_true[i]] += 1
-
-    # Select the majority label of each cluster and save its count.
-    majority_counts = [max(gold_labeled_clusters[c].values()) if len(gold_labeled_clusters[c]) != 0 else 0 for c in gold_labeled_clusters.keys()]
-    # The purity is the sum of these counts divided by the total amount of samples.
-    return sum(majority_counts) / N
-
-
-class DWUG(Benchmark):
-
-    def __init__(self, path=None, language=None, version=None):
+    def __init__(self, path=None, dataset=None, language=None, version=None, config='opt'):
         lc = LanguageChange()
-        if not language == None and not version == None:
+        if not dataset == None and not language == None and not version == None:
+            self.dataset = dataset
             self.language = language
-            home_path = lc.get_resource('benchmarks', 'DWUG', self.language, version)
+            self.version = version
+            home_path = lc.get_resource('benchmarks', self.dataset, self.language, version)
             dwug_folder = os.listdir(home_path)[0]
             self.home_path = os.path.join(home_path,dwug_folder)
         else:
             if not path == None and os.path.exists(path):
                 self.home_path = path
             else:
-                raise Exception('The path is None or does not exists.')       
+                raise Exception('The path is None or does not exists.')   
+        self.config = config    
         self.load()
 
-    def load(self, config=None):
+    def load(self):
         self.target_words = os.listdir(os.path.join(self.home_path,'data'))
         self.stats_groupings = {}
         self.stats = {}
 
         stats_path = None
-        if not config == None:
-            stats_path = os.path.join(self.home_path,'stats',config)
+        if not self.config == None:
+            stats_path = os.path.join(self.home_path,'stats',self.config)
         elif os.path.exists(os.path.join(self.home_path,'stats','opt')):
             stats_path = os.path.join(self.home_path,'stats','opt')
         else:
@@ -217,17 +285,20 @@ class DWUG(Benchmark):
                         self.stats_groupings[values[0]] = D
                     else:
                         keys = line
-
-        with open(os.path.join(stats_path,'stats.csv')) as f:
-            keys = []
-            for j,line in enumerate(f):
-                line = line.replace('\n','').split('\t')
-                if j > 0:
-                    values = line
-                    D = {keys[j]:values[j] for j in range(1,len(values))}
-                    self.stats[values[0]] = D
-                else:
-                    keys = line
+        try:
+            with open(os.path.join(stats_path,'stats.csv')) as f:
+                keys = []
+                for j,line in enumerate(f):
+                    line = line.replace('\n','').split('\t')
+                    if j > 0:
+                        values = line
+                        D = {keys[j]:values[j] for j in range(1,len(values))}
+                        self.stats[values[0]] = D
+                    else:
+                        keys = line
+        except FileNotFoundError as e:
+            logging.error("Could not find a path to stats.csv. Did you enter the right config value?")
+            raise e
 
         self.binary_task = {}
         self.graded_task = {}
@@ -331,108 +402,209 @@ class DWUG(Benchmark):
     def get_stats_groupings(self):
         return self.stats_groupings
     
-    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels = None):
+    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels : Callable = None):
         """
             Casts the DWUG to a Word in Context (WiC) dataset.
 
             Args:
                 only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
+                remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
+                exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
+                transform_labels (Callable): a function which takes a list of labels and returns a label, by default the mean of the labels.
         """
-        wic = WiC(language=self.language)
         data = []
         for word in self.target_words:
             excluded_instances = set()
 
-            with open(os.path.join(self.home_path,'clusters/opt',f'{word}.csv')) as f:
-                for line in islice(f, 1, None):
-                    line = line.replace('\n','').split('\t')
-                    id, label = line
-                    if remove_outliers and int(label) == -1:
-                        excluded_instances.add(id)
+            if remove_outliers:
+                try:
+                    if self.dataset == "DWUG Sense":
+                        with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')) as f:
+                            for line in islice(f, 1, None):
+                                line = line.replace('\n','').split('\t')
+                                id, label = line
+                                try:
+                                    if int(label) == -1:
+                                        excluded_instances.add(id)
+                                except ValueError:
+                                    continue
+                    else:
+                        with open(os.path.join(self.home_path,f'clusters/{self.config}',f'{word}.csv')) as f:
+                            for line in islice(f, 1, None):
+                                line = line.replace('\n','').split('\t')
+                                id, label = line
+                                if int(label) == -1:
+                                    excluded_instances.add(id)
+                except Exception as e:
+                    logging.error(f"Could not remove outlier usages of '{word}' due to the following error: {e}")
+                    raise e
 
             usages_by_key = {}
-            with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
-                for line in islice(f, 1, None):
-                    line = line.replace('\n','').split('\t')
-                    lemma = line[0]
-                    grouping = line[3]
-                    id = line[4]
-                    if not id in excluded_instances:
-                        context_tokenized = line[9]
-                        word_index = int(line[10])
-                        start, end = self.word_index_to_char_indices(context_tokenized, word_index, split_text=True)
-                        usages_by_key[id] = {'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'grouping':grouping}
+            try:
+                with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+                    for line in islice(f, 0, 1):
+                        columns = line.replace('\n','').split('\t')
+                        column_ids = {c : i for i,c in enumerate(columns)}
+
+                    if 'context_tokenized' in column_ids and 'indexes_target_token_tokenized' in column_ids:
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id = line[column_ids['identifier']]
+                            if not id in excluded_instances:
+                                lemma = line[column_ids['lemma']]
+                                grouping = line[column_ids['grouping']]
+                                context = line[column_ids['context_tokenized']]
+                                word_index = int(line[column_ids['indexes_target_token_tokenized']])
+                                start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
+                                usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
+                    else:
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id = line[column_ids['identifier']]
+                            if not id in excluded_instances:
+                                lemma = line[column_ids['lemma']]
+                                grouping = line[column_ids['grouping']]
+                                context = line[column_ids['context']]
+                                start, end = line[column_ids['indexes_target_token']].split(":")
+                                start, end = int(start), int(end)
+                                usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
+            except Exception as e:
+                logging.error(f"Could not load usage data for '{word}' due to the following error: {e}")
+                raise e
+                        
 
             temp_labels = {}
-            with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
-                for j,line in enumerate(f):
-                    if not j == 0:
-                        line = line.replace('\n','').split('\t')
-                        idx1, idx2 = line[0], line[1]
-                        label = int(line[3])
-                        if (label != 0 or not exclude_non_judgments) and not idx1 in excluded_instances and not idx2 in excluded_instances:
-                            if not frozenset([idx1,idx2]) in temp_labels:
-                                temp_labels[frozenset([idx1,idx2])] = []
-                            temp_labels[frozenset([idx1,idx2])].append(label)
-
-            for key in temp_labels:
-                ordered_ids = list(key)
-                id1, id2 = ordered_ids[0], ordered_ids[1]
-                usage1, usage2 = usages_by_key[id1], usages_by_key[id2]
-                word = usage1['word']
-                assert word == usage2['word']
-                if only_between_groups and usage1['grouping'] == usage2['grouping']:
-                    continue
-                if transform_labels is not None:
-                    try:
-                        label = transform_labels(temp_labels[key])
-                    except:
-                        logging.error(f'{transform_labels} could not be used to transform labels.')
-                        raise ValueError
+            try:
+                if self.dataset == "DWUG Sense":
+                    with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_proximity.csv')) as f:
+                        for line in islice(f, 0, 1):
+                            columns = line.replace('\n','').split('\t')
+                            column_ids = {c : i for i,c in enumerate(columns)}
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
+                            if id1 != id2:
+                                label = float(line[column_ids['label']])
+                                if not id1 in excluded_instances and not id2 in excluded_instances:
+                                    if not frozenset([id1,id2]) in temp_labels:
+                                        temp_labels[frozenset([id1,id2])] = []
+                                    temp_labels[frozenset([id1,id2])].append(label)
                 else:
-                    label = np.mean(temp_labels[key])
-                data.append({'word': word, 
-                            'id1': id1, 'text1': usage1['text'], 'start1': usage1['start'], 'end1': usage1['end'],
-                            'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
-                            'label': label})
+                    with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
+                        for line in islice(f, 0, 1):
+                            columns = line.replace('\n','').split('\t')
+                            column_ids = {c : i for i,c in enumerate(columns)}
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
+                            if id1 != id2:
+                                label = float(line[column_ids['judgment']])
+                                if not (label == 0 and exclude_non_judgments) and not id1 in excluded_instances and not id2 in excluded_instances:
+                                    if not frozenset([id1,id2]) in temp_labels:
+                                        temp_labels[frozenset([id1,id2])] = []
+                                    temp_labels[frozenset([id1,id2])].append(label)
+            except Exception as e:
+                logging.error(f"Could not load judgment data for '{word}' due to the following error: {e}")
+                raise e
 
-        wic.load_from_data(data)
+            try:
+                for key in temp_labels:
+                    ordered_ids = list(key)
+                    id1, id2 = ordered_ids[0], ordered_ids[1]
+                    usage1, usage2 = usages_by_key[id1], usages_by_key[id2]
+                    word = usage1['word']
+                    assert word == usage2['word']
+                    if only_between_groups and usage1['grouping'] == usage2['grouping']:
+                        continue
+                    if transform_labels is not None:
+                        try:
+                            label = transform_labels(temp_labels[key])
+                        except:
+                            logging.error(f'{transform_labels} could not be used as a function to transform labels.')
+                            raise ValueError
+                    else:
+                        label = np.mean(temp_labels[key])
+                    data.append({'word': word, 
+                                'id1': id1, 'text1': usage1['text'], 'start1': usage1['start'], 'end1': usage1['end'],
+                                'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
+                                'label': label})
+            except Exception as e:
+                logging.error(f"Could not combine usage and judgment data for '{word}' due to the following error: {e}")
+                raise e
+
+        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC', language=self.language, version=self.version)
         return wic
     
     def get_usages_and_senses(self, remove_outliers = True):
         data = []
-        for word in self.stats_groupings:
+        for word in self.target_words:
             usages_by_id = {}
-            with open(os.path.join(self.home_path,'clusters/opt',f'{word}.csv')) as f:
-                for line in islice(f, 1, None):
-                    line = line.replace('\n','').split('\t')
-                    id, label = line
-                    if not remove_outliers or int(label) != -1:
-                        usages_by_id[id] = {'id': id, 'label': label}
+
+            if self.dataset == "DWUG":
+                senses_path = os.path.join(self.home_path,'clusters/opt',f'{word}.csv')
+
+            elif self.dataset == "DWUG Sense": #This is not good
+                senses_path = os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')
+
+            try:
+                with open(senses_path) as f:
+                    for line in islice(f, 0, 1):
+                        columns = line.replace('\n','').split('\t')
+                        column_ids = {c : i for i,c in enumerate(columns)}
+                    for line in f:
+                        line = line.replace('\n','').split('\t')
+                        id = line[column_ids['identifier']]
+                        label = line[column_ids['cluster'] if self.dataset == "DWUG" else column_ids['label']]
+                        try:
+                            if not (remove_outliers and int(label) == -1):
+                                usages_by_id[id] = {'id': id, 'label': label}
+                        except ValueError:
+                            usages_by_id[id] = {'id': id, 'label': label}
+            except Exception as e:
+                logging.error(f"Could not load sense labels for '{word}' due to the following error: {e}")
+                raise e
+
+            try:
+                with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+                    for line in islice(f, 0, 1):
+                        columns = line.replace('\n','').split('\t')
+                        column_ids = {c : i for i,c in enumerate(columns)}
+                    
+                    if 'context_tokenized' in column_ids and 'indexes_target_token_tokenized' in column_ids:
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id = line[column_ids['identifier']]
+                            if id in usages_by_id:
+                                lemma = line[column_ids['lemma']]
+                                context = line[column_ids['context_tokenized']]
+                                word_index = int(line[column_ids['indexes_target_token_tokenized']])
+                                start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
+                                usages_by_id[id].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
+                    else:
+                        for line in f:
+                            line = line.replace('\n','').split('\t')
+                            id = line[column_ids['identifier']]
+                            if id in usages_by_id:
+                                lemma = line[column_ids['lemma']]
+                                context = line[column_ids['context']]
+                                start, end = line[column_ids['indexes_target_token']].split(":")
+                                start, end = int(start), int(end)
+                                usages_by_id[id].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
+            except Exception as e:
+                logging.error(f"Could not load usages for '{word}' due to the following error: {e}")
+                raise e
             
-            with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
-                for line in islice(f, 1, None):
-                    line = line.replace('\n','').split('\t')
-                    lemma = line[0]
-                    id = line[4]
-                    if id in usages_by_id:
-                        context_tokenized = line[9]
-                        word_index = int(line[10])
-                        start, end = word_index_to_char_indices(context_tokenized, word_index)
-                        usages_by_id[id].update({'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
             data.extend(list(usages_by_id.values()))
         return data
         
     def cast_to_WSD(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsd = WSD()
-        wsd.load_from_data(data)
+        wsd = WSD(wsd_data=data, dataset=f'{self.dataset} WSD', language=self.language, version=self.version)
         return wsd
 
     def cast_to_WSI(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsi = WSI()
-        wsi.load_from_data(data)
+        wsi = WSI(wsi_data=data, dataset=f'{self.dataset} WSI', language=self.language, version=self.version)
         return wsi
     
     def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):
@@ -457,7 +629,7 @@ class DWUG(Benchmark):
             return accuracy_score(list(self.binary_task.values()), predictions)
         
         elif type(predictions) == dict:
-            sorted_binary_scores = [i[1] for i in sorted(self.binary_task.items(), key = lambda i : i[0].lemma)]
+            sorted_binary_scores = [i[1] for i in sorted(self.binary_task.items(), key = lambda i : getattr(i[0], 'lemma', str(i[0])))]
             sorted_predictions = [i[1] for i in sorted(predictions.items(), key = lambda i : i[0])]
             return accuracy_score(sorted_binary_scores, sorted_predictions)
     
@@ -479,7 +651,7 @@ class DWUG(Benchmark):
             return spearmanr(list(self.graded_task.values()), predictions)
         
         elif type(predictions) == dict:
-            sorted_graded_scores = [i[1] for i in sorted(self.graded_task.items(), key = lambda i : i[0].lemma)]
+            sorted_graded_scores = [i[1] for i in sorted(self.graded_task.items(), key = lambda i : getattr(i[0], 'lemma', str(i[0])))]
             sorted_predictions = [i[1] for i in sorted(predictions.items(), key = lambda i : i[0])]
             return spearmanr(sorted_graded_scores, sorted_predictions)
         
@@ -488,44 +660,73 @@ class WiC(Benchmark):
     """
         Dataset handling for the Word-in-Context (WiC) task.
         Parameters:
-            dataset (str) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 'AM2iCo'] if
-                downloading from the language change resource hub, or empty if loading manually.
-            version (str) : the version of the dataset if loading from the resource hub.
-            language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset from the resource hub.
+            path (str) : a path to the dataset, if it is not stored by the resource hub.
+            dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 'AM2iCo'] if using a dataset in the language change resource hub, or a list or a dict if loading from a datastructure already describing a WiC dataset.
+            version (str) : the version of the dataset if using a dataset from the resource hub.
+            language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
             crosslingual (bool) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
+            name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
     """
-    def __init__(self, dataset=None, version=None, language=None, crosslingual = False):
+    def __init__(self, 
+                 path : str = None, 
+                 wic_data : dict | list = None,
+                 dataset : str = None, 
+                 version : str = None, 
+                 language : str = None, 
+                 crosslingual : bool = None,
+                 name : str = None):
         self.data = {}
         self.dataset = dataset
         self.version = version
         self.language = language
+        self.crosslingual = crosslingual
         self.target_words = set()
+        if name != None:
+            self.name = name
 
-        if dataset != None and version != None and (dataset == 'WiC' or dataset == 'TempoWiC' or language != None):
-            lc = LanguageChange()
-            home_path = lc.get_resource('benchmarks', 'WiC', dataset, version)
-            
-            if dataset == 'XL-WiC' or dataset == 'TempoWiC' or dataset == 'MCL-WiC' or dataset == 'AM2iCo':
-                wic_folder = os.listdir(home_path)[0]
-                home_path = os.path.join(home_path, wic_folder)
-                if dataset == 'MCL-WiC':
-                    if os.path.exists(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip")):
-                        with zipfile.ZipFile(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip"), 'r') as f:
-                            f.extractall(home_path)
-                    self.home_path = os.path.join(home_path, 'MCL-WiC')
+        # Get the dataset from the resource hub, or load a locally stored dataset from files
+        if wic_data == None and dataset != None and version != None and (dataset == 'WiC' or dataset == 'TempoWiC' or language != None):
+            # Let the resource hub find the path
+            if path == None:
+                lc = LanguageChange()
+                home_path = lc.get_resource('benchmarks', 'WiC', dataset, version)
+                
+                if dataset == 'XL-WiC' or dataset == 'TempoWiC' or dataset == 'MCL-WiC' or dataset == 'AM2iCo':
+                    wic_folder = os.listdir(home_path)[0]
+                    home_path = os.path.join(home_path, wic_folder)
+                    if dataset == 'MCL-WiC':
+                        self.crosslingual = crosslingual
+                        if os.path.exists(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip")):
+                            with zipfile.ZipFile(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip"), 'r') as f:
+                                f.extractall(home_path)
+                        self.home_path = os.path.join(home_path, 'MCL-WiC')
+                    else:
+                        self.home_path = home_path
                 else:
                     self.home_path = home_path
+            # Pre-defined path
             else:
-                self.home_path = home_path
-            
+                self.home_path = path
+            logging.info(f"WiC home path: {self.home_path}")
+                
             self.load_from_resource_hub(dataset, language, crosslingual = crosslingual)
+
+        # Loads from a dictionary or list
+        elif wic_data != None:
+            try:
+                self.load_from_data(wic_data)
+            except Exception as e:
+                logging.error('Could not load from dataset.')
+                raise e
     
-    # Loads already formatted data, with each example as in self.load()
+    # Loads from a list or a dict containing a WiC dataset, with each example as in self.load_from_resource_hub()
     def load_from_data(self, data):
         if type(data) == list:
             self.data = {'all': data}
         elif type(data) == dict:
             self.data = data
+        else:
+            raise TypeError('Could not load the dataset as a WiC dataset.')
 
         # Add the lemma in each data example to the set of target words
         for dataset in self.data.values():
@@ -676,7 +877,7 @@ class WiC(Benchmark):
         # XL-WiC, containing WiC datasets for 12 more languages other than English.
         elif dataset == 'XL-WiC':
             # There is something unusual in the offsets of the XL-WiC dataset for Farsi.
-            # The first index is for some reason a word index while the difference between the first and the second denotes
+            # The first index is a word index while the difference between the first and the second denotes
             # the length of the word.
             if language == 'FA':
                 def get_start_end(text, start, end):
@@ -798,6 +999,23 @@ class WiC(Benchmark):
     def load_from_resource_hub(self, dataset, language, crosslingual = False):
         data_paths = self.find_data_paths(dataset, language, crosslingual)
         self.load_from_files(data_paths, dataset, language, crosslingual)
+
+    # Loads from a list of pairs of target usages
+    def load_from_target_usages(self, target_usages : List[Union[Tuple[TargetUsage], List[TargetUsage], TargetUsageList]], labels):
+        data = []
+        for i, target_usage_pair in enumerate(target_usages):
+            tu1, tu2 = target_usage_pair
+            example = {'word': tu1.text()[tu1.offsets[0]:tu1.offsets[1]],
+                       'text1': tu1.text(),
+                       'text2': tu2.text(),
+                       'start1': tu1.offsets[0],
+                       'end1': tu1.offsets[1],
+                       'start2': tu2.offsets[0],
+                       'end2': tu2.offsets[1],
+                       'label': labels[i]}
+            data.append(example)
+        self.load_from_data(data)
+
     
     def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric : Callable, word = None):
         """
@@ -841,25 +1059,56 @@ class WiC(Benchmark):
         return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
     
 
-# Dataset handling for the Word Sense Disambiguation (WSD) task
 class WSD(Benchmark):
-    def __init__(self, path = None, dataset = None, language = None, version = None):
-        if path == None and dataset != None and language != None and version != None:
-            lc = LanguageChange()
-            path = lc.get_resource('benchmarks', 'WSD', dataset, version)
-
-            if dataset == 'XL-WSD':
-                self.home_path = os.path.join(path, 'xl-wsd')
-        else:
-            self.home_path = path
-
+    """
+        Dataset handling for the Word Sense Disambiguation (WSD) task.
+        Parameters:
+            path (str) : a path to the dataset, if it is not stored by the resource hub in the cache folder.
+            dataset (str|list|dict) : the dataset to be loaded. 'XL-WSD' if using a dataset from the language change resource hub, or a list or a dict if loading from a datastructure already describing a WSD dataset.
+            version (str) : the version of the dataset if using a dataset in the resource hub.
+            language (str) : the language code (e.g. BG).
+            name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
+    """
+    def __init__(self, 
+                 path : str = None,
+                 wsd_data : list | dict = None,
+                 dataset : str = None, 
+                 language : str = None, 
+                 version : str = None,
+                 name : str = None):
+        self.data = {}
         self.target_words = set()
+        self.dataset = dataset
+        self.version = version
+        self.language = language
+        if name != None:
+            self.name = name
 
-        if self.home_path != None:
-            logging.info(f'Home path:{self.home_path}')
+        # Loads from the resource hub or a local path containing the necessary files
+        if dataset != None and language != None and version != None:
+            # Let the resource manager find the path
+            if path == None:
+                lc = LanguageChange()
+                path = lc.get_resource('benchmarks', 'WSD', dataset, version)
+
+                if dataset == 'XL-WSD':
+                    self.home_path = os.path.join(path, 'xl-wsd')
+            # Pre-defined path
+            else:
+                self.home_path = path
+
+            logging.info(f"WSD home path: {self.home_path}")
             self.load(dataset, language)
 
-    # Loads already formatted data, with each example as in self.load()
+        # Loads from a dictionary or list already containing a WSD dataset
+        elif wsd_data != None:
+            try:
+                self.load_from_data(wsd_data)
+            except Exception as e:
+                logging.error('Could not load from dataset.')
+                raise e
+
+    # Loads from a dict or list containing a WSD dataset, with each example as in self.load()
     def load_from_data(self, data):
         if type(data) == list:
             self.data = {'all': data}
@@ -962,8 +1211,16 @@ class WSD(Benchmark):
                             line_data = line.strip("\n").split(" ")
                             id = line_data[0]
                             labels = line_data[1:]
-                            data_by_id[id]['label'] = labels
-                            data_by_id[id]['id'] = id
+                            if len(labels) > 1:
+                                # If there are multiple lables, create new examples for each.
+                                for i, label in enumerate(labels):
+                                    data_by_id[f'{id}:{i}'] = data_by_id[id]
+                                    data_by_id[f'{id}:{i}']['label'] = label
+                                    data_by_id[f'{id}:{i}']['id'] = f'{id}:{i}'
+                                del data_by_id[id]
+                            else:
+                                data_by_id[id]['label'] = labels[0]
+                                data_by_id[id]['id'] = id
 
                 data[key] = list(data_by_id.values())
 
@@ -972,6 +1229,31 @@ class WSD(Benchmark):
     def load(self, dataset, language):
         data_paths = self.find_data_paths(dataset, language)
         self.load_from_files(data_paths, dataset)
+
+    # Loads from a list of target usages
+    def load_from_target_usages(self, target_usages : Union[List[TargetUsage], TargetUsageList], labels):
+        data = []
+        for i, tu in enumerate(target_usages):
+            example = {'word': tu.text()[tu.offsets[0]:tu.offsets[1]],
+                       'text': tu.text(),
+                       'start': tu.offsets[0],
+                       'end': tu.offsets[1],
+                       'label': labels[i]}
+            if hasattr(tu, 'id'):
+                example['id'] = tu.id
+            data.append(example)
+        self.load_from_data(data)
+
+    # Casts to a WSI object with the same data
+    def cast_to_WSI(self):
+        wsi = WSI(wsi_data = self.data)
+        wsi.dataset = self.dataset
+        wsi.version = self.version
+        wsi.language = self.language
+        if hasattr(self, 'name'):
+            wsi.name = self.name
+        #wsi.load_from_data(self.data)
+        return wsi
 
     def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric, word = None):
         """
@@ -1021,13 +1303,30 @@ class WSD(Benchmark):
         return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
 
 
-# Dataset handling for the Word Sense Induction (WSI) task (to be implemented)
 class WSI(Benchmark):
-    def __init__(self):
+    """
+        Dataset handling for the Word Sense Induction (WSI) task.
+        Parameters:
+            dataset (list|dict) : a datastructure describing a WSI dataset.
+            name (str) : the name of the dataset (optional but useful for evaluation pipelines).
+    """
+    def __init__(self, 
+                 wsi_data : list | dict = None,
+                 dataset : str = None,
+                 version : str = None,
+                 language : str = None,
+                 name : str = None):
         self.data = {}
+        self.dataset = dataset
+        self.version = version
+        self.language = language
         self.target_words = set()
+        if name != None:
+            self.name = name
+        if wsi_data is not None:
+            self.load_from_data(wsi_data)
 
-    # Loads already formatted data, with each example as in self.load()
+    # Loads from a list or dict containing a WSI dataset
     def load_from_data(self, data):
         if type(data) == list:
             self.data = {'all': data}
@@ -1039,6 +1338,20 @@ class WSI(Benchmark):
             for d in dataset:
                 if 'word' in d.keys():
                     self.target_words.add(d['word'])
+
+    # Loads from a list of target usages
+    def load_from_target_usages(self, target_usages : Union[List[TargetUsage], TargetUsageList], labels):
+        data = []
+        for i, tu in enumerate(target_usages):
+            example = {'word': tu.text()[tu.offsets[0]:tu.offsets[1]],
+                       'text': tu.text(),
+                       'start': tu.offsets[0],
+                       'end': tu.offsets[1],
+                       'label': labels[i]}
+            if hasattr(tu, 'id'):
+                example['id'] = tu.id
+            data.append(example)
+        self.load_from_data(data)
 
     def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all'):
         """
@@ -1060,7 +1373,7 @@ class WSI(Benchmark):
                 labels_per_word[d['word']][0].append(d['label'])
                 labels_per_word[d['word']][1].append(predictions[d['id']])
 
-        elif type(predictions) == list:
+        elif type(predictions) == list or type(predictions) == np.ndarray:
             for i, d in enumerate(self.get_dataset(dataset)):
                 if not d['word'] in labels_per_word:
                     labels_per_word[d['word']] = [[],[]]
