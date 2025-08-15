@@ -185,61 +185,108 @@ class CD(Benchmark):
 
 class SemEval2020Task1(CD):
 
-    def __init__(self, language):
+    def __init__(self, language, subset:int=None):
         lc = LanguageChange()
         self.language = language
+        if self.language == 'NO' or self.language == 'RU':
+            self.subset = subset
         if self.language == 'NO':
-            home_path = lc.get_resource('benchmarks', 'NorDiaChange', self.language, 'no-version')
             self.dataset = 'NorDiaChange'
         elif self.language == 'RU':
-            home_path = lc.get_resource('benchmarks', 'RuShiftEval', self.language, 'no-version')
             self.dataset = 'RuShiftEval'
         else:
-            home_path = lc.get_resource('benchmarks', 'SemEval 2020 Task 1', self.language, 'no-version')
             self.dataset = 'SemEval 2020 Task 1'
+        home_path = lc.get_resource('benchmarks', self.dataset, self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path,semeval_folder)
         self.load()
 
     def load(self):
-        self.corpus1_lemma = LinebyLineCorpus(os.path.join(self.home_path, 'corpus1', 'lemma'), name='corpus1_lemma', language=self.language, time=NumericalTime(1), is_lemmatized=True)
-        self.corpus2_lemma = LinebyLineCorpus(os.path.join(self.home_path, 'corpus2', 'lemma'), name='corpus2_lemma', language=self.language, time=NumericalTime(2), is_lemmatized=True)
-        self.corpus1_token = LinebyLineCorpus(os.path.join(self.home_path, 'corpus1', 'token'), name='corpus1_token', language=self.language, time=NumericalTime(1), is_tokenized=True)
-        self.corpus2_token = LinebyLineCorpus(os.path.join(self.home_path, 'corpus2', 'token'), name='corpus2_token', language=self.language, time=NumericalTime(2), is_tokenized=True)
+        if self.dataset == "SemEval 2020 Task 1":
+            self.corpus1_lemma = LinebyLineCorpus(os.path.join(self.home_path, 'corpus1', 'lemma'), name='corpus1_lemma', language=self.language, time=NumericalTime(1), is_lemmatized=True)
+            self.corpus2_lemma = LinebyLineCorpus(os.path.join(self.home_path, 'corpus2', 'lemma'), name='corpus2_lemma', language=self.language, time=NumericalTime(2), is_lemmatized=True)
+            self.corpus1_token = LinebyLineCorpus(os.path.join(self.home_path, 'corpus1', 'token'), name='corpus1_token', language=self.language, time=NumericalTime(1), is_tokenized=True)
+            self.corpus2_token = LinebyLineCorpus(os.path.join(self.home_path, 'corpus2', 'token'), name='corpus2_token', language=self.language, time=NumericalTime(2), is_tokenized=True)
+
         self.binary_task = {}
         self.graded_task = {}
+        self.target_words = set()
 
         if self.language == 'NO':
-            subsets = {'subset1', 'subset2'}
-            for subset in subsets:
-                with open(os.path.join(self.home_path, subset, 'stats/stats_groupings.tsv')) as f:
-                    for line in islice(f, 1, None):
-                        line = line.strip('\n').split('\t')
-                        word, binary, graded = line[0], line[11], line[14]
-                        word = Target(word)
-                        self.binary_task[word] = int(binary)
-                        self.graded_task[word] = float(graded)
+            with open(os.path.join(self.home_path, f'subset{self.subset}', 'stats/stats_groupings.tsv')) as f:
+                for line in islice(f, 1, None):
+                    line = line.strip('\n').split('\t')
+                    word, binary, graded = line[0], line[11], line[14]
+                    self.target_words.add(word)
+                    word = Target(word)
+                    self.binary_task[word] = int(binary)
+                    self.graded_task[word] = float(graded)
 
         elif self.language == 'RU':
-            # For the Russian dataset there is no binary change scores.
+            # For the Russian dataset there are no binary change scores.
             with open(os.path.join(self.home_path, 'annotated_all.tsv')) as f:
                 for line in f:
                     line = line.strip('\n').split('\t')
-                    word = Target(line[0])
-                    self.graded_task[word] = [float(change_score) for change_score in line[1:]]
+                    word = line[0]
+                    self.target_words.add(word)
+                    word = Target(word)
+                    # RuShiftEval uses the COMPARE metric, which measures relatedness between timeperiods, i.e. inverted semantic change.
+                    self.graded_task[word] = -float(line[self.subset])
 
         else:
             with open(os.path.join(self.home_path, 'truth', 'binary.txt')) as f:
                 for line in f:
                     word, label = line.split()
+                    self.target_words.add(word)
                     word = Target(word)
                     self.binary_task[word] = int(label)
 
             with open(os.path.join(self.home_path, 'truth', 'graded.txt')) as f:
                 for line in f:
                     word, score = line.split()
+                    self.target_words.add(word)
                     word = Target(word)
                     self.graded_task[word] = float(score)
+
+    def get_word_usages(self, word, group='all'):
+        group = str(group)
+        usages = TargetUsageList()
+        if self.dataset == 'NorDiaChange':
+            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,'uses.csv')) as f:
+                keys = []
+                for j,line in enumerate(f):
+                    line = line.replace('\n','').split('\t')
+                    if j > 0:
+                        values = line
+                        D = {keys[j]:values[j] for j in range(len(values))}
+                        if group == 'all' or D['grouping'] == group:
+                            D['text'] = D['context']
+                            D['target'] = Target(D['lemma'])
+                            D['target'].set_lemma(D['lemma'])
+                            D['target'].set_pos(D['pos'])
+                            D['offsets'] = [int(i) for i in D['indexes_target_token'].split(':')]
+                            D['time'] = LiteralTime(D['date'])
+                            usages.append(DWUGUsage(**D))
+                    else:
+                        keys = line
+        elif self.dataset == 'RuShiftEval':
+            with open(os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word,'uses.csv')) as f:
+                keys = []
+                for j,line in enumerate(f):
+                    line = line.replace('\n','').split('\t')
+                    if j > 0:
+                        values = line
+                        D = {keys[j]:values[j] for j in range(len(values))}
+                        D['text'] = D['context']
+                        D['target'] = Target(D['lemma'])
+                        D['target'].set_lemma(D['lemma'])
+                        D['target'].set_pos(D['pos'])
+                        D['offsets'] = [int(i) for i in D['indexes_target_token'].split(':')]
+                        D['time'] = LiteralTime(D['date'])
+                        usages.append(DWUGUsage(**D))
+                    else:
+                        keys = line
+        return usages   
 
 
 class DWUG(CD):
@@ -1353,7 +1400,7 @@ class WSI(Benchmark):
             data.append(example)
         self.load_from_data(data)
 
-    def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all'):
+    def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all', average = False):
         """
             Evaluates a clustering with respect to the true labels as given in self.data.
 
@@ -1396,15 +1443,18 @@ class WSI(Benchmark):
         for metric in metric_functions:
             if metric in reverse_metric_names:
                 scores[reverse_metric_names[metric]] = {}
-            for word, labels in labels_per_word.items():
-                gold_labels, pred_labels = labels
-                if metric in reverse_metric_names:
-                    scores[reverse_metric_names[metric]][word] = metric(gold_labels, pred_labels)
+            if metric in reverse_metric_names:
+                if not average:
+                    for word, labels in labels_per_word.items():
+                        gold_labels, pred_labels = labels
+                        scores[reverse_metric_names[metric]][word] = metric(gold_labels, pred_labels)
+                else:
+                    scores[reverse_metric_names[metric]] = np.mean(list(metric(gold_labels, pred_labels) for gold_labels, pred_labels in labels_per_word.values()))
 
         return scores
 
-    def evaluate_ari(self, predictions, dataset = 'all'):
-        return self.evaluate(predictions, {adjusted_rand_score}, dataset)
+    def evaluate_ari(self, predictions, dataset = 'all', average = False):
+        return self.evaluate(predictions, {adjusted_rand_score}, dataset, average)
     
-    def evaluate_purity(self, predictions, dataset = 'all'):
-        return self.evaluate(predictions, {purity}, dataset)
+    def evaluate_purity(self, predictions, dataset = 'all', average = False):
+        return self.evaluate(predictions, {purity}, dataset, average)

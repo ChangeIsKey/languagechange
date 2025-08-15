@@ -1,9 +1,10 @@
 from languagechange.models.representation.contextualized import ContextualizedModel
 from languagechange.models.representation.definition import DefinitionGenerator, ChatModelDefinitionGenerator, LlamaDefinitionGenerator, T5DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
-from languagechange.models.meaning.clustering import Clustering
+from languagechange.models.meaning.clustering import Clustering, APosterioriaffinityPropagation
 from languagechange.usages import TargetUsage, TargetUsageList
-from languagechange.models.change.metrics import GradedChange
+from languagechange.models.change.metrics import GradedChange, APD, PRT, PJSD
+from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, CD, SemEval2020Task1, DWUG
 from pydantic import BaseModel, Field
 from typing import List, Set, Union
@@ -195,7 +196,7 @@ class WSIPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False, save = False, json_path = None, latex_path = None, decimals = None):
+    def evaluate(self, return_labels = False, average = True, save = False, json_path = None, latex_path = None, decimals = None):
         """
             Evaluate on the WSI task. Returns the ARI and purity scores and optionally the clustering labels.
         """
@@ -224,9 +225,7 @@ class WSIPipeline(Pipeline):
         clustering_results = self.clustering.get_cluster_results(encoded_usages)
 
         # Compute ARI and purity scores
-        scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition)
-
-        scores = {metric: np.mean(list(score.values())) for metric, score in scores.items()}
+        scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition, average=average)
 
         if save:
             if json_path == None and latex_path == None:
@@ -243,8 +242,8 @@ class WSIPipeline(Pipeline):
                     d = dataset_info
                     for param in parameters:
                         if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                            d[getattr(self.dataset, param)] = {}
-                            d = d[getattr(self.dataset, param)]
+                            d[str(getattr(self.dataset, param))] = {}
+                            d = d[str(getattr(self.dataset, param))]
                     for metric, score in scores.items():
                         d[metric] = {model_name: score}
                     self.save_evaluation_results({'WSI': dataset_info}, json_path, latex_path, decimals)
@@ -381,8 +380,8 @@ class WiCPipeline(Pipeline):
                     d = dataset_info
                     for param in parameters:
                         if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                            d[getattr(self.dataset, param)] = {}
-                            d = d[getattr(self.dataset, param)]
+                            d[str(getattr(self.dataset, param))] = {}
+                            d = d[str(getattr(self.dataset, param))]
                     for metric, score in scores.items():
                         d[metric] = {model_name: score}
                     scores_dict = {f'{task.title()} WiC': dataset_info}
@@ -398,6 +397,7 @@ class GCDPipeline(Pipeline):
     def __init__(self, dataset : Union[DWUG, List[Set[TargetUsage]]],
                  usage_encoding,
                  metric : GradedChange,
+                 clustering = None,
                  scores : List = None,
                  dataset_name : str = None):
         super().__init__()
@@ -407,11 +407,9 @@ class GCDPipeline(Pipeline):
             self.dataset = CD(name=dataset_name)
             self.dataset.load_from_target_usages(dataset, scores)
 
-        if len(self.dataset) == 0:
-            logging.error('Dataset used for evaluating does not contain any examples.')
-            raise Exception
         self.usage_encoding = usage_encoding
         self.metric = metric
+        self.clustering = clustering
 
     def evaluate(self, save = False, json_path = None, latex_path = None, decimals = None):
         """
@@ -423,19 +421,23 @@ class GCDPipeline(Pipeline):
             return None # Is this possible?
         
         elif isinstance(self.usage_encoding, DefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
-            if isinstance(self.dataset, SemEval2020Task1):
+            if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
                 target_usages_t1_all_words = self.dataset.corpus1_lemma.search([target.target for target in self.dataset.graded_task.keys()])
                 target_usages_t2_all_words = self.dataset.corpus2_lemma.search([target.target for target in self.dataset.graded_task.keys()])
 
-            for target in self.dataset.graded_task.keys():
-                word = target.target
+            for word in self.dataset.target_words:
 
-                if isinstance(self.dataset, DWUG):
+                if isinstance(self.dataset, DWUG) or (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"}):
                     target_usages = self.dataset.get_word_usages(word)
-                    target_usages_t1 = [u for u in target_usages if u.grouping == "1" ]
-                    target_usages_t2 = [u for u in target_usages if u.grouping == "2" ]
+                    groupings = set(u.grouping for u in target_usages)
+                    try:
+                        sorted_groupings = sorted(list(groupings), key = lambda x: int(x.split('-')[0]))
+                    except:
+                        sorted_groupings = sorted(list(groupings))
+                    target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0] ]
+                    target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1] ]
 
-                elif isinstance(self.dataset, SemEval2020Task1):
+                elif isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
                     target_usages_t1 = target_usages_t1_all_words[word]
                     target_usages_t2 = target_usages_t2_all_words[word]
 
@@ -452,8 +454,15 @@ class GCDPipeline(Pipeline):
                     encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2)
 
                 # Measure the change using the metric
-                change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
-
+                if type(self.metric) == PJSD and self.clustering != None:
+                    change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering)
+                elif type(self.metric) == WiDiD:
+                    if self.clustering != None:
+                        self.metric == WiDiD(algorithm=self.clustering)
+                    _, _, timeseries = self.metric.compute_scores([encoded_usages_t1, encoded_usages_t2])
+                    change = timeseries.series[0]
+                else:
+                    change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
                 change_scores[word] = change
 
         else:
@@ -473,13 +482,13 @@ class GCDPipeline(Pipeline):
                     self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset'):
-                    parameters = ['dataset', 'language', 'version']
+                    parameters = ['dataset', 'language', 'version', 'subset']
                     dataset_info = {}
                     d = dataset_info
                     for param in parameters:
                         if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                            d[getattr(self.dataset, param)] = {}
-                            d = d[getattr(self.dataset, param)]
+                            d[str(getattr(self.dataset, param))] = {}
+                            d = d[str(getattr(self.dataset, param))]
                     for metric, score in scores.items():
                         d[metric] = {model_name: score}
                     scores_dict = {'GCD': dataset_info}
