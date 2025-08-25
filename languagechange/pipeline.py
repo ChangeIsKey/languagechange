@@ -52,7 +52,7 @@ class Pipeline:
             self.generate_latex_table(results, latex_path, decimals)
             
 
-    def generate_latex_table(self, data, save_path, decimals=None):
+    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0):
         """
             Generates a table of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
         """
@@ -152,6 +152,7 @@ class Pipeline:
             """
 
         table_rows, scores, models = get_table_rows(data, column_widths)
+        table_rows = table_rows[remove_headers:]
 
         # If decimals is provided, round each score to the amount of decimals set
         if decimals != None and type(decimals) == int:
@@ -159,14 +160,15 @@ class Pipeline:
                 for model, score in model_scores.items():
                     try:
                         model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
-                    except:
+                    except ValueError:
                         continue
 
         scores_per_model = {model: [s.get(model, '--') for s in scores] for model in models}
 
         scores_string = "\\\\".join("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores) for model, scores in scores_per_model.items())
 
-        table_string = table_beginning + ("\\\\\\cline{2-"+str(tree[0]+1)+"}\n").join("\t&" + "\t&".join(row) for row in table_rows) + "\\\\\\hline\n" + scores_string + "\\\\\n" + table_end
+        header_string = ("\\\\\\cline{2-"+str(tree[0]+1)+"}\n").join("\t&" + "\t&".join(row) for row in table_rows)
+        table_string = table_beginning + header_string + ("\\\\\\hline\n" if header_string != "" else "\\hline\n") + scores_string + "\\\\\n" + table_end
 
         table_string = re.sub("_", "\_", table_string)
 
@@ -394,9 +396,19 @@ class WiCPipeline(Pipeline):
 
 
 class GCDPipeline(Pipeline):
+    """
+    A pipeline for evaluating the Graded Change Detection (GCD) task.
+    Parameters:
+        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of sets of TargetUsage instances, describing .
+        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or PromptModel.
+        metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a GradedChange (including APD, PRT or PJSD) or WiDiD instance.
+        clustering: the clustering algorithm used in the case of PJSD or WiDiD. Needs to be provided for PJSD, defaults to APosterioriaffinityPropagation for WiDiD.
+        scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
+        dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
+    """
     def __init__(self, dataset : Union[DWUG, List[Set[TargetUsage]]],
                  usage_encoding,
-                 metric : GradedChange,
+                 metric : Union[GradedChange, WiDiD],
                  clustering = None,
                  scores : List = None,
                  dataset_name : str = None):
@@ -414,6 +426,13 @@ class GCDPipeline(Pipeline):
     def evaluate(self, save = False, json_path = None, latex_path = None, decimals = None):
         """
             Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
+            Args:
+                save (bool): Whether to save the results to json or LaTeX.
+                json_path (str): The path to save the results in JSON format. If None, the results are not saved.
+                latex_path (str): The path to save the results in LaTeX format. If None, no LaTeX table is generated.
+                decimals (int): The number of decimals to round the scores to in the LaTeX table.
+            Returns:
+                scores (dict): A dictionary containing the Spearman correlation score (rho).
         """
         change_scores = {}
 
@@ -432,7 +451,7 @@ class GCDPipeline(Pipeline):
                     groupings = set(u.grouping for u in target_usages)
                     try:
                         sorted_groupings = sorted(list(groupings), key = lambda x: int(x.split('-')[0]))
-                    except:
+                    except ValueError:
                         sorted_groupings = sorted(list(groupings))
                     target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0] ]
                     target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1] ]
