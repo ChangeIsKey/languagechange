@@ -1068,8 +1068,7 @@ class WiC(Benchmark):
         """
             Evaluates predictions by comparing them to the true labels of the dataset.
             Args:
-                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict and the
-                dataset to compare against.
+                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict and the dataset to compare against.
                 dataset (str) : one of ['train','dev','test','dev_larger',...]
                 metric (Callable) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions.
         """
@@ -1132,7 +1131,7 @@ class WSD(Benchmark):
             self.name = name
 
         # Loads from the resource hub or a local path containing the necessary files
-        if dataset != None and language != None and version != None:
+        if wsd_data == None and dataset != None and language != None and version != None:
             # Let the resource manager find the path
             if path == None:
                 lc = LanguageChange()
@@ -1306,8 +1305,7 @@ class WSD(Benchmark):
         """
             Evaluates predictions by comparing them to the true labels of the dataset.
             Args:
-                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict and the
-                dataset to compare against.
+                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict and the dataset to compare against.
                 dataset (str) : one of ['train','dev','test','dev_larger',...]
                 metric (Union[Callable, str]) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions. Either a function or a string to which there is a function associated.
         """

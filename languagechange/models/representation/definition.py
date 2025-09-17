@@ -17,7 +17,7 @@ from os import path
 import pandas as pd
 import torch
 import tqdm
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from sentence_transformers import SentenceTransformer
 import getpass
 
@@ -38,7 +38,7 @@ class DefinitionGenerator:
             self.embedding_model = None
 
     def encode_definitions(self, definitions, encode = 'both'):
-        if self.embedding_model != None:
+        if self.embedding_model != None and (encode == 'both' or encode == 'vectors'):
             vectors = self.embedding_model.encode(definitions)
         else:
             return definitions
@@ -70,7 +70,7 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
     """
     def __init__(self, model_name: str, ft_model_name: str, hf_token: str, 
                  max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
-                 temperature: float = 0.7, embedding_model: str = "all-mpnet-base-v2"):
+                 temperature: float = 0.00001, embedding_model: str = "all-mpnet-base-v2"):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
@@ -81,12 +81,12 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             max_length (int): Maximum token length for prompt (default is 512).
             batch_size (int): Number of examples to process in one go (default is 32).
             max_time (float): Maximum time in seconds per batch (default is 4.5).
-            temperature (float): Generation temperature (default is 0.7).
+            temperature (float): Generation temperature (default is 0.00001).
         """
         super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
         self.ft_model_name = ft_model_name
-        self.name = "ChatModelDefinitionGenerator_" + self.model_name + "_" + self.ft_model_name
+        self.name = "LlamaDefinitionGenerator_" + self.model_name + "_" + self.ft_model_name
         self.hf_token = hf_token
         self.max_length = max_length
         self.batch_size = batch_size
@@ -95,16 +95,6 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
 
         # Log in to Hugging Face with token
         login(self.hf_token)
-
-        # Load the base model with explicit settings
-        chat_model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            device_map="auto",
-            torch_dtype=torch.float16,  # Use FP16 for memory efficiency
-            low_cpu_mem_usage=True
-        )
-        self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
-        self.model.eval()
 
         # Set up the tokenizer with Llama-specific settings
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -115,31 +105,48 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         )
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Define tokens that signal the end of a definition
         self.eos_tokens = [self.tokenizer.encode(token, add_special_tokens=False)[0] 
-                           for token in [';', ' ;', '.', ' .']]
+                        for token in [';', ' ;', '.', ' .']]
         self.eos_tokens.append(self.tokenizer.eos_token_id)
+        
+        if "Llama-2" in self.model_name:
+            # Load the base model with explicit settings
+            chat_model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                device_map="auto",
+                torch_dtype=torch.float16,  # Use FP16 for memory efficiency
+                low_cpu_mem_usage=True
+            )
+            self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
+            self.model.eval()
 
-    def _apply_chat_template(self, dialog: Dialog, add_generation_prompt: bool = False) -> str:
-        """
-        Constructs a prompt string from a dialog list.
+        elif "Llama-3" in self.model_name:
+            self.model = pipeline("text-generation", model=self.ft_model_name, tokenizer=self.tokenizer, device_map="auto")
 
-        Args:
-            dialog (Dialog): A list of messages (each a dict with keys 'role' and 'content').
-            add_generation_prompt (bool): Whether to append a generation prompt at the end.
-
-        Returns:
-            str: The constructed prompt string.
-        """
-        prompt = ""
-        for msg in dialog:
-            if msg["role"] == "system":
-                prompt += f"[SYS] {msg['content']}\n"
-            elif msg["role"] == "user":
-                prompt += f"[USR] {msg['content']}\n"
-        if add_generation_prompt:
-            prompt += "[ASSISTANT]: "
-        return prompt
+    # apply template
+    def apply_chat_template(self, dataset, system_message, template):
+        def apply_chat_template_func(record):
+            dialog: Dialog = (Message(role='system', content=system_message),
+                            Message(role='user', content=template.format(record['target'], record['example'])))
+            prompt = self.tokenizer.decode(self.tokenizer.apply_chat_template(dialog, add_generation_prompt=True))
+            return {'text': prompt}
+        
+        return dataset.map(apply_chat_template_func)
+    
+    def tokenize(self, dataset):
+        def formatting_func(record):
+            return record['text']
+        
+        def tokenization(dataset):
+            result = self.tokenizer(formatting_func(dataset),
+                            truncation=True,
+                            max_length=self.max_length,
+                            padding="max_length",
+                            add_special_tokens=False)
+            return result
+        
+        tokenized_dataset = dataset.map(tokenization)
+        return tokenized_dataset
 
     def extract_definition(self, answer: str) -> str:
         """
@@ -186,62 +193,78 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         Returns:
             Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
         """
-        prompts = []
-        
-        # Create prompt for each target usage using the provided system_message and template
-        for usage in target_usages:
-            target = usage.text()[usage.offsets[0]:usage.offsets[1]]
-            example = usage.text()
-            user_message = template.format(target, example)
-            dialog: Dialog = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message}
-            ]
-            # Use our custom _apply_chat_template to construct the prompt string
-            prompt = self._apply_chat_template(dialog, add_generation_prompt=True)
-            prompts.append(prompt)
-        
-        # Tokenize all prompts
-        tokenized = self.tokenizer(
-            prompts,
-            truncation=True,
-            max_length=self.max_length,
-            padding="max_length",
-            add_special_tokens=False,
-            return_tensors="pt"
-        )
-        
+        if "Llama-2" in self.model_name:
+            examples = []
+            for usage in target_usages:
+                target = usage.text()[usage.offsets[0]:usage.offsets[1]]
+                example = usage.text()
+                examples.append({'target': target, 'example': example})
+
+            dataset = Dataset.from_list(examples)
+            dataset = self.apply_chat_template(dataset, system_message, template)
+            tokenized = self.tokenize(dataset)
+            device = next(self.model.parameters()).device
+
+        elif "Llama-3" in self.model_name:
+            tokenized = []
+            
+            # Create prompt for each target usage using the provided system_message and template
+            for usage in target_usages:
+                target = usage.text()[usage.offsets[0]:usage.offsets[1]]
+                example = usage.text()
+                user_message = template.format(target, example)
+                dialog: Dialog = [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message}
+                ]
+                # Construct the prompt string
+                prompt = self.model.tokenizer.apply_chat_template(dialog, tokenize=False, add_generation_prompt=True)
+                tokenized.append(prompt)
+
+            self.model.tokenizer.padding_side='left'
+            self.model.tokenizer.add_special_tokens = True
+            self.model.tokenizer.add_eos_token = True
+            self.model.tokenizer.add_bos_token = True
+                    
         definitions = []
-        device = next(self.model.parameters()).device
-        input_ids = tokenized["input_ids"].to(device)
-        attention_mask = tokenized["attention_mask"].to(device)
-        
-        total = input_ids.size(0)
-        for i in range(0, total, self.batch_size):
-            batch_input_ids = input_ids[i:i + self.batch_size]
-            batch_attention_mask = attention_mask[i:i + self.batch_size]
-            model_input = {
-                'input_ids': batch_input_ids,
-                'attention_mask': batch_attention_mask
-            }
+        total = len(tokenized)
+        for i in range(0, len(tokenized), self.batch_size):
+            batch = tokenized[i:i + self.batch_size]
+
+            if "Llama-2" in self.model_name:
+                model_input = dict()
+                for k in ['input_ids', 'attention_mask']:
+                    model_input[k] = torch.tensor(batch[k]).to(device)
             try:
-                output_ids = self.model.generate(
-                    **model_input,
-                    max_new_tokens=50,  # Generate up to 50 new tokens
-                    forced_eos_token_id=self.eos_tokens,  # Note: depends on model API compatibility
-                    max_time=self.max_time * self.batch_size,
-                    eos_token_id=self.eos_tokens,
-                    temperature=self.temperature,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-                answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-                definitions.extend([self.extract_definition(answer) for answer in answers])
+                if "Llama-2" in self.model_name:
+                    output_ids = self.model.generate(
+                        **model_input,
+                        max_new_tokens=self.max_length,  # Generate up to self.max_length new tokens
+                        forced_eos_token_id=self.eos_tokens,  # Note: depends on model API compatibility
+                        max_time=self.max_time * self.batch_size,
+                        eos_token_id=self.eos_tokens,
+                        temperature=self.temperature,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                    answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+                    definitions.extend([self.extract_definition(answer) for answer in answers])
+                elif "Llama-3" in self.model_name:
+                    answers = self.model(
+                        batch, 
+                        max_length = self.max_length, 
+                        forced_eos_token_id = self.eos_tokens,
+                        max_time = self.max_time * self.batch_size, 
+                        eos_token_id = self.eos_tokens, 
+                        temperature = self.temperature,
+                        pad_token_id = self.model.tokenizer.eos_token_id
+                    )
+                    definitions.extend([self.extract_definition(answer[0]['generated_text']) for answer in answers])
             except Exception as e:
                 warnings.warn(f"Failed generation for batch starting at index {i}: {e}")
                 logging.info(e)
-                batch_size = batch_input_ids.size(0)
+                batch_size = len(batch)
                 definitions.extend([''] * batch_size)
-        
+            
         if len(definitions) != total:
             raise ValueError(f"Generated definitions count ({len(definitions)}) doesn't match input count ({total}).")
         return self.encode_definitions(definitions, encode=encode_definitions)
@@ -274,8 +297,6 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         self.print_results(target_usages, definitions)
 
 
-
-
 # Data model representing the definition of a target word within an example sentence.
 class DefinitionOutput(BaseModel):
     """
@@ -289,6 +310,7 @@ class DefinitionOutput(BaseModel):
     target: str = Field(description="The target word")
     example: str = Field(description="The example sentence")
     definition: str = Field(description="The definition of the target word as used in the sentence")
+
 
 class ChatModelDefinitionGenerator(DefinitionGenerator):
     """
@@ -533,12 +555,16 @@ class T5DefinitionGenerator(DefinitionGenerator):
             definitions.extend(self.tokenizer.batch_decode(outputs, skip_special_tokens=True))
         return definitions
 
-    def encode_definitions(self, df, encode = 'both'):
-        if self.embedding_model != None:
-            vectors = self.embedding_model.encode(df["Generated_Definition"].tolist())
-        else:
-            return df
-        
+    def encode_definitions(self, df, encode = 'both', return_df = False):
+        if encode == 'both' or encode == 'vectors':
+            if self.embedding_model != None:
+                vectors = self.embedding_model.encode(df["Generated_Definition"].tolist())
+            else:
+                logging.error("No embedding model specified, could not encode definitions.")
+                raise AttributeError
+        if not return_df:
+            df = df["Generated_Definition"].tolist()
+            
         if encode == 'both':
             return df, vectors
         elif encode == 'vectors':
@@ -546,7 +572,7 @@ class T5DefinitionGenerator(DefinitionGenerator):
         else:
             return df
 
-    def generate_definitions(self, target_usage_list=None, df=None, prompt_index=8, encode_definitions : str = None):
+    def generate_definitions(self, target_usage_list=None, df=None, prompt_index=8, encode_definitions : str = None, return_df = False):
         """
         Generate definitions for words in the DataFrame.
 
@@ -581,7 +607,7 @@ class T5DefinitionGenerator(DefinitionGenerator):
                    for tgt, ctx in zip(df["Targets"], df[context_col])]
         df["Generated_Definition"] = self._generate_definitions(prompts, df["Targets"].tolist())
         df["Real_Contexts"] = prompts
-        return self.encode_definitions(df, encode=encode_definitions)
+        return self.encode_definitions(df, encode=encode_definitions, return_df=return_df)
 
     def save_definitions(self, df, output_file):
         """Save the DataFrame with definitions to a TSV file."""

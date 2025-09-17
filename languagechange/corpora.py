@@ -909,7 +909,7 @@ class HistoricalCorpus(SortedKeyList):
                         elif corpus_type == 'sprakbanken':
                             corpus = SprakBankenCorpus(os.path.join(corpora,file),time_function=time_function)
                         corpora_list.append(corpus)
-                    except:
+                    except: #TODO: proper exception
                         logging.error(f"Could not initialise a corpus from path {os.path.join(dir,file)}.")
                         continue
                 corpora = corpora_list
