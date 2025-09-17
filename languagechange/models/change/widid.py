@@ -23,7 +23,6 @@ class WiDiD:
                 timeseries_type (str): the type of timeseries (see usage in languagechange.models.change.timeseries).
                 k (int): the window size, if moving average (see usage in languagechange.models.change.timeseries).
                 change_metric (str): the change metric (e.g. 'apd') to use (see usage in languagechange.models.change.timeseries).
-                change_metric (str): the change metric (e.g. 'apd') to use (see usage in languagechange.models.change.timeseries).
                 time_labels (np.array|list): labels for the x axis of the timeseries (see usage in languagechange.models.change.timeseries).
 
             Returns:

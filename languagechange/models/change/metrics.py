@@ -96,21 +96,22 @@ class PJSD(GradedChange):
         clustering.get_cluster_results(np.concatenate((embeddings1,embeddings2),axis=0))
         labels1 = clustering.labels[:len(embeddings1)]
         labels2 = clustering.labels[len(embeddings1):]
-        labels = set(clustering.labels)
+        return self.compute_scores_from_labels(labels1, labels2)
+
+    def compute_scores_from_labels(self, labels1, labels2):
+        all_labels = np.concatenate((labels1, labels2),axis=0)
+        labels = set(all_labels)
         count1 = Counter(labels1)
         count2 = Counter(labels2)
         p,q = [], []
         for l in labels:
             if l in count1:
-                p.append(count1[l]/len(embeddings1))
+                p.append(count1[l]/len(all_labels))
             else:
                 p.append(0.)
             if l in count2:
-                q.append(count2[l]/len(embeddings2))
+                q.append(count2[l]/len(all_labels))
             else:
                 q.append(0.)
 
         return jensenshannon(p, q)
-
-
-
