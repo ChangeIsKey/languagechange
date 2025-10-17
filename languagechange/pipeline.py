@@ -15,6 +15,7 @@ import inspect
 import os
 from queue import Queue
 import re
+import math
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -43,6 +44,7 @@ class Pipeline:
                     results = deep_update(previous_results, results)
                     f.seek(0)
                     json.dump(results, f, indent=4)
+                    f.truncate()
                     logging.info(f'Evaluation results saved to {json_path}') 
             else:
                 with open(json_path, 'w') as f:
@@ -50,65 +52,51 @@ class Pipeline:
                     logging.info(f'Evaluation results saved to {json_path}')
         if latex_path != None:
             self.generate_latex_table(results, latex_path, decimals)
-            
-
-    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0):
+                
+    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0, split_col:int=None):
         """
-            Generates a table of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
+            Generates one or more tables of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
+            Args:
+                data (dict): the evaluation results, in a dictionary (similar to that produced by self.save_evaluation results).
+                save_path (str): where to save the .tex file.
+                decimals (int): the amount of decimals to round evaluation results to.
+                remove_headers (int): of >0, the first remove_headers rows of the table are removed.
+                split_col (int): if not None, split the table into smaller tables, each being split_col columns wide (excluding the model names to the very left)
         """
+        def get_column_widths(data):
+            """
+            Recursively computes the column widths per depth from a dict containing evaluation data.
+            Returns a list of queues containing the widths of each column in each row, as well as the total amount of columns.
+            """
+            columns = [Queue()]
 
-        # Calculates the maximum depth of a nested dictionary
-        def depth(d):
-            if isinstance(d, dict):
-                return 1 + max(depth(v) for v in d.values())
-            return 1
-        
-        # Counts the amount of leaves for each sub-dictionary of a nested dictionary
-        def count_leaves(data):
-            tree = [0, []]
-            # Find the amount of leaves in each subtree of d
-            for v in data.values():
-                # If we found the final {model: score} dict, return 1, as all models share 1 column in the table
-                if type(v) != dict:
+            def add_columns(d, depth=0):
+                while len(columns) <= depth + 1:
+                    columns.append(Queue())
+                # Base case: reached a leaf (model: score)
+                if not isinstance(d, dict) or not all(isinstance(v, dict) for v in d.values()):
+                    for q in columns[depth:]:
+                        q.put(1)
                     return 1
-                subtree = count_leaves(v)
-                tree[1].append(subtree)
-                # A subtree which is more than a leaf
-                if type(subtree) == list:
-                    tree[0] += subtree[0]
-                # A leaf
-                else:
-                    tree[0] += subtree
-            return tree
 
-        # Find the column width needed for each row in the table header, given previously calculated leaf counts
-        def get_column_widths(tree, max_depth):
+                # Recursive step: sum leaf counts of children
+                total = 0
+                for v in d.values():
+                    total += add_columns(v, depth + 1)
+                columns[depth].put(total)
+                return total
 
-            # Each row is initialized as an empty queue
-            columns = [Queue() for _ in range(max_depth)]
+            total_cols = add_columns(data)
+            # Skip the first row
+            return columns[1:], total_cols
 
-            # Recursively finds the width needed for all columns
-            def get_cols_rec(cols, tree, depth):
-                if type(tree) == list:
-                    # Add the value in the right row
-                    cols[depth].put(tree[0])
-                    for subtree in tree[1]:
-                        # Recursive call for all sub-columns
-                        get_cols_rec(cols, subtree, depth + 1)
-                else:
-                    for d in range(depth, max_depth):
-                        # Add 1s for the rest of the rows (for columns with shorter content than the maximum)
-                        cols[d].put(tree)
-
-            get_cols_rec(columns, tree, 0)
-
-            # We don't keep the first row
-            return columns[1:]
-
-        # Prints columns in LaTeX format, given the original data with column names
         def get_table_rows(data, column_widths):
+            """
+                Joins the content of each entry with the width of the cell in the table.
+                Merges empty cells together if they belong to the same supercolumn.
+                Gets all the models and their scores in the right order.
+            """
             table_rows = [[] for _ in range(len(column_widths) - 1)]
-
             scores = []
             models = set()
 
@@ -117,42 +105,142 @@ class Pipeline:
                     if type(v) == dict:
                         # Normal case
                         if sum(int(type(vv) == dict) for vv in v.values()) != 0:
-                            table_rows[depth].append("\\multicolumn{" + str(column_widths[depth].get()) + "}{|c|}{" + k + "}")
+                            w = column_widths[depth].get()
+                            table_rows[depth].append((k,w))
+                            # Recursive call to go further down the tree
                             get_rows_rec(v, column_widths, depth + 1)
                         # The case where we have reached the last row before the model and score, i.e. the row describing the metric.
                         else:
+                            w = column_widths[depth].get()
                             # Add the metric name to the last row
-                            table_rows[-1].append("\\multicolumn{" + str(column_widths[depth].get()) + "}{|c|}{" + k + "}")
+                            table_rows[-1].append((k,w))
+                            # Add the scores and models
                             scores.append(v.copy())
                             for model in v.keys():
                                 models.add(model)
                             for d in range(depth, len(table_rows) - 1):
-                                table_rows[d].append("") # Add empty space to accommodate for longer columns
+                                # Add empty space to accommodate for longer columns
+                                table_rows[d].extend([('',1)] * w)
+
+                # Merge empty cells together after each recursive call
+                for d in range(depth, len(table_rows) - 1):
+                    count = 0
+                    row = []
+                    for i, entry in enumerate(table_rows[d]):
+                        # If we find an empty cell, increase the empty count
+                        if entry == ('', 1):
+                            count += 1
+                            # If we reached the end of the row, add the empty space
+                            if i == len(table_rows[d]) - 1:
+                                row.append(('', count))
+                        else:
+                            # Add empty cells together
+                            if count > 0:
+                                row.append(('',count))
+                                count = 0
+                            # Add the current cell
+                            row.append(entry)
+                    # Update the row
+                    table_rows[d] = row
             
             get_rows_rec(data, column_widths, 0)
-
             return table_rows, scores, models
 
-        max_depth = depth(data)
-
-        tree = count_leaves(data)
-
-        column_widths = get_column_widths(tree, max_depth)
-
-        columns_str = "c|"+"|".join(["c"] * tree[0])+"|"
-
-        table_beginning = """\\begin{table}[h]
-            \\centering
-            \\begin{tabular}{"""+ columns_str +"}\\cline{2-"+str(tree[0]+1)+"}"
-            
-        table_end = """
-                \hline
-            \\end{tabular}
-        \\end{table}
+        def split_header_row(row, n_cols):
             """
+                Splits a row into multiple rows, each n_cols wide, and formats the content in LaTeX table style.
+            """
+            n_tables = math.ceil(sum([c[1] for c in row]) / n_cols)
+            split_rows = [[] for _ in range(n_tables)]
+            curr_w = 0
+            curr_split_row = 0
+            i = 0
+            while i < len(row):
+                s, w = row[i]
+                # If the whole multicolumn fits into the current table, add it.
+                if curr_w + w <= n_cols:
+                    split_rows[curr_split_row].append(row[i])
+                    i += 1
+                    curr_w += w
+                    if curr_w == n_cols:
+                        curr_w = 0
+                        curr_split_row += 1
+                # If the whole multicolumn does not fit into the current table, split it.
+                else:
+                    w_left = n_cols - curr_w
+                    split_rows[curr_split_row].append((s, w_left))
+                    # Modify the column to have less space left, to be re-used in the next table
+                    row[i] = (s, w - w_left)
+                    curr_w = 0
+                    # Move on to the next split row
+                    curr_split_row += 1
+            return split_rows
+        
+        def get_horizontal_lines(table_rows):
+            """
+                Draws horizontal lines between table rows where it fits.
+            """
+            line_strings = ["" for _ in range(len(table_rows))]
+            for i, r in enumerate(table_rows[:-2]):
+                index1 = 0
+                for s1, w1 in r:
+                    index2 = 0
+                    match = False
+                    for s2, w2 in table_rows[i+1]:
+                        # If the two rows have matching multicolumns and one of them is empty, don't draw a horizontal line between them
+                        if index2 == index1 and index2 + w2 == index1 + w1 and (s1 == '' or s2 == ''):
+                            match = True
+                        index2 += w2
+                    if not match:
+                        line_strings[i] += "\\cline{" + str(index1 + 2) + "-" + str(index1 + w1 + 1) + "}"
+                    index1 += w1
+            # Before the metrics, add a complete horizontal line
+            line_strings[-2] = "\\cline{2-" + str(sum(w for _, w in table_rows[0])+1) + "}"
+            return line_strings
+        
+        def render_header_row(row):
+            return "\t&" + "\t&".join(["\\multicolumn{"+ str(w) + "}{|c|}{" + s + "}" for (s, w) in row]) + "\\\\"
+        
+        # Puts together the different parts of a table
+        def create_table_string(table_rows, score_string):
+            total_width = sum(w for _, w in table_rows[0])
+            columns_str = "c|"+"|".join(["c"] * total_width)+"|"
 
-        table_rows, scores, models = get_table_rows(data, column_widths)
-        table_rows = table_rows[remove_headers:]
+            table_beginning = """
+\\begin{table}[h]
+    \\centering
+    \\begin{tabular}{"""+ columns_str +"}\\cline{2-"+str(total_width+1)+"}"
+                
+            table_end = """
+        \hline
+    \\end{tabular}
+\\end{table}
+                """
+            
+            line_strings = get_horizontal_lines(table_rows)
+            header_string = "\n".join(render_header_row(row) + line_strings[i] for i, row in enumerate(table_rows))
+            table_string = table_beginning + header_string + "\\hline\n" + score_string + "\\\\\n" + table_end
+            table_string = re.sub("_", "\_", table_string)
+
+            return table_string
+        
+        column_widths, total_cols = get_column_widths(data)
+    
+        # If we don't split the table, this is done by splitting the table into itself
+        if split_col is None or split_col > total_cols:
+            split_col = total_cols
+
+        table, scores, models = get_table_rows(data, column_widths)
+        table = table[remove_headers:]
+
+        split_tables = [[] for _ in range(math.ceil(total_cols / split_col))]
+        for i, row in enumerate(table):
+            split_rows = split_header_row(row, split_col)
+            for i, r in enumerate(split_rows):
+                # Only add the rows which are not empty after splitting
+                if not all(s == "" for s, _ in r):
+                    split_tables[i].append(r) 
+                    # Each item in split_tables represents one subtable once the original table has been split
 
         # If decimals is provided, round each score to the amount of decimals set
         if decimals != None and type(decimals) == int:
@@ -164,13 +252,12 @@ class Pipeline:
                         continue
 
         scores_per_model = {model: [s.get(model, '--') for s in scores] for model in models}
+        
+        score_strings = []
+        for i in range(0, total_cols, split_col):
+            score_strings.append("\\\\".join("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores[i:i+split_col]) for model, scores in scores_per_model.items()))
 
-        scores_string = "\\\\".join("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores) for model, scores in scores_per_model.items())
-
-        header_string = ("\\\\\\cline{2-"+str(tree[0]+1)+"}\n").join("\t&" + "\t&".join(row) for row in table_rows)
-        table_string = table_beginning + header_string + ("\\\\\\hline\n" if header_string != "" else "\\hline\n") + scores_string + "\\\\\n" + table_end
-
-        table_string = re.sub("_", "\_", table_string)
+        table_string = "\n".join(create_table_string(split_tables[i], score_strings[i]) for i in range(len(split_tables)))
 
         # Save the LaTeX string to a .tex file
         if save_path.endswith(".tex"):
