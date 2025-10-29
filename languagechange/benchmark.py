@@ -1,5 +1,8 @@
 from languagechange.resource_manager import LanguageChange
 from languagechange.corpora import LinebyLineCorpus
+from languagechange.models.representation.contextualized import ContextualizedModel
+from languagechange.models.representation.definition import DefinitionGenerator
+from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
 from languagechange.utils import NumericalTime, LiteralTime
 import webbrowser
@@ -12,10 +15,13 @@ import re
 import zipfile
 import random
 import numpy as np
+import math
+import csv
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
 from typing import List, Dict, Union, Callable, Tuple
+import inspect
 
 
 def purity(labels_true, cluster_labels):
@@ -69,8 +75,8 @@ class Benchmark():
             return self.data['all']
         else:
             all_data = []
-            for dataset in self.data.values():
-                all_data += dataset
+            for k in set(self.data.keys()).difference({'all'}):
+                all_data += self.data[k]
             return all_data
         
     def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True, epsilon = 1e-6):
@@ -78,9 +84,11 @@ class Benchmark():
             if s in self.data.keys():
                 logging.info(f'Dataset already contains a {s} set.')
         if not 'all' in self.data.keys():
-            self.data['all'] = []
-            for dataset in self.data.values():
-                self.data['all'].extend(dataset)
+            data = []
+            for k in set(self.data.keys()).difference({'all'}):
+                data.extend(self.data[k])
+        else:
+            data = self.data['all']
         
         try:
             assert abs(1 - (train_prop + dev_prop + test_prop)) < epsilon
@@ -89,16 +97,18 @@ class Benchmark():
             return None
 
         if shuffle:
-            data = random.sample(self.data['all'], len(self.data['all']))
-        else:
-            data = self.data['all']
+            data = random.sample(data, len(data))
             
         train_offset = int(len(data) * train_prop)
-        dev_offset = train_offset + int(len(data) * dev_prop)
+        dev_offset = int(len(data) * (train_prop + dev_prop))
 
         self.data['train'] = data[:train_offset]
         self.data['dev'] = data[train_offset:dev_offset]
         self.data['test'] = data[dev_offset:]
+
+        for s in {'train','dev','test'}:
+            if self.data[s] == []:
+                del self.data[s]
 
     def get_data_by_word(self, dataset, word):
         dataset = self.get_dataset(dataset)
@@ -113,7 +123,7 @@ class Benchmark():
         return start, end
 
 
-class CD(Benchmark):
+class SemanticChangeEvaluationDataset(Benchmark):
     def __init__(self, dataset = None, language = None, version = None, name = None):
         self.dataset = dataset
         self.language = language
@@ -183,9 +193,9 @@ class CD(Benchmark):
             return spearmanr(sorted_graded_scores, sorted_predictions)
 
 
-class SemEval2020Task1(CD):
+class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
-    def __init__(self, language, subset:int=None):
+    def __init__(self, language, subset:int=None, config='opt'):
         lc = LanguageChange()
         self.language = language
         if self.language == 'NO' or self.language == 'RU':
@@ -199,6 +209,7 @@ class SemEval2020Task1(CD):
         home_path = lc.get_resource('benchmarks', self.dataset, self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path,semeval_folder)
+        self.config = config
         self.load()
 
     def load(self):
@@ -213,7 +224,7 @@ class SemEval2020Task1(CD):
         self.target_words = set()
 
         if self.language == 'NO':
-            with open(os.path.join(self.home_path, f'subset{self.subset}', 'stats/stats_groupings.tsv')) as f:
+            with open(os.path.join(self.home_path, f'subset{self.subset}/stats/{self.config}/stats_groupings.tsv')) as f:
                 for line in islice(f, 1, None):
                     line = line.strip('\n').split('\t')
                     word, binary, graded = line[0], line[11], line[14]
@@ -252,7 +263,7 @@ class SemEval2020Task1(CD):
         group = str(group)
         usages = TargetUsageList()
         if self.dataset == 'NorDiaChange':
-            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,'uses.csv')) as f:
+            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,'uses.tsv')) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -289,14 +300,14 @@ class SemEval2020Task1(CD):
         return usages   
 
 
-class DWUG(CD):
+class DWUG(SemanticChangeEvaluationDataset):
 
     def __init__(self, path=None, dataset=None, language=None, version=None, config='opt'):
         lc = LanguageChange()
-        if not dataset == None and not language == None and not version == None:
-            self.dataset = dataset
-            self.language = language
-            self.version = version
+        self.dataset = dataset
+        self.language = language
+        self.version = version
+        if path == None and not dataset == None and not language == None and not version == None:
             home_path = lc.get_resource('benchmarks', self.dataset, self.language, version)
             dwug_folder = os.listdir(home_path)[0]
             self.home_path = os.path.join(home_path,dwug_folder)
@@ -304,7 +315,7 @@ class DWUG(CD):
             if not path == None and os.path.exists(path):
                 self.home_path = path
             else:
-                raise Exception('The path is None or does not exists.')   
+                raise Exception('The path is None or does not exist.')   
         self.config = config    
         self.load()
 
@@ -318,7 +329,7 @@ class DWUG(CD):
             stats_path = os.path.join(self.home_path,'stats',self.config)
         elif os.path.exists(os.path.join(self.home_path,'stats','opt')):
             stats_path = os.path.join(self.home_path,'stats','opt')
-        else:
+        elif os.path.exists(os.path.join(self.home_path,'stats')):
             stats_path = os.path.join(self.home_path,'stats')
 
         if os.path.exists(os.path.join(stats_path,'stats_groupings.csv')):
@@ -332,20 +343,21 @@ class DWUG(CD):
                         self.stats_groupings[values[0]] = D
                     else:
                         keys = line
-        try:
-            with open(os.path.join(stats_path,'stats.csv')) as f:
-                keys = []
-                for j,line in enumerate(f):
-                    line = line.replace('\n','').split('\t')
-                    if j > 0:
-                        values = line
-                        D = {keys[j]:values[j] for j in range(1,len(values))}
-                        self.stats[values[0]] = D
-                    else:
-                        keys = line
-        except FileNotFoundError as e:
-            logging.error("Could not find a path to stats.csv. Did you enter the right config value?")
-            raise e
+        
+        if stats_path is not None:
+            try:
+                with open(os.path.join(stats_path,'stats.csv')) as f:
+                    keys = []
+                    for j,line in enumerate(f):
+                        line = line.replace('\n','').split('\t')
+                        if j > 0:
+                            values = line
+                            D = {keys[j]:values[j] for j in range(1,len(values))}
+                            self.stats[values[0]] = D
+                        else:
+                            keys = line
+            except FileNotFoundError as e:
+                logging.info("Could not find a path to stats.csv. Did you enter the right config value?")
 
         self.binary_task = {}
         self.graded_task = {}
@@ -423,25 +435,234 @@ class DWUG(CD):
                     keys = line
         return usages
 
-    def get_word_annotations(self, word):
-        usages = TargetUsageList()
-        with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
-            keys = []
-            for j,line in enumerate(f):
-                line = line.replace('\n','').split('\t')
-                if j > 0:
-                    values = line
-                    D = {keys[j]:values[j] for j in range(len(values))}
-                    D['text'] = D['context']
-                    D['target'] = Target(D['lemma'])
-                    D['target'].set_lemma(D['lemma'])
-                    D['target'].set_pos(D['pos'])
-                    D['offsets'] = [int(i) for i in D['indexes_target_token'].split(':')]
-                    D['time'] = LiteralTime(D['date'])
-                    usages.append(DWUGUsage(**D))
+    def annotate_word(self, word, model, metric : str | Callable, prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}'):
+        """
+            Compares all usages of the target word in question and uses a model to compute judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
+            Args:
+                word (str): the target word to annotate.
+                model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to use to annotate the usages.
+                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two vectors. Supported string values are 'cosine', 'durel' and 'binary'. Alternatively, a function taking two vectors as input and returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
+                prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
+        """
+        usages = self.get_word_usages(word)
+        similarity_scores = {}
+
+        if isinstance(model, ContextualizedModel) or isinstance(model, DefinitionGenerator):
+            if isinstance(model, ContextualizedModel):
+                embeddings = model.encode(usages)
+            elif isinstance(model, DefinitionGenerator):
+                embeddings = model.generate_definitions(usages, encode_definitions = 'vectors')
+            
+            if type(metric) == str:
+                if metric.lower() == 'cosine':
+                    similarity_func = lambda e1, e2 : np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
+                elif metric.lower() == 'durel':
+                    similarity_func = lambda e1, e2 : math.ceil(4 * (np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))))
+                elif metric.lower() == 'binary':
+                    similarity_func = lambda e1, e2 : int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
                 else:
-                    keys = line
-        return usages
+                    logging.error(f"Metric '{metric}' not recognized. Supported metrics are 'cosine', 'durel' and 'binary'.")
+                    raise ValueError
+            elif callable(metric):
+                signature = inspect.signature(similarity_func)
+                n_req_args = sum([int(p.default == p.empty) for p in signature.parameters.values()])
+                if n_req_args != 2:
+                    logging.error(f"'label_func' must take 2 arguments but takes {n_req_args}.")
+                    return None
+                similarity_func = metric
+
+            for i, emb1 in enumerate(embeddings):
+                id1 = usages[i].identifier
+                #print(f"Usage {i} with id {id1}. Emb {emb1[:10]}...")
+                for j, emb2 in enumerate(embeddings[i+1:]):
+                    #print(f"Compared to Usage {i+j+1} with id {usages[i+j+1].identifier}. Emb {emb2[:10]}...")
+                    similarity = similarity_func(emb1, emb2)
+                    id2 = usages[i + j + 1].identifier
+                    similarity_scores[frozenset([id1, id2])] = similarity
+
+        elif isinstance(model, PromptModel):
+            for i, usage1 in enumerate(usages):
+                id1 = usage1.identifier
+                for j, usage2 in enumerate(usages[i+1:]):
+                    id2 = usage2.identifier
+                    similarity = model.get_response([usage1, usage2], user_prompt_template = prompt_template)
+                    similarity_scores[frozenset([id1, id2])] = similarity
+
+        with open(os.path.join(self.home_path,'data',word,'judgments.csv'), 'w', newline='') as f:
+            writer = csv.writer(f, delimiter='\t')
+            writer.writerow(['identifier1', 'identifier2', 'annotator', 'judgment', 'lemma'])
+            for ids, similarity in similarity_scores.items():
+                ids = list(ids)
+                id1, id2 = ids[0], ids[1]
+                writer.writerow([id1, id2, type(model).__name__, similarity, word])
+            logging.info(f"Usages for {word} annotated by {type(model).__name__}.")
+
+    def annotate_all_words(self, model, metric : str | Callable = None):
+        """
+            Annotates all target words in the dataset using the given model and metric (if applicable), and saves the judgments to data/word/judgments.csv.
+        """
+        for word in self.target_words:
+            self.annotate_word(word, model, metric)
+
+    def _get_outliers(self, word):
+        """
+            Finds all usages of a given word which have been marked as outliers in the clustering step (cluster label = -1).
+            Args:
+                word (str): the target word to find outliers for.
+            Returns:
+                (set) a set of identifiers of usages which are outliers.
+        """
+        outliers = set()
+
+        try:
+            if self.dataset == "DWUG Sense":
+                with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')) as f:
+                    for line in islice(f, 1, None):
+                        line = line.replace('\n','').split('\t')
+                        id, label = line
+                        try:
+                            if int(label) == -1:
+                                outliers.add(id)
+                        except ValueError:
+                            continue
+            else:
+                with open(os.path.join(self.home_path,f'clusters/{self.config}',f'{word}.csv')) as f:
+                    for line in islice(f, 1, None):
+                        line = line.replace('\n','').split('\t')
+                        id, label = line
+                        if int(label) == -1:
+                            outliers.add(id)
+        except Exception as e:
+            logging.error(f"Could not remove outlier usages of '{word}' due to the following error: {e}")
+            raise e
+        
+        return outliers
+
+    def get_word_annotations(self, word, only_between_groups = False, remove_outliers = False, exclude_non_judgments = False, transform_labels : Callable | str = None, return_list = False):
+        """
+            Finds the judgments for a given word in the DWUG.
+            Args:
+                only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
+                remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
+                exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
+                transform_labels (Callable): a function which takes a list of labels and returns a label. By default, all labels are kept. As a string, only 'mean' is supported.
+                return_list (bool): if true, return the judgments as a list.
+            Returns:
+                (Dict[frozenset, Dict] or List[Dict]) a dictionary {frozenset([id1, id2]) : {'word': word, 'id1': id1, 'text1': text1, 'start1': start1, 'end1': end1, 'id2': id2, 'text2': text2, 'start2': start2, 'end2': end2, 'label': label}} or a list of such dictionaries if return_list is true.
+        """
+        
+        judgments = {}
+
+        if remove_outliers:
+            excluded_instances = self._get_outliers(word)
+        else:
+            excluded_instances = set()
+
+        usages_by_key = {}
+        try:
+            with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+                for line in islice(f, 0, 1):
+                    columns = line.replace('\n','').split('\t')
+                    column_ids = {c : i for i,c in enumerate(columns)}
+
+                if 'context_tokenized' in column_ids and 'indexes_target_token_tokenized' in column_ids:
+                    for line in f:
+                        line = line.replace('\n','').split('\t')
+                        id = line[column_ids['identifier']]
+                        if not id in excluded_instances:
+                            lemma = line[column_ids['lemma']]
+                            grouping = line[column_ids['grouping']]
+                            context = line[column_ids['context_tokenized']]
+                            word_index = int(line[column_ids['indexes_target_token_tokenized']])
+                            start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
+                            usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
+                else:
+                    for line in f:
+                        line = line.replace('\n','').split('\t')
+                        id = line[column_ids['identifier']]
+                        if not id in excluded_instances:
+                            lemma = line[column_ids['lemma']]
+                            grouping = line[column_ids['grouping']]
+                            context = line[column_ids['context']]
+                            start, end = line[column_ids['indexes_target_token']].split(":")
+                            start, end = int(start), int(end)
+                            usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
+        except Exception as e:
+            logging.error(f"Could not load usage data for '{word}' due to the following error: {e}")
+            raise e
+
+        temp_labels = {}
+        try:
+            if self.dataset == "DWUG Sense":
+                with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_proximity.csv')) as f:
+                    for line in islice(f, 0, 1):
+                        columns = line.replace('\n','').split('\t')
+                        column_ids = {c : i for i,c in enumerate(columns)}
+                    for line in f:
+                        line = line.replace('\n','').split('\t')
+                        id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
+                        if id1 != id2:
+                            label = float(line[column_ids['label']])
+                            if not id1 in excluded_instances and not id2 in excluded_instances:
+                                if not frozenset([id1,id2]) in temp_labels:
+                                    temp_labels[frozenset([id1,id2])] = []
+                                temp_labels[frozenset([id1,id2])].append(label)
+            else:
+                with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
+                    for line in islice(f, 0, 1):
+                        columns = line.replace('\n','').split('\t')
+                        column_ids = {c : i for i,c in enumerate(columns)}
+                    for line in f:
+                        line = line.replace('\n','').split('\t')
+                        id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
+                        if id1 != id2:
+                            label = float(line[column_ids['judgment']])
+                            if not (label == 0 and exclude_non_judgments) and not id1 in excluded_instances and not id2 in excluded_instances:
+                                if not frozenset([id1,id2]) in temp_labels:
+                                    temp_labels[frozenset([id1,id2])] = []
+                                temp_labels[frozenset([id1,id2])].append(label)
+        except Exception as e:
+            logging.error(f"Could not load judgment data for '{word}' due to the following error: {e}")
+            raise e
+
+        try:
+            for key in temp_labels:
+                ordered_ids = list(key)
+                id1, id2 = ordered_ids[0], ordered_ids[1]
+                usage1, usage2 = usages_by_key[id1], usages_by_key[id2]
+                word = usage1['word']
+                assert word == usage2['word']
+                if only_between_groups and usage1['grouping'] == usage2['grouping']:
+                    continue
+                if transform_labels is None:
+                    label = temp_labels[key]
+                elif callable(transform_labels):
+                    try:
+                        label = transform_labels(temp_labels[key])
+                    except:
+                        logging.error(f'{transform_labels} could not be used as a function to transform labels.')
+                        raise ValueError
+                elif type(transform_labels) == str:
+                    try:
+                        transform_funcs = {
+                            'mean' : lambda l : np.mean(l)
+                        }
+                        label = transform_funcs[transform_labels](temp_labels[key])
+                    except KeyError:
+                        logging.error(f"{transform_labels} does not denote a function used to transform the list of labels into one label. Currently only 'mean' is supported.")
+                        raise KeyError
+                    
+                judgments[frozenset([id1, id2])] = {'word': word, 
+                            'id1': id1, 'text1': usage1['text'], 'start1': usage1['start'], 'end1': usage1['end'],
+                            'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
+                            'label': label}
+        except Exception as e:
+            logging.error(f"Could not combine usage and judgment data for '{word}' due to the following error: {e}")
+            raise e
+        
+        if return_list:
+            return judgments.values()
+        return judgments
 
     def get_stats(self):
         return self.stats
@@ -449,7 +670,7 @@ class DWUG(CD):
     def get_stats_groupings(self):
         return self.stats_groupings
     
-    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels : Callable = None):
+    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels : Callable | str = 'mean'):
         """
             Casts the DWUG to a Word in Context (WiC) dataset.
 
@@ -457,129 +678,14 @@ class DWUG(CD):
                 only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
                 remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
                 exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
-                transform_labels (Callable): a function which takes a list of labels and returns a label, by default the mean of the labels.
+                transform_labels (Callable|str): a function or a string denoting a function (see self.get_word_annotation) which takes a list of labels and returns a label, by default the mean of the labels.
         """
         data = []
         for word in self.target_words:
-            excluded_instances = set()
+            judgments = self.get_word_annotations(word, only_between_groups=only_between_groups, remove_outliers=remove_outliers, exclude_non_judgments=exclude_non_judgments, transform_labels=transform_labels)
+            data.extend(judgments.values())
 
-            if remove_outliers:
-                try:
-                    if self.dataset == "DWUG Sense":
-                        with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')) as f:
-                            for line in islice(f, 1, None):
-                                line = line.replace('\n','').split('\t')
-                                id, label = line
-                                try:
-                                    if int(label) == -1:
-                                        excluded_instances.add(id)
-                                except ValueError:
-                                    continue
-                    else:
-                        with open(os.path.join(self.home_path,f'clusters/{self.config}',f'{word}.csv')) as f:
-                            for line in islice(f, 1, None):
-                                line = line.replace('\n','').split('\t')
-                                id, label = line
-                                if int(label) == -1:
-                                    excluded_instances.add(id)
-                except Exception as e:
-                    logging.error(f"Could not remove outlier usages of '{word}' due to the following error: {e}")
-                    raise e
-
-            usages_by_key = {}
-            try:
-                with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
-                    for line in islice(f, 0, 1):
-                        columns = line.replace('\n','').split('\t')
-                        column_ids = {c : i for i,c in enumerate(columns)}
-
-                    if 'context_tokenized' in column_ids and 'indexes_target_token_tokenized' in column_ids:
-                        for line in f:
-                            line = line.replace('\n','').split('\t')
-                            id = line[column_ids['identifier']]
-                            if not id in excluded_instances:
-                                lemma = line[column_ids['lemma']]
-                                grouping = line[column_ids['grouping']]
-                                context = line[column_ids['context_tokenized']]
-                                word_index = int(line[column_ids['indexes_target_token_tokenized']])
-                                start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
-                                usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
-                    else:
-                        for line in f:
-                            line = line.replace('\n','').split('\t')
-                            id = line[column_ids['identifier']]
-                            if not id in excluded_instances:
-                                lemma = line[column_ids['lemma']]
-                                grouping = line[column_ids['grouping']]
-                                context = line[column_ids['context']]
-                                start, end = line[column_ids['indexes_target_token']].split(":")
-                                start, end = int(start), int(end)
-                                usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
-            except Exception as e:
-                logging.error(f"Could not load usage data for '{word}' due to the following error: {e}")
-                raise e
-                        
-
-            temp_labels = {}
-            try:
-                if self.dataset == "DWUG Sense":
-                    with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_proximity.csv')) as f:
-                        for line in islice(f, 0, 1):
-                            columns = line.replace('\n','').split('\t')
-                            column_ids = {c : i for i,c in enumerate(columns)}
-                        for line in f:
-                            line = line.replace('\n','').split('\t')
-                            id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
-                            if id1 != id2:
-                                label = float(line[column_ids['label']])
-                                if not id1 in excluded_instances and not id2 in excluded_instances:
-                                    if not frozenset([id1,id2]) in temp_labels:
-                                        temp_labels[frozenset([id1,id2])] = []
-                                    temp_labels[frozenset([id1,id2])].append(label)
-                else:
-                    with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
-                        for line in islice(f, 0, 1):
-                            columns = line.replace('\n','').split('\t')
-                            column_ids = {c : i for i,c in enumerate(columns)}
-                        for line in f:
-                            line = line.replace('\n','').split('\t')
-                            id1, id2 = line[column_ids['identifier1']], line[column_ids['identifier2']]
-                            if id1 != id2:
-                                label = float(line[column_ids['judgment']])
-                                if not (label == 0 and exclude_non_judgments) and not id1 in excluded_instances and not id2 in excluded_instances:
-                                    if not frozenset([id1,id2]) in temp_labels:
-                                        temp_labels[frozenset([id1,id2])] = []
-                                    temp_labels[frozenset([id1,id2])].append(label)
-            except Exception as e:
-                logging.error(f"Could not load judgment data for '{word}' due to the following error: {e}")
-                raise e
-
-            try:
-                for key in temp_labels:
-                    ordered_ids = list(key)
-                    id1, id2 = ordered_ids[0], ordered_ids[1]
-                    usage1, usage2 = usages_by_key[id1], usages_by_key[id2]
-                    word = usage1['word']
-                    assert word == usage2['word']
-                    if only_between_groups and usage1['grouping'] == usage2['grouping']:
-                        continue
-                    if transform_labels is not None:
-                        try:
-                            label = transform_labels(temp_labels[key])
-                        except:
-                            logging.error(f'{transform_labels} could not be used as a function to transform labels.')
-                            raise ValueError
-                    else:
-                        label = np.mean(temp_labels[key])
-                    data.append({'word': word, 
-                                'id1': id1, 'text1': usage1['text'], 'start1': usage1['start'], 'end1': usage1['end'],
-                                'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
-                                'label': label})
-            except Exception as e:
-                logging.error(f"Could not combine usage and judgment data for '{word}' due to the following error: {e}")
-                raise e
-
-        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC', language=self.language, version=self.version)
+        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC' if self.dataset is not None else None, language=self.language, version=self.version)
         return wic
     
     def get_usages_and_senses(self, remove_outliers = True):
@@ -641,17 +747,23 @@ class DWUG(CD):
                 logging.error(f"Could not load usages for '{word}' due to the following error: {e}")
                 raise e
             
+            for id, ex in usages_by_id.items():
+                for k in {'text','start','end','word','label'}:
+                    if not k in ex:
+                        logging.error(f"A value for {k} in missing in the example of id {id}. Make sure that {senses_path} and {os.path.join(self.home_path,'data',word,'uses.csv')} contain the same examples.")
+                        raise KeyError
+            
             data.extend(list(usages_by_id.values()))
         return data
         
     def cast_to_WSD(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsd = WSD(wsd_data=data, dataset=f'{self.dataset} WSD', language=self.language, version=self.version)
+        wsd = WSD(wsd_data=data, dataset=f'{self.dataset} WSD' if self.dataset is not None else None, language=self.language, version=self.version)
         return wsd
 
     def cast_to_WSI(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsi = WSI(wsi_data=data, dataset=f'{self.dataset} WSI', language=self.language, version=self.version)
+        wsi = WSI(wsi_data=data, dataset=f'{self.dataset} WSI' if self.dataset is not None else None, language=self.language, version=self.version)
         return wsi
     
     def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):
@@ -1370,6 +1482,9 @@ class WSI(Benchmark):
             self.name = name
         if wsi_data is not None:
             self.load_from_data(wsi_data)
+        else:
+            logging.error('No data was specified.')
+            raise ValueError
 
     # Loads from a list or dict containing a WSI dataset
     def load_from_data(self, data):
@@ -1377,6 +1492,9 @@ class WSI(Benchmark):
             self.data = {'all': data}
         elif type(data) == dict:
             self.data = data
+        else:
+            logging.error('Could not load the dataset as a WSI dataset.')
+            raise TypeError
 
         # Add the lemma in each data example to the set of target words
         for dataset in self.data.values():

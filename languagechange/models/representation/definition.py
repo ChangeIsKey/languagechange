@@ -68,9 +68,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         tokenizer: The tokenizer that prepares text for the model.
         eos_tokens: Tokens that signal the end of a definition.
     """
-    def __init__(self, model_name: str, ft_model_name: str, hf_token: str, 
+    def __init__(self, model_name: str, ft_model_name: str, hf_token: str, is_adapter = False,
                  max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
-                 temperature: float = 0.00001, embedding_model: str = "all-mpnet-base-v2"):
+                 temperature: float = 1, sampling=False, language=None, embedding_model: str = "all-mpnet-base-v2", torch_dtype = torch.float16, low_cpu_mem_usage = True):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
@@ -78,10 +78,15 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             model_name (str): The base model name from Hugging Face (e.g., "meta-llama/Llama-2-7b-chat-hf").
             ft_model_name (str): The fine-tuned model name (e.g., "FrancescoPeriti/Llama2Dictionary").
             hf_token (str): Hugging Face token to access models.
-            max_length (int): Maximum token length for prompt (default is 512).
+            max_length (int): Maximum token length for prompt and definitions (default is 512).
             batch_size (int): Number of examples to process in one go (default is 32).
-            max_time (float): Maximum time in seconds per batch (default is 4.5).
-            temperature (float): Generation temperature (default is 0.00001).
+            max_time (float): Maximum time in seconds per example (default is 4.5).
+            temperature (float): Generation temperature if sampling (default is 1).
+            sampling (bool): if True, do sampling when generating.
+            language (str): a two letter language code to use for the prompts. If None, the English prompt will be used.
+            embedding_model (str): the sentence embedding model to use, if encoding definitions.
+            torch_dtype: the torch float type, applicable for the pre-trained models.
+            low_cpu_mem_usage (bool): if True, set low_cpu_mem_usage=True for the pre-trained model.
         """
         super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
@@ -92,6 +97,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         self.batch_size = batch_size
         self.max_time = max_time
         self.temperature = temperature
+        self.sampling = sampling
+        self.is_adapter = is_adapter
+        self.language = language
 
         # Log in to Hugging Face with token
         login(self.hf_token)
@@ -104,27 +112,98 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             add_bos_token=True,
         )
         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        self.eos_tokens = [self.tokenizer.encode(token, add_special_tokens=False)[0] 
-                        for token in [';', ' ;', '.', ' .']]
-        self.eos_tokens.append(self.tokenizer.eos_token_id)
         
-        if "Llama-2" in self.model_name:
+        if "Llama-2" in self.model_name or ("Llama-3" in self.model_name and self.is_adapter):
             # Load the base model with explicit settings
             chat_model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 device_map="auto",
-                torch_dtype=torch.float16,  # Use FP16 for memory efficiency
-                low_cpu_mem_usage=True
+                torch_dtype=torch_dtype,  # Use FP16 for memory efficiency
+                low_cpu_mem_usage=low_cpu_mem_usage
             )
-            self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
-            self.model.eval()
+            chat_model.eval()
+            # Load the fine-tuned model
+            ft_model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
+            ft_model.eval()
+            if "Llama-2" in self.model_name:
+                # For the Llama2 definition generator, the model is just the finetuned model
+                self.model = ft_model
+            else:
+                # If using an adapter, merge and unload the finetuned model
+                ft_model = ft_model.merge_and_unload()
 
-        elif "Llama-3" in self.model_name:
-            self.model = pipeline("text-generation", model=self.ft_model_name, tokenizer=self.tokenizer, device_map="auto")
+        elif "Llama-3" in self.model_name and not self.is_adapter:
+            ft_model = self.ft_model_name
+        
+        if "Llama-3" in self.model_name:
+            # For the Llama3 definition generators, use a pipeline containing the model and the tokenizer
+            self.model = pipeline("text-generation", model=ft_model, tokenizer=self.tokenizer, device_map="auto")
 
-    # apply template
-    def apply_chat_template(self, dataset, system_message, template):
+        if "Llama-3" in self.model_name and self.is_adapter:
+            self.eos_tokens = [self.model.tokenizer.eos_token_id] + [self.model.tokenizer.encode(token, add_special_tokens=False)[0] for token in ['.', ' .']] #TODO: look into this
+        else:
+            self.eos_tokens = [self.tokenizer.encode(token, add_special_tokens=False)[0] 
+                        for token in [';', ' ;', '.', ' .']]
+            self.eos_tokens.append(self.tokenizer.eos_token_id)
+        if "Llama-3" in self.model_name and not self.is_adapter:
+            self.model.tokenizer.padding_side='left'
+            self.model.tokenizer.add_special_tokens = True
+            self.model.tokenizer.add_eos_token = True
+            self.model.tokenizer.add_bos_token = True
+
+        self.system_message = {
+            'nl': "Je bent een lexicograaf die vertrouwd is met het geven van beknopte definities van woordbetekenissen.",
+            'it': "Sei un lessicografo esperto nel fornire definizioni concise dei significati delle parole.",
+            'sv': "Du är en lexikograf som är van vid att ge kortfattade definitioner av ordens betydelser.",
+            'no': "Du er en leksikograf som er kjent med å gi presise definisjoner av ords betydning.",
+            'es': "Eres un lexicógrafo familiarizado con proporcionar definiciones concisas de los significados de las palabras.",
+            'ja': "あなたは、単語の意味の簡潔な定義を提供することに熟練した辞書編纂者です。",
+            'de': "Du bist ein Lexikograf, der mit der Bereitstellung prägnanter Definitionen von Wortbedeutungen vertraut ist.",
+            'pt': "Você é um lexicógrafo familiarizado com a fornecimento de definições concisas dos significados das palavras.",
+            'en': "You are a lexicographer familiar with providing concise definitions of word meanings.",
+            'tr': "Sen, kelime anlamlarının özlü tanımlarını sağlamaya aşina bir sözlük yazarsısın.",
+            'mg': "Ianao dia lexicographer mahazatra amin'ny fanomezana fanazavana fohy momba ny dikan'ny teny.",
+            'da': "Du er en leksikograf, der er vant til at give præcise definitioner af ords betydninger.",
+            'ca': "Ets un lexicògraf familiaritzat amb la creació de definicions concises dels significats de les paraules.",
+            'fr': "Vous êtes un lexicographe habitué à fournir des définitions concises des significations des mots.",
+            'lt': "Jūs esate leksikografas, kuris gerai susipažinęs su trumpų žodžių reikšmių apibrėžimų pateikimu.",
+            'la': "Es lexicographus peritus, qui breves definitiones significatuum verborum praebet.",
+            'id': "Anda adalah seorang leksikograf yang terbiasa memberikan definisi singkat dari makna kata-kata.",
+            'pl': "Jesteś leksykografem, który zna się na podawaniu zwięzłych definicji znaczeń słów.",
+            'ku': "Hûn lexicographer in ku bi dayîna şîroveyên kurt ên maneya peyvên nasnamekî ne.",
+            'el': "Είστε ένας λεξικογράφος εξοικειωμένος με την παροχή συνοπτικών ορισμών των εννοιών των λέξεων.",
+            'zh': "你是一位熟悉提供简明单词含义定义的词典编纂者。",
+            'fi': "Olet sanakirjantekijä, joka tuntee sanan merkitysten ytimekkäiden määritelmien antamisen.",
+            'ru': "Вы — лексикограф, знакомый с составлением кратких определений значений слов."
+        }
+        self.user_message = {
+            'nl': 'Geef alstublieft een beknopte definitie van de betekenis van het woord "{}" in de volgende zin: {}',
+            'it': 'Si prega di fornire una definizione concisa per il significato della parola "{}" nella seguente frase: {}',
+            'sv': 'Vänligen ge en kortfattad definition av betydelsen av ordet "{}" i följande mening: {}',
+            'es': 'Por favor, proporcione una definición concisa para el significado della parola "{}" nella seguente frase: {}',
+            'no': 'Vennligst gi en kortfattet definisjon av betydningen av ordet "{}" i den følgende setningen: {}',
+            'ja': '次の文での「{}」という単語の意味に対する簡潔な定義を提供してください: {}',
+            'de': 'Bitte geben Sie eine prägnante Definition für die Bedeutung des Wortes "{}" im folgenden Satz an: {}',
+            'pt': 'Por favor, forneça uma definição concisa para o significado da palavra "{}" na seguinte frase: {}',
+            'en': 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}',
+            'tr': 'Lütfen aşağıdaki cümledeki "{}" kelimesinin anlamı için özlü bir tanım sağlayın: {}',
+            'mg': 'Azafady, omeo fanazavana fohy momba ny dikan\'ny teny "{}" ao amin\'ity fehezanteny manaraka ity: {}',
+            'da': 'Venligst giv en kortfattet definition af betydningen af ordet "{}" i den følgende sætning: {}',
+            'ca': 'Si us plau, proporcioneu una definició concisa del significat de la paraula "{}" en la següent frase: {}',
+            'fr': 'Veuillez fournir une définition concise du sens du mot "{}" dans la phrase suivante : {}',
+            'lt': 'Prašome pateikti trumpą žodžio "{}" reikšmės apibrėžimą šioje sakinyje: {}',
+            'la': 'Quaeso, praebe brevem definitionem significatuum verbi "{}" in sequenti sententia: {}',
+            'id': 'Tolong berikan definisi singkat untuk makna kata "{}" dalam kalimat berikut: {}',
+            'pl': 'Proszę podać zwięzłą definicję znaczenia słowa "{}" w następującym zdaniu: {}',
+            'ku': 'Ji kerema xwe, daxuyaniya kurt ji bo maneya peyva "{}" di gotarê jêrîn de pêşkêş bikin: {}',
+            'el': 'Παρακαλώ παρέχετε έναν συνοπτικό ορισμό για τη σημασία της λέξης "{}" στην παρακάτω πρόταση: {}',
+            'zh': '请提供单词"{}"在以下句子中的简洁定义：{}',
+            'fi': 'Ole hyvä ja anna lyhyt määritelmä sanan "{}" merkitykselle seuraavassa lauseessa: {}',
+            'ru': 'Пожалуйста, предоставьте краткое определение значения слова "{}" в следующем предложении: {}'
+        }
+
+    # apply template for Llama 2
+    def apply_chat_template_llama2(self, dataset, system_message, template):
         def apply_chat_template_func(record):
             dialog: Dialog = (Message(role='system', content=system_message),
                             Message(role='user', content=template.format(record['target'], record['example'])))
@@ -132,6 +211,15 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             return {'text': prompt}
         
         return dataset.map(apply_chat_template_func)
+    
+    # apply template for Llama 3
+    def apply_chat_template_llama3(self, dataset, system_message, template):
+        def apply_chat_template_func(record):
+            dialog: Dialog = (Message(role='system', content=system_message),
+                            Message(role='user', content=template.format(record['target'], record['example'])))
+            return self.tokenizer.apply_chat_template(dialog, add_generation_prompt=True, tokenize=False)
+        
+        return [apply_chat_template_func(row) for row in dataset]
     
     def tokenize(self, dataset):
         def formatting_func(record):
@@ -178,8 +266,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         return definition.replace('\n', ' ') + '\n'
 
     def generate_definitions(self, target_usages: List[TargetUsage],
-                             system_message: str = "You are a lexicographer familiar with providing concise definitions of word meanings.",
-                             template: str = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}',
+                             language = None,
+                             system_message: str = None,
+                             template: str = None,
                              encode_definitions : str = None
                              ) -> List[str]:
         """
@@ -187,49 +276,44 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
 
         Args:
             target_usages (List[TargetUsage]): A list of TargetUsage objects.
+            language (str): a two digit language code. If not None, it overrides self.language. Falls back to English.
             system_message (str): The system prompt message.
             template (str): The template for the user prompt with placeholders {target} and {example}.
+            encode_definitions (str): if not None, use self.embedding_model to encode the definitions. If 'vectors', return only the sentence embeddings. If 'both', return both definitions and embeddings.
 
         Returns:
             Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
         """
-        if "Llama-2" in self.model_name:
-            examples = []
-            for usage in target_usages:
-                target = usage.text()[usage.offsets[0]:usage.offsets[1]]
-                example = usage.text()
-                examples.append({'target': target, 'example': example})
+        # Choose the system and user messages for the specific language, fall back to English if the language is not available
+        if language is None:
+            if self.language is None:
+                language = "EN"
+            else:
+                language = self.language
+        system_message = self.system_message.get(language.lower(), self.system_message['en']) if system_message is None else system_message
+        user_message_template = self.user_message.get(language.lower(), self.user_message['en']) if template is None else template
 
-            dataset = Dataset.from_list(examples)
-            dataset = self.apply_chat_template(dataset, system_message, template)
-            tokenized = self.tokenize(dataset)
+        examples = []
+        for usage in target_usages:
+            target = usage.text()[usage.offsets[0]:usage.offsets[1]]
+            example = usage.text()
+            examples.append({'target': target, 'example': example})
+
+        dataset = Dataset.from_list(examples)
+
+        if "Llama-2" in self.model_name:
+            dataset = self.apply_chat_template_llama2(dataset, system_message, user_message_template)
+            dataset = self.tokenize(dataset)
             device = next(self.model.parameters()).device
 
         elif "Llama-3" in self.model_name:
-            tokenized = []
-            
-            # Create prompt for each target usage using the provided system_message and template
-            for usage in target_usages:
-                target = usage.text()[usage.offsets[0]:usage.offsets[1]]
-                example = usage.text()
-                user_message = template.format(target, example)
-                dialog: Dialog = [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_message}
-                ]
-                # Construct the prompt string
-                prompt = self.model.tokenizer.apply_chat_template(dialog, tokenize=False, add_generation_prompt=True)
-                tokenized.append(prompt)
-
-            self.model.tokenizer.padding_side='left'
-            self.model.tokenizer.add_special_tokens = True
-            self.model.tokenizer.add_eos_token = True
-            self.model.tokenizer.add_bos_token = True
+            dataset = self.apply_chat_template_llama3(dataset, system_message, user_message_template)
                     
         definitions = []
-        total = len(tokenized)
-        for i in range(0, len(tokenized), self.batch_size):
-            batch = tokenized[i:i + self.batch_size]
+        total = len(dataset)
+        for i in range(0, total, self.batch_size):
+            logging.info(f"{i} out of {total} examples")
+            batch = dataset[i:i + self.batch_size]
 
             if "Llama-2" in self.model_name:
                 model_input = dict()
@@ -244,20 +328,37 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
                         max_time=self.max_time * self.batch_size,
                         eos_token_id=self.eos_tokens,
                         temperature=self.temperature,
+                        do_sample = self.sampling,
                         pad_token_id=self.tokenizer.eos_token_id
                     )
                     answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
                     definitions.extend([self.extract_definition(answer) for answer in answers])
                 elif "Llama-3" in self.model_name:
-                    answers = self.model(
-                        batch, 
-                        max_length = self.max_length, 
-                        forced_eos_token_id = self.eos_tokens,
-                        max_time = self.max_time * self.batch_size, 
-                        eos_token_id = self.eos_tokens, 
-                        temperature = self.temperature,
-                        pad_token_id = self.model.tokenizer.eos_token_id
-                    )
+                    if not self.is_adapter:
+                        answers = self.model(
+                            batch, 
+                            max_new_tokens = self.max_length, 
+                            forced_eos_token_id = self.eos_tokens,
+                            max_time = self.max_time * self.batch_size, 
+                            eos_token_id = self.eos_tokens, 
+                            temperature = self.temperature,
+                            do_sample = self.sampling,
+                            pad_token_id = self.model.tokenizer.eos_token_id
+                        )
+                    else:                      
+                        answers = self.model(
+                            batch, 
+                            max_new_tokens = self.max_length, 
+                            forced_eos_token_id = self.eos_tokens,
+                            max_time = self.max_time * self.batch_size, 
+                            eos_token_id = self.eos_tokens, 
+                            temperature = self.temperature,
+                            do_sample = self.sampling,
+                            pad_token_id = self.model.tokenizer.eos_token_id,
+                            truncation = True,
+                            batch_size = self.batch_size
+                        )
+
                     definitions.extend([self.extract_definition(answer[0]['generated_text']) for answer in answers])
             except Exception as e:
                 warnings.warn(f"Failed generation for batch starting at index {i}: {e}")
@@ -358,7 +459,7 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
                 "fireworks": "FIREWORKS_API_KEY",
                 "mistralai": "MISTRAL_API_KEY",
                 "together": "TOGETHER_API_KEY",
-                "xai": "XAI_API_KEY"
+                "xai": "XAI_API_KEY",
             }
             if model_provider in provider_key_names.keys():
                 provider_key_name = provider_key_names[model_provider]

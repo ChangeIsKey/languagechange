@@ -5,7 +5,7 @@ from languagechange.models.meaning.clustering import Clustering, APosterioriaffi
 from languagechange.usages import TargetUsage, TargetUsageList
 from languagechange.models.change.metrics import GradedChange, APD, PRT, PJSD
 from languagechange.models.change.widid import WiDiD
-from languagechange.benchmark import WiC, WSD, WSI, CD, SemEval2020Task1, DWUG
+from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from pydantic import BaseModel, Field
 from typing import List, Set, Union
 import numpy as np
@@ -15,7 +15,6 @@ import inspect
 import os
 from queue import Queue
 import re
-import math
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -53,15 +52,20 @@ class Pipeline:
         if latex_path != None:
             self.generate_latex_table(results, latex_path, decimals)
                 
-    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0, split_col:int=None):
+    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0, max_w=None, natural_split=False, remove_empty=False, sort_models=False, generate_caption=False, highlight_best=False):
         """
             Generates one or more tables of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
             Args:
                 data (dict): the evaluation results, in a dictionary (similar to that produced by self.save_evaluation results).
                 save_path (str): where to save the .tex file.
                 decimals (int): the amount of decimals to round evaluation results to.
-                remove_headers (int): of >0, the first remove_headers rows of the table are removed.
-                split_col (int): if not None, split the table into smaller tables, each being split_col columns wide (excluding the model names to the very left)
+                remove_headers (int): if >0, the first remove_headers rows of the table are removed.
+                max_w (int|List[int]): if not None, split the table into smaller tables. If an int, each table will be max_w columns wide (excluding the model names to the very left). If a list of ints, the value of max_w[i] is the width of table i.
+                natural_split (int|bool): if True, split the table according to the first row which has a natural split. If an int >= 0, split the table according to the split of this row.
+                remove_empty (bool): If True, remove all rows containing no value.
+                sort_models (bool): If True, sort the rows alphabetically by the names of the models.
+                generate_caption (bool): If True, generate a caption for each table.
+                highlight_best (bool|Callable|str): If "max", highlight the highest value in each column. If "min", highlight the lowest value in each column. If a callable, use this as a function to compare values.
         """
         def get_column_widths(data):
             """
@@ -78,7 +82,6 @@ class Pipeline:
                     for q in columns[depth:]:
                         q.put(1)
                     return 1
-
                 # Recursive step: sum leaf counts of children
                 total = 0
                 for v in d.values():
@@ -146,34 +149,31 @@ class Pipeline:
             get_rows_rec(data, column_widths, 0)
             return table_rows, scores, models
 
-        def split_header_row(row, n_cols):
+        def split_header_row(row, n_cols : List[int]):
             """
-                Splits a row into multiple rows, each n_cols wide, and formats the content in LaTeX table style.
+                Splits a row into multiple rows, with row i n_cols[i] wide.
             """
-            n_tables = math.ceil(sum([c[1] for c in row]) / n_cols)
-            split_rows = [[] for _ in range(n_tables)]
-            curr_w = 0
+            assert sum(n_cols) == sum(w for _, w in row), "The widths of split rows do not sum up to the total width"
+            split_rows = [[] for _ in n_cols]
+            s, curr_w = (None, 0)
             curr_split_row = 0
+            w_left = n_cols[0]
             i = 0
-            while i < len(row):
-                s, w = row[i]
-                # If the whole multicolumn fits into the current table, add it.
-                if curr_w + w <= n_cols:
-                    split_rows[curr_split_row].append(row[i])
+            while curr_split_row < len(n_cols) and (i < len(row) or curr_w > 0):
+                if curr_w == 0:
+                    # Get a new entry from the row
+                    s, curr_w = row[i]
                     i += 1
-                    curr_w += w
-                    if curr_w == n_cols:
-                        curr_w = 0
-                        curr_split_row += 1
-                # If the whole multicolumn does not fit into the current table, split it.
-                else:
-                    w_left = n_cols - curr_w
-                    split_rows[curr_split_row].append((s, w_left))
-                    # Modify the column to have less space left, to be re-used in the next table
-                    row[i] = (s, w - w_left)
-                    curr_w = 0
-                    # Move on to the next split row
+                w_to_add = min(curr_w, w_left)
+                # Add the minimum of the width of the entry and the width left for the split row
+                split_rows[curr_split_row].append((s, w_to_add))
+                curr_w -= w_to_add
+                w_left -= w_to_add
+                # If there is now no space left, move on to the next split row
+                if w_left == 0:
                     curr_split_row += 1
+                    if curr_split_row < len(n_cols):
+                        w_left = n_cols[curr_split_row]
             return split_rows
         
         def get_horizontal_lines(table_rows):
@@ -213,9 +213,8 @@ class Pipeline:
                 
             table_end = """
         \hline
-    \\end{tabular}
-\\end{table}
-                """
+    \\end{tabular}""" + (("\n\\caption{Evaluation results on the " + table_rows[0][0][0] + " task.}") if generate_caption else "") + """
+\\end{table}"""
             
             line_strings = get_horizontal_lines(table_rows)
             header_string = "\n".join(render_header_row(row) + line_strings[i] for i, row in enumerate(table_rows))
@@ -226,36 +225,101 @@ class Pipeline:
         
         column_widths, total_cols = get_column_widths(data)
     
-        # If we don't split the table, this is done by splitting the table into itself
-        if split_col is None or split_col > total_cols:
-            split_col = total_cols
-
         table, scores, models = get_table_rows(data, column_widths)
         table = table[remove_headers:]
 
-        split_tables = [[] for _ in range(math.ceil(total_cols / split_col))]
-        for i, row in enumerate(table):
+        # Split the table according to a natural subdivision in the data
+        if natural_split:
+            i = 0
+            # If an int, use the natural split of this row
+            if type(natural_split) == int:
+                i = natural_split
+            # Otherwise, choose the first row that has a split
+            else:
+                for j, row in enumerate(table):
+                    if len(row) > 1:
+                        i = j
+                        break
+            split_col = []
+            for _, w in table[i]:
+                if max_w is not None and max_w > 0:
+                    split_col.extend([max_w for _ in range(w // max_w)])
+                    if w % max_w != 0:
+                        split_col.append(w % max_w)
+                else:
+                    split_col.append(w)
+
+        else:
+            # If we don't split the table, this is done by splitting the table into itself
+            if max_w is None:
+                split_col = [total_cols]
+            # If max_w is an int, all tables should be of this width (except maybe the last one)
+            elif type(max_w) == int and max_w > 0:
+                if max_w > total_cols:
+                    split_col = [total_cols]
+                else:
+                    split_col = [max_w for _ in range(total_cols // max_w)]
+                    if total_cols % max_w != 0:
+                        split_col.append(total_cols % max_w)
+            # If max_w is a list of ints, it defines a custom table split
+            elif type(max_w) == list:
+                split_col = max_w
+            else:
+                raise TypeError("'max_w' has to be either None, an int or a list[int].")
+
+        split_tables = [[] for _ in range(len(split_col))]
+        for row in table:
             split_rows = split_header_row(row, split_col)
             for i, r in enumerate(split_rows):
                 # Only add the rows which are not empty after splitting
                 if not all(s == "" for s, _ in r):
-                    split_tables[i].append(r) 
+                    split_tables[i].append(r)
                     # Each item in split_tables represents one subtable once the original table has been split
 
         # If decimals is provided, round each score to the amount of decimals set
         if decimals != None and type(decimals) == int:
             for model_scores in scores:
+                if highlight_best is not False:
+                    if callable(highlight_best):
+                        better_than = highlight_best
+                    elif highlight_best == "min":
+                        better_than = lambda s1, s2 : s1 < s2
+                    else:
+                        better_than = lambda s1, s2 : s1 > s2
+                else:
+                    better_than = None
+                best_model = None
+                best_score = None
                 for model, score in model_scores.items():
-                    try:
-                        model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
-                    except ValueError:
-                        continue
+                    if score is None:
+                        model_scores[model] = '--'
+                    else:
+                        try:
+                            model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
+                            if better_than is not None:
+                                if best_score is None or better_than(score, best_score):
+                                    best_score = score
+                                    best_model = model
+                        except (ValueError, TypeError):
+                            continue
+                if best_model is not None:
+                    model_scores[best_model] = "\\textbf{" + model_scores[best_model] + "}"
 
         scores_per_model = {model: [s.get(model, '--') for s in scores] for model in models}
         
-        score_strings = []
-        for i in range(0, total_cols, split_col):
-            score_strings.append("\\\\".join("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores[i:i+split_col]) for model, scores in scores_per_model.items()))
+        if sort_models:
+            scores_per_model_items = sorted(scores_per_model.items(), key = lambda item : item[0])
+        else:
+            scores_per_model_items = scores_per_model.items()
+
+        score_strings = [[] for _ in range(len(split_col))]
+        i = 0
+        for j, w in enumerate(split_col):
+            for model, scores in scores_per_model_items:
+                if not remove_empty or not all(s=='--' for s in scores[i:i+w]):
+                    score_strings[j].append("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores[i:i+w]))
+            score_strings[j] = "\\\\".join(score_strings[j])
+            i += w
 
         table_string = "\n".join(create_table_string(split_tables[i], score_strings[i]) for i in range(len(split_tables)))
 
@@ -298,7 +362,7 @@ class WSIPipeline(Pipeline):
                 target_usages.append(TargetUsage(example['text'], [example['start'],example['end']]))
 
         if isinstance(self.usage_encoding, DefinitionGenerator):
-            encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors')
+            encoded_usages = self.usage_encoding.generate_definitions(target_usages, self.dataset.language, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
 
         elif isinstance(self.usage_encoding, PromptModel):
             return None # Is this possible?
@@ -392,7 +456,7 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions = 'vectors')
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, self.dataset.language, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
 
             if label_func == None:
                 if task == "graded":
@@ -425,8 +489,8 @@ class WiCPipeline(Pipeline):
         elif isinstance(self.usage_encoding, PromptModel):
             if task == "graded":
                 class WiCGraded(BaseModel):
-                    change : float = Field(description='How similar the two occurrences of the word are.',le=1, ge=0)#perhaps rename change to something else
-                self.usage_encoding.structure = WiCGraded
+                    change : float = Field(description='How similar the two occurrences of the word are.',le=1, ge=0)#TODO: perhaps rename change to something else
+                self.usage_encoding.structure = WiCGraded #TODO: make sure that the structure is updated!
                 for pair in self.evaluation_set:
                     target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                          TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
@@ -434,7 +498,7 @@ class WiCPipeline(Pipeline):
             elif task == "binary":
                 class WiCBinary(BaseModel):
                     change : bool = Field(description='Whether the word has the same meaning or not.')
-                self.usage_encoding.structure = WiCBinary
+                self.usage_encoding.structure = WiCBinary #TODO: make sure that the structure is updated!
                 for pair in self.evaluation_set:
                     target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                          TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
@@ -503,7 +567,7 @@ class GCDPipeline(Pipeline):
         if isinstance(dataset, DWUG) or isinstance(dataset, SemEval2020Task1):
             self.dataset = dataset
         else:
-            self.dataset = CD(name=dataset_name)
+            self.dataset = SemanticChangeEvaluationDataset(name=dataset_name)
             self.dataset.load_from_target_usages(dataset, scores)
 
         self.usage_encoding = usage_encoding
@@ -547,7 +611,7 @@ class GCDPipeline(Pipeline):
                     target_usages_t1 = target_usages_t1_all_words[word]
                     target_usages_t2 = target_usages_t2_all_words[word]
 
-                elif isinstance(self.dataset, CD):
+                elif isinstance(self.dataset, SemanticChangeEvaluationDataset):
                     target_usages_t1 = self.dataset.target_usages_t1[word]
                     target_usages_t2 = self.dataset.target_usages_t2[word]
 
