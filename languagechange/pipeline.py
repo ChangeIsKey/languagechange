@@ -362,7 +362,7 @@ class WSIPipeline(Pipeline):
                 target_usages.append(TargetUsage(example['text'], [example['start'],example['end']]))
 
         if isinstance(self.usage_encoding, DefinitionGenerator):
-            encoded_usages = self.usage_encoding.generate_definitions(target_usages, self.dataset.language, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
+            encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
 
         elif isinstance(self.usage_encoding, PromptModel):
             return None # Is this possible?
@@ -456,7 +456,7 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, self.dataset.language, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
 
             if label_func == None:
                 if task == "graded":
@@ -528,7 +528,7 @@ class WiCPipeline(Pipeline):
                     self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
-                    parameters = ['dataset', 'language', 'version', 'crosslingual']
+                    parameters = ['dataset', 'version', 'linguality', 'language']
                     dataset_info = {}
                     d = dataset_info
                     for param in parameters:

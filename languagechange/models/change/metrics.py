@@ -52,14 +52,14 @@ class OptimalThrehold(Threshold):
     def __init__(self):
         pass
 
-    def compute_threshold(self, scores, vrange=np.arange(0.,1.), evaluator=None):
+    def compute_threshold(self, scores, vrange=np.arange(0.,1.,100), evaluator=None):
         best_score = None
         best_threshold = None
 
         for v in vrange:
-            labels = np.array(scores < v, dtype=int)
+            labels = np.array(scores > v, dtype=int)
             score = evaluator(labels)
-            if score > best_score or best_score == None:
+            if best_score == None or score > best_score:
                 best_score = score
                 best_threshold = v
 
