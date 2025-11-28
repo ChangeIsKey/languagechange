@@ -22,6 +22,7 @@ from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
 from typing import List, Dict, Union, Callable, Tuple
 import inspect
+from pathlib import Path
 
 
 def purity(labels_true, cluster_labels):
@@ -224,7 +225,11 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         self.target_words = set()
 
         if self.language == 'NO':
-            with open(os.path.join(self.home_path, f'subset{self.subset}/stats/{self.config}/stats_groupings.tsv')) as f:
+            matches = list(Path(os.path.join(self.home_path, f'subset{self.subset}','stats',self.config)).glob('stats_groupings.[ct]sv'))
+            if matches == []:
+                logging.error(f"Path does not exist: {os.path.join(self.home_path, f'subset{self.subset}','stats',self.config)}/stats_groupings.[ct]sv")
+                raise FileNotFoundError
+            with open(matches[0]) as f:
                 for line in islice(f, 1, None):
                     line = line.strip('\n').split('\t')
                     word, binary, graded = line[0], line[11], line[14]
@@ -235,7 +240,11 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
         elif self.language == 'RU':
             # For the Russian dataset there are no binary change scores.
-            with open(os.path.join(self.home_path, 'annotated_all.tsv')) as f:
+            matches = list(Path(self.home_path).glob('annotated_all.[ct]sv'))
+            if matches == []:
+                logging.error(f"Path does not exist: {self.home_path}/annotated_all.[ct]sv")
+                raise FileNotFoundError
+            with open(matches[0]) as f:
                 for line in f:
                     line = line.strip('\n').split('\t')
                     word = line[0]
@@ -263,7 +272,11 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         group = str(group)
         usages = TargetUsageList()
         if self.dataset == 'NorDiaChange':
-            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,'uses.tsv')) as f:
+            matches = list(Path(os.path.join(self.home_path,f'subset{self.subset}','data',word)).glob('uses.[ct]sv'))
+            if matches == []:
+                logging.error(f"Path does not exist: {os.path.join(self.home_path,f'subset{self.subset}','data',word)}/uses.(c|t)sv")
+                raise FileNotFoundError
+            with open(matches[0]) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -281,7 +294,11 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                     else:
                         keys = line
         elif self.dataset == 'RuShiftEval':
-            with open(os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word,'uses.csv')) as f:
+            matches = list(Path(os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word)).glob('uses.[ct]sv'))
+            if matches == []:
+                logging.error(f"Path does not exist: {os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word)}/uses.(c|t)sv")
+                raise FileNotFoundError
+            with open(matches[0]) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -302,14 +319,18 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
 class DWUG(SemanticChangeEvaluationDataset):
 
-    def __init__(self, path=None, dataset=None, language=None, version=None, config='opt'):
+    def __init__(self, path=None, dataset=None, language=None, version=None, subset=None, config='opt'):
         lc = LanguageChange()
         self.dataset = dataset
         self.language = language
         self.version = version
+        self.subset = subset
         if path == None and not dataset == None and not language == None and not version == None:
             home_path = lc.get_resource('benchmarks', self.dataset, self.language, version)
-            dwug_folder = os.listdir(home_path)[0]
+            if self.dataset == "NorDiaChange":
+                dwug_folder = os.path.join(os.listdir(home_path)[0], f'subset{self.subset}')
+            else:
+                dwug_folder = os.listdir(home_path)[0]  
             self.home_path = os.path.join(home_path,dwug_folder)
         else:
             if not path == None and os.path.exists(path):
@@ -332,8 +353,9 @@ class DWUG(SemanticChangeEvaluationDataset):
         elif os.path.exists(os.path.join(self.home_path,'stats')):
             stats_path = os.path.join(self.home_path,'stats')
 
-        if os.path.exists(os.path.join(stats_path,'stats_groupings.csv')):
-            with open(os.path.join(stats_path,'stats_groupings.csv')) as f:
+        matches = list(Path(stats_path).glob('stats_groupings.[ct]sv'))
+        if matches != []:
+            with open(matches[0]) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -343,10 +365,11 @@ class DWUG(SemanticChangeEvaluationDataset):
                         self.stats_groupings[values[0]] = D
                     else:
                         keys = line
-        
+
         if stats_path is not None:
-            try:
-                with open(os.path.join(stats_path,'stats.csv')) as f:
+            matches = list(Path(stats_path).glob('stats.[ct]sv'))
+            if matches != []:
+                with open(matches[0]) as f:
                     keys = []
                     for j,line in enumerate(f):
                         line = line.replace('\n','').split('\t')
@@ -356,8 +379,8 @@ class DWUG(SemanticChangeEvaluationDataset):
                             self.stats[values[0]] = D
                         else:
                             keys = line
-            except FileNotFoundError as e:
-                logging.info("Could not find a path to stats.csv. Did you enter the right config value?")
+            else:
+                logging.info("Could not find a path to stats.[c|t]sv. Did you enter the right config value?")
 
         self.binary_task = {}
         self.graded_task = {}
@@ -416,7 +439,13 @@ class DWUG(SemanticChangeEvaluationDataset):
     def get_word_usages(self, word, group='all'):
         group = str(group)
         usages = TargetUsageList()
-        with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+        matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
+
+        if matches == []:
+            logging.error(f"Did not find {os.path.join(self.home_path,'data',word)}/uses.(c|t)sv.")
+            raise FileNotFoundError
+        
+        with open(matches[0]) as f:
             keys = []
             for j,line in enumerate(f):
                 line = line.replace('\n','').split('\t')
@@ -514,22 +543,20 @@ class DWUG(SemanticChangeEvaluationDataset):
 
         try:
             if self.dataset == "DWUG Sense":
-                with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')) as f:
-                    for line in islice(f, 1, None):
-                        line = line.replace('\n','').split('\t')
-                        id, label = line
-                        try:
-                            if int(label) == -1:
-                                outliers.add(id)
-                        except ValueError:
-                            continue
+                clusters_path = os.path.join(self.home_path,'labels',word,self.config)
+                matches = list(Path(clusters_path).glob('labels_senses.[ct]sv'))
             else:
-                with open(os.path.join(self.home_path,f'clusters/{self.config}',f'{word}.csv')) as f:
-                    for line in islice(f, 1, None):
-                        line = line.replace('\n','').split('\t')
-                        id, label = line
+                clusters_path = os.path.join(self.home_path,'clusters',self.config)
+                matches = list(Path(clusters_path).glob(f'{word}.[ct]sv'))
+            with open(matches[0]) as f:
+                for line in islice(f, 1, None):
+                    line = line.replace('\n','').split('\t')
+                    id, label = line
+                    try:
                         if int(label) == -1:
                             outliers.add(id)
+                    except ValueError:
+                        continue
         except Exception as e:
             logging.error(f"Could not remove outlier usages of '{word}' due to the following error: {e}")
             raise e
@@ -557,8 +584,9 @@ class DWUG(SemanticChangeEvaluationDataset):
             excluded_instances = set()
 
         usages_by_key = {}
+        matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
         try:
-            with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+            with open(matches[0]) as f:
                 for line in islice(f, 0, 1):
                     columns = line.replace('\n','').split('\t')
                     column_ids = {c : i for i,c in enumerate(columns)}
@@ -592,7 +620,8 @@ class DWUG(SemanticChangeEvaluationDataset):
         temp_labels = {}
         try:
             if self.dataset == "DWUG Sense":
-                with open(os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_proximity.csv')) as f:
+                matches = list(Path(os.path.join(self.home_path,"labels",word,self.config)).glob('labels_proximity.[ct]sv'))
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
@@ -606,7 +635,8 @@ class DWUG(SemanticChangeEvaluationDataset):
                                     temp_labels[frozenset([id1,id2])] = []
                                 temp_labels[frozenset([id1,id2])].append(label)
             else:
-                with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
+                matches = list(Path(os.path.join(self.home_path,"data",word)).glob('judgments.[ct]sv'))
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
@@ -691,21 +721,23 @@ class DWUG(SemanticChangeEvaluationDataset):
         for word in self.target_words:
             usages_by_id = {}
 
-            if self.dataset == "DWUG":
-                senses_path = os.path.join(self.home_path,'clusters/opt',f'{word}.csv')
-
-            elif self.dataset == "DWUG Sense": #This is not good
-                senses_path = os.path.join(self.home_path,f'labels/{word}/{self.config}/labels_senses.csv')
+            
+            if self.dataset == "DWUG Sense": #This is not good
+                senses_path = os.path.join(self.home_path,'labels',word,self.config)
+                matches = list(Path(senses_path).glob('labels_senses.[ct]sv'))
+            else:
+                senses_path = os.path.join(self.home_path,f'clusters/{self.config}')
+                matches = list(Path(senses_path).glob(f'{word}.[ct]sv'))
 
             try:
-                with open(senses_path) as f:
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
                     for line in f:
                         line = line.replace('\n','').split('\t')
                         id = line[column_ids['identifier']]
-                        label = line[column_ids['cluster'] if self.dataset == "DWUG" else column_ids['label']]
+                        label = line[column_ids['label'] if self.dataset == "DWUG Sense" else column_ids['cluster']]
                         try:
                             if not (remove_outliers and int(label) == -1):
                                 usages_by_id[id] = {'id': id, 'label': label}
@@ -716,7 +748,8 @@ class DWUG(SemanticChangeEvaluationDataset):
                 raise e
 
             try:
-                with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+                matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
@@ -748,7 +781,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             for id, ex in usages_by_id.items():
                 for k in {'text','start','end','word','label'}:
                     if not k in ex:
-                        logging.error(f"A value for {k} in missing in the example of id {id}. Make sure that {senses_path} and {os.path.join(self.home_path,'data',word,'uses.csv')} contain the same examples.")
+                        logging.error(f"A value for {k} in missing in the example of id {id}. Make sure that {senses_path} and {os.path.join(self.home_path,'data',word,'uses.(c|t)sv')} contain the same examples.")
                         raise KeyError
             
             data.extend(list(usages_by_id.values()))
@@ -821,7 +854,7 @@ class WiC(Benchmark):
             dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 'AM2iCo'] if using a dataset in the language change resource hub, or a list or a dict if loading from a datastructure already describing a WiC dataset.
             version (str) : the version of the dataset if using a dataset from the resource hub.
             language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
-            crosslingual (bool) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
+            linguality (str) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
             name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
     """
     def __init__(self, 
@@ -830,13 +863,13 @@ class WiC(Benchmark):
                  dataset : str = None, 
                  version : str = None, 
                  language : str = None, 
-                 crosslingual : bool = None,
+                 linguality : str = None,
                  name : str = None):
         self.data = {}
         self.dataset = dataset
         self.version = version
         self.language = language
-        self.crosslingual = crosslingual
+        self.linguality = linguality
         self.target_words = set()
         if name != None:
             self.name = name
@@ -852,10 +885,16 @@ class WiC(Benchmark):
                     wic_folder = os.listdir(home_path)[0]
                     home_path = os.path.join(home_path, wic_folder)
                     if dataset == 'MCL-WiC':
-                        self.crosslingual = crosslingual
+                        if self.linguality not in {'multilingual','crosslingual'}:
+                            logging.error("For MCL-WiC, linguality has to be set to either 'multilingual' or 'crosslingual'")
+                            raise ValueError
+                        self.language = f'EN-{self.language}' if self.linguality == 'crosslingual' else f'{self.language}-{self.language}'
                         if os.path.exists(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip")):
                             with zipfile.ZipFile(os.path.join(home_path, "SemEval-2021_MCL-WiC_all-datasets.zip"), 'r') as f:
                                 f.extractall(home_path)
+                        if os.path.exists(os.path.join(home_path, "SemEval-2021_MCL-WiC_test-gold-data.zip")):
+                            with zipfile.ZipFile(os.path.join(home_path, "SemEval-2021_MCL-WiC_test-gold-data.zip"), 'r') as f:
+                                f.extractall(os.path.join(home_path, 'MCL-WiC'))
                         self.home_path = os.path.join(home_path, 'MCL-WiC')
                     else:
                         self.home_path = home_path
@@ -866,7 +905,7 @@ class WiC(Benchmark):
                 self.home_path = path
             logging.info(f"WiC home path: {self.home_path}")
                 
-            self.load_from_resource_hub(dataset, language, crosslingual = crosslingual)
+            self.load_from_resource_hub()
 
         # Loads from a dictionary or list
         elif wic_data != None:
@@ -892,18 +931,18 @@ class WiC(Benchmark):
                     self.target_words.add(d['word'])
 
     # Finds the file paths of the data and labels for possible train, dev and test sets.
-    def find_data_paths(self, dataset, language, crosslingual = False):
+    def find_data_paths(self):
         train_paths = {'data':None, 'labels':None}
         dev_paths= {'data':None, 'labels':None}
         test_paths = {'data':None, 'labels':None}
         data_paths = {'train':train_paths, 'dev':dev_paths, 'test':test_paths}
 
-        if dataset == 'WiC':
+        if self.dataset == 'WiC':
             for s in data_paths.keys():
                 data_paths[s]['data'] = s + "/" + s + ".data.txt"
                 data_paths[s]['labels'] = s + "/" + s + ".gold.txt"
 
-        elif dataset == 'XL-WiC':
+        elif self.dataset == 'XL-WiC':
             language_paths = {'BG':'xlwic_wn/bulgarian_bg', 
                               'DA':'xlwic_wn/danish_da', 
                               'DE':'xlwic_wikt/german_de',
@@ -918,27 +957,27 @@ class WiC(Benchmark):
                               'NL':'xlwic_wn/dutch_nl',
                               'ZH':'xlwic_wn/chinese_zh'}
             try:
-                language_path = language_paths[language]
+                language_path = language_paths[self.language]
             except KeyError:
-                logging.error(f'Language {language} is not supported.')
+                logging.error(f'Language {self.language} is not supported.')
                 raise Exception
 
             # For English, train and dev sets are available, with both having labels.
-            if language == 'EN':
+            if self.language == 'EN':
                 data_paths['train']['data'] = os.path.join(language_path, "train_en.txt")
                 data_paths['dev']['data'] = os.path.join(language_path, "valid_en.txt")
 
             else:
-                if os.path.exists(os.path.join(self.home_path, language_path, language.lower()+"_train.txt")):
-                    data_paths['train']['data'] = os.path.join(language_path, language.lower()+"_train.txt")
-                if os.path.exists(os.path.join(self.home_path, language_path, language.lower()+"_valid.txt")):
-                    data_paths['dev']['data'] = os.path.join(language_path, language.lower()+"_valid.txt")
-                if os.path.exists(os.path.join(self.home_path, language_path, language.lower()+"_test_data.txt")):
-                    data_paths['test']['data'] = os.path.join(language_path, language.lower()+"_test_data.txt")
-                if os.path.exists(os.path.join(self.home_path, language_path, language.lower()+"_test_gold.txt")):
-                    data_paths['test']['labels'] = os.path.join(language_path, language.lower()+"_test_gold.txt")
+                if os.path.exists(os.path.join(self.home_path, language_path, self.language.lower()+"_train.txt")):
+                    data_paths['train']['data'] = os.path.join(language_path, self.language.lower()+"_train.txt")
+                if os.path.exists(os.path.join(self.home_path, language_path, self.language.lower()+"_valid.txt")):
+                    data_paths['dev']['data'] = os.path.join(language_path, self.language.lower()+"_valid.txt")
+                if os.path.exists(os.path.join(self.home_path, language_path, self.language.lower()+"_test_data.txt")):
+                    data_paths['test']['data'] = os.path.join(language_path, self.language.lower()+"_test_data.txt")
+                if os.path.exists(os.path.join(self.home_path, language_path, self.language.lower()+"_test_gold.txt")):
+                    data_paths['test']['labels'] = os.path.join(language_path, self.language.lower()+"_test_gold.txt")
     
-        elif dataset == 'TempoWiC':
+        elif self.dataset == 'TempoWiC':
             data_paths['train']['data'] = "data/train.data.jl"
             data_paths['train']['labels'] = "data/train.labels.tsv"
             data_paths['dev']['data'] = "data/validation.data.jl"
@@ -946,22 +985,24 @@ class WiC(Benchmark):
             data_paths['test']['data'] = "data/test-codalab-10k.data.jl"
             data_paths['test']['labels'] = "data/test.gold.tsv"
 
-        elif dataset == 'MCL-WiC':
+        elif self.dataset == 'MCL-WiC':
             # The multilingual task
-            if not crosslingual:
-                if language == 'en':
+            if self.linguality == 'multilingual':
+                if self.language.lower() == 'en-en':
                     data_paths['train']['data'] = "training/training.en-en.data"
                     data_paths['train']['labels'] = "training/training.en-en.gold"
-                data_paths['dev']['data'] = f"dev/multilingual/dev.{language.lower()}-{language.lower()}.data"
-                data_paths['dev']['labels'] = f"dev/multilingual/dev.{language.lower()}-{language.lower()}.gold"
-                data_paths['test']['data'] = f"test/multilingual/test.{language.lower()}-{language.lower()}.data"
+                data_paths['dev']['data'] = f"dev/multilingual/dev.{self.language.lower()}.data"
+                data_paths['dev']['labels'] = f"dev/multilingual/dev.{self.language.lower()}.gold"
+                data_paths['test']['data'] = f"test/multilingual/test.{self.language.lower()}.data"
+                data_paths['test']['labels'] = f"test.{self.language.lower()}.gold"
             # The crosslingual task
-            elif crosslingual:
-                data_paths['test']['data'] = f"test/crosslingual/test.en-{language.lower()}.data"
+            elif self.linguality == 'crosslingual':
+                data_paths['test']['data'] = f"test/crosslingual/test.{self.language.lower()}.data"
+                data_paths['test']['labels'] = f"test.{self.language.lower()}.gold"
 
-        elif dataset == 'AM2iCo':
+        elif self.dataset == 'AM2iCo':
 
-            language_path = "data/" + language.lower()
+            language_path = "data/" + self.language.lower()
             if not os.path.exists(os.path.join(self.home_path, language_path)):
                 logging.error(f'Path {os.path.join(self.home_path, language_path)} does not exist.')
                 raise FileNotFoundError
@@ -1019,11 +1060,11 @@ class WiC(Benchmark):
                 data.append(get_line_data(line, field_map, word_indexes))
         return data
 
-    def load_from_files(self, data_paths, dataset, language = None, crosslingual = False):
+    def load_from_files(self, data_paths):
         data = {'train':[], 'dev':[], 'test':[]}
 
         # The original Word-in-Context dataset
-        if dataset == 'WiC':
+        if self.dataset == 'WiC':
             for key in data_paths.keys():
                 if data_paths[key]['data'] is not None:
                     data[key] = self.load_from_txt(data_paths[key]['data'], word_indexes=True, field_map={'word':0,'indexes':2, 'text1':3, 'text2':4})
@@ -1032,11 +1073,11 @@ class WiC(Benchmark):
                     data[key] = [d | labels[i] for i, d in enumerate(data[key])]
 
         # XL-WiC, containing WiC datasets for 12 more languages other than English.
-        elif dataset == 'XL-WiC':
+        elif self.dataset == 'XL-WiC':
             # There is something unusual in the offsets of the XL-WiC dataset for Farsi.
             # The first index is a word index while the difference between the first and the second denotes
             # the length of the word.
-            if language == 'FA':
+            if self.language == 'FA':
                 def get_start_end(text, start, end):
                     char_start = sum(len(s)+1 for s in text.split(" ")[:int(start)])
                     char_end = char_start + int(end) - int(start)
@@ -1045,14 +1086,14 @@ class WiC(Benchmark):
             for key in ['train','dev']:
                 if data_paths[key]['data'] is not None:
                     data[key] = self.load_from_txt(data_paths[key]['data'])
-                    if language == 'FA':
+                    if self.language == 'FA':
                         for i, d in enumerate(data[key]):
                             data[key][i]['start1'], data[key][i]['end1'] = get_start_end(d['text1'], d['start1'], d['end1'])
                             data[key][i]['start2'], data[key][i]['end2'] = get_start_end(d['text2'], d['start2'], d['end2'])
 
             if data_paths['test']['data'] is not None:
                 data['test'] = self.load_from_txt(data_paths['test']['data'])
-                if language == 'FA':
+                if self.language == 'FA':
                     for i, d in enumerate(data['test']):
                         data['test'][i]['start1'], data['test'][i]['end1'] = get_start_end(d['text1'], d['start1'], d['end1'])
                         data['test'][i]['start2'], data['test'][i]['end2'] = get_start_end(d['text2'], d['start2'], d['end2'])  
@@ -1062,7 +1103,7 @@ class WiC(Benchmark):
                     data['test'] = [d | labels[i] for i, d in enumerate(data['test'])]
 
         # TempoWiC, containing social media data annotated with dates.
-        elif dataset == "TempoWiC":
+        elif self.dataset == "TempoWiC":
             for key in data_paths.keys():
                 data_dict = {}
 
@@ -1087,7 +1128,7 @@ class WiC(Benchmark):
                 data[key] = list(data_dict.values())
 
         # For MCL-WiC there is an English training set, a multilingual development set, and crosslingual and multilingual test sets.
-        elif dataset == "MCL-WiC":
+        elif self.dataset == "MCL-WiC":
             for key in data_paths.keys():
                 data_dict = {}
                 
@@ -1100,7 +1141,7 @@ class WiC(Benchmark):
                             text1 = ex['sentence1']
                             text2 = ex['sentence2']
 
-                            if not crosslingual:
+                            if self.linguality != 'crosslingual':
                                 start1 = int(ex['start1'])
                                 end1 = int(ex['end1'])
                                 start2 = int(ex['start2'])
@@ -1122,7 +1163,7 @@ class WiC(Benchmark):
                 data[key] = list(data_dict.values())
 
         # AM2iCo contains crosslingual datasets for 14 languages paired with English.
-        elif dataset == "AM2iCo":
+        elif self.dataset == "AM2iCo":
             regex = re.compile(r'<word>(.*)</word>')
             tag_length = len('<word></word>')
 
@@ -1153,9 +1194,9 @@ class WiC(Benchmark):
         else:
             raise ValueError
         
-    def load_from_resource_hub(self, dataset, language, crosslingual = False):
-        data_paths = self.find_data_paths(dataset, language, crosslingual)
-        self.load_from_files(data_paths, dataset, language, crosslingual)
+    def load_from_resource_hub(self):
+        data_paths = self.find_data_paths()
+        self.load_from_files(data_paths)
 
     # Loads from a list of pairs of target usages
     def load_from_target_usages(self, target_usages : List[Union[Tuple[TargetUsage], List[TargetUsage], TargetUsageList]], labels):
@@ -1480,6 +1521,9 @@ class WSI(Benchmark):
             self.name = name
         if wsi_data is not None:
             self.load_from_data(wsi_data)
+        else:
+            logging.error('No data was specified.')
+            raise ValueError
 
     # Loads from a list or dict containing a WSI dataset
     def load_from_data(self, data):
@@ -1487,6 +1531,9 @@ class WSI(Benchmark):
             self.data = {'all': data}
         elif type(data) == dict:
             self.data = data
+        else:
+            logging.error('Could not load the dataset as a WSI dataset.')
+            raise TypeError
 
         # Add the lemma in each data example to the set of target words
         for dataset in self.data.values():
