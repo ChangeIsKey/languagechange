@@ -1,7 +1,6 @@
 from languagechange.models.representation.contextualized import ContextualizedModel
-from languagechange.models.representation.definition import DefinitionGenerator, ChatModelDefinitionGenerator, LlamaDefinitionGenerator, T5DefinitionGenerator
+from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
-from languagechange.models.meaning.clustering import Clustering, APosterioriaffinityPropagation
 from languagechange.usages import TargetUsage, TargetUsageList
 from languagechange.models.change.metrics import GradedChange, APD, PRT, PJSD
 from languagechange.models.change.widid import WiDiD
@@ -13,7 +12,6 @@ import json
 import logging
 import inspect
 import os
-from queue import Queue
 import re
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
@@ -23,12 +21,17 @@ def deep_update(d, u):
     for k, v in u.items():
         if type(v) == dict:
             if k in d and type(d[k]) == dict:
-                d[k] = deep_update(d[k], v)
+                d[k] = deep_update(d[k], v.copy())
             else:
-                d[k] = v
+                d[k] = v.copy()
         else:
             d[k] = v
     return d
+
+def get_depth(d):
+    if type(d) != dict:
+        return 0
+    return 1 + max([get_depth(v) for v in d.values()])
 
 
 class Pipeline:
@@ -52,7 +55,7 @@ class Pipeline:
         if latex_path != None:
             self.generate_latex_table(results, latex_path, decimals)
                 
-    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0, max_w=None, natural_split=False, remove_empty=False, sort_models=False, generate_caption=False, highlight_best=False):
+    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0, max_w=None, natural_split=False, remove_empty=False, sort_models=False, generate_caption=False, highlight_best=False, n_method_cols=1):
         """
             Generates one or more tables of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
             Args:
@@ -63,91 +66,86 @@ class Pipeline:
                 max_w (int|List[int]): if not None, split the table into smaller tables. If an int, each table will be max_w columns wide (excluding the model names to the very left). If a list of ints, the value of max_w[i] is the width of table i.
                 natural_split (int|bool): if True, split the table according to the first row which has a natural split. If an int >= 0, split the table according to the split of this row.
                 remove_empty (bool): If True, remove all rows containing no value.
-                sort_models (bool): If True, sort the rows alphabetically by the names of the models.
+                sort_models (bool): If True, sort the rows by the names of the models.
                 generate_caption (bool): If True, generate a caption for each table.
                 highlight_best (bool|Callable|str): If "max", highlight the highest value in each column. If "min", highlight the lowest value in each column. If a callable, use this as a function to compare values.
+                n_method_cols (int): the amount of columns storing method info to the left of the table content, as opposed to above the table content.
         """
-        def get_column_widths(data):
-            """
-            Recursively computes the column widths per depth from a dict containing evaluation data.
-            Returns a list of queues containing the widths of each column in each row, as well as the total amount of columns.
-            """
-            columns = [Queue()]
 
-            def add_columns(d, depth=0):
-                while len(columns) <= depth + 1:
-                    columns.append(Queue())
-                # Base case: reached a leaf (model: score)
-                if not isinstance(d, dict) or not all(isinstance(v, dict) for v in d.values()):
-                    for q in columns[depth:]:
-                        q.put(1)
-                    return 1
-                # Recursive step: sum leaf counts of children
-                total = 0
-                for v in d.values():
-                    total += add_columns(v, depth + 1)
-                columns[depth].put(total)
-                return total
-
-            total_cols = add_columns(data)
-            # Skip the first row
-            return columns[1:], total_cols
-
-        def get_table_rows(data, column_widths):
+        def get_header_cells_and_scores(data):
             """
                 Joins the content of each entry with the width of the cell in the table.
                 Merges empty cells together if they belong to the same supercolumn.
                 Gets all the models and their scores in the right order.
             """
-            table_rows = [[] for _ in range(len(column_widths) - 1)]
-            scores = []
-            models = set()
+            total_depth = get_depth(data)
+            header_cells = [[] for _ in range(total_depth-n_method_cols)]
+            if header_cells == []:
+                scores_per_method = data
+                return header_cells, scores_per_method
+            
+            scores_per_method = []
 
-            def get_rows_rec(data, column_widths, depth):
+            def get_rows_rec(data, depth):
+                total_w = 0
+                empty_space = 0
                 for k, v in data.items():
                     if type(v) == dict:
                         # Normal case
-                        if sum(int(type(vv) == dict) for vv in v.values()) != 0:
-                            w = column_widths[depth].get()
-                            table_rows[depth].append((k,w))
+                        if get_depth(v) > n_method_cols:
                             # Recursive call to go further down the tree
-                            get_rows_rec(v, column_widths, depth + 1)
+                            w = get_rows_rec(v, depth + 1)
+                            total_w += w
+                            header_cells[depth].append((k,w))
                         # The case where we have reached the last row before the model and score, i.e. the row describing the metric.
                         else:
-                            w = column_widths[depth].get()
-                            # Add the metric name to the last row
-                            table_rows[-1].append((k,w))
-                            # Add the scores and models
-                            scores.append(v.copy())
-                            for model in v.keys():
-                                models.add(model)
-                            for d in range(depth, len(table_rows) - 1):
-                                # Add empty space to accommodate for longer columns
-                                table_rows[d].extend([('',1)] * w)
+                            # Add the metric name to the last row.
+                            header_cells[-1].append((k,1))
+                            empty_space += 1
+                            total_w += 1
+                            scores_per_method.append(v)
+                if empty_space > 0:
+                    for de in range(depth, len(header_cells) - 1):
+                        # Add empty space to accommodate for longer columns
+                        header_cells[de].extend([('',empty_space)])
 
-                # Merge empty cells together after each recursive call
-                for d in range(depth, len(table_rows) - 1):
-                    count = 0
-                    row = []
-                    for i, entry in enumerate(table_rows[d]):
-                        # If we find an empty cell, increase the empty count
-                        if entry == ('', 1):
-                            count += 1
-                            # If we reached the end of the row, add the empty space
-                            if i == len(table_rows[d]) - 1:
-                                row.append(('', count))
-                        else:
-                            # Add empty cells together
-                            if count > 0:
-                                row.append(('',count))
-                                count = 0
-                            # Add the current cell
-                            row.append(entry)
-                    # Update the row
-                    table_rows[d] = row
+                return total_w
             
-            get_rows_rec(data, column_widths, 0)
-            return table_rows, scores, models
+            get_rows_rec(data, 0)
+            return header_cells, scores_per_method
+        
+        # Gets the table information for method names and scores in the right order.
+        def get_content_cells(methods, scores):
+            content_cells = []
+
+            def get_content_cells_rec(m, scores, row, col):
+                if not type(m) == dict:
+                    while len(content_cells) < row + 1:
+                        content_cells.append([None for _ in range(n_method_cols+n_content_cols)])
+                    for c, s in enumerate(scores):
+                        content_cells[row][col+c] = (s, 1)
+                    return 1
+                n_leaves = 0
+
+                # Sort models alphabetically if we have reached the {model: score} dict
+                if sort_models and all(type(v) != dict for v in m.values()):
+                    items = sorted(m.items(), key = lambda i : i[0])
+                else:
+                    items = m.items()
+
+                for k, v in items:
+                    if type(v) != dict:
+                        c = n_method_cols - 1
+                    else:
+                        c = col
+                    l = get_content_cells_rec(v,[s.get(k, None) if s is not None else None for s in scores], row,c+1)
+                    content_cells[row][c] = (k, l)
+                    n_leaves += l
+                    row += l
+                return n_leaves
+            
+            get_content_cells_rec(methods, scores, 0, 0)
+            return content_cells
 
         def split_header_row(row, n_cols : List[int]):
             """
@@ -176,126 +174,81 @@ class Pipeline:
                         w_left = n_cols[curr_split_row]
             return split_rows
         
-        def get_horizontal_lines(table_rows):
+        def split_content_and_side_cells(content_cells, side_cells, split_cols):
+            """
+                Splits the content and side parts of a table into multiple tables.
+            """
+            split_contents = []
+            split_sides = []
+            side_width = len(side_cells[0])
+            i = 0
+            for w in split_cols:
+                side_cells_to_add = []
+                content_cells_to_add = []
+                row_i = 0
+                # Take the current content along with the side cells, which are the same for all split tables
+                for content, side in zip([c[i:i+w] for c in content_cells], side_cells):
+                    if all (c is None for c, _ in content):
+                        # If the row is empty and not the first one, decrease the multirow height of rows above
+                        if row_i > 0:
+                            for c in range(side_width):
+                                r = row_i-1
+                                while side_cells_to_add[r][c] is None and r > 0:
+                                    r -= 1
+                                if side_cells_to_add[r][c] is not None and side_cells_to_add[r][c][1] > 1:
+                                    side_cells_to_add[r][c] = (side_cells_to_add[r][c][0], side_cells_to_add[r][c][1] - 1)
+                    # If the row is not empty, add it
+                    else:
+                        side_cells_to_add.append(side.copy())
+                        content_cells_to_add.append(content)
+                        row_i += 1
+                split_contents.append(content_cells_to_add)
+                split_sides.append(side_cells_to_add)
+                i += w
+            return split_contents, split_sides
+        
+        def get_horizontal_lines(header_cells):
             """
                 Draws horizontal lines between table rows where it fits.
             """
-            line_strings = ["" for _ in range(len(table_rows))]
-            for i, r in enumerate(table_rows[:-2]):
+            line_strings = ["" for _ in range(len(header_cells))]
+            for i, r in enumerate(header_cells[:-2]):
                 index1 = 0
                 for s1, w1 in r:
                     index2 = 0
                     match = False
-                    for s2, w2 in table_rows[i+1]:
+                    for s2, w2 in header_cells[i+1]:
                         # If the two rows have matching multicolumns and one of them is empty, don't draw a horizontal line between them
                         if index2 == index1 and index2 + w2 == index1 + w1 and (s1 == '' or s2 == ''):
                             match = True
                         index2 += w2
                     if not match:
-                        line_strings[i] += "\\cline{" + str(index1 + 2) + "-" + str(index1 + w1 + 1) + "}"
+                        line_strings[i] += "\\cline{" + str(index1 + n_method_cols + 1) + "-" + str(index1 + w1 + n_method_cols) + "}"
                     index1 += w1
             # Before the metrics, add a complete horizontal line
-            line_strings[-2] = "\\cline{2-" + str(sum(w for _, w in table_rows[0])+1) + "}"
+            if len(line_strings) >= 2:
+                line_strings[-2] = "\\cline{"+str(n_method_cols+1)+"-" + str(sum(w for _, w in header_cells[0])+(n_method_cols)) + "}"
             return line_strings
         
         def render_header_row(row):
-            return "\t&" + "\t&".join(["\\multicolumn{"+ str(w) + "}{|c|}{" + s + "}" for (s, w) in row]) + "\\\\"
+            return f"\\multicolumn{{{n_method_cols}}}{{c}}{{}}\t&" + "\t&".join([f"\\multicolumn{{{w}}}{{|c|}}{{{s}}}" for (s,w) in row])
         
-        # Puts together the different parts of a table
-        def create_table_string(table_rows, score_string):
-            total_width = sum(w for _, w in table_rows[0])
-            columns_str = "c|"+"|".join(["c"] * total_width)+"|"
-
-            table_beginning = """
-\\begin{table}[h]
-    \\centering
-    \\begin{tabular}{"""+ columns_str +"}\\cline{2-"+str(total_width+1)+"}"
-                
-            table_end = """
-        \hline
-    \\end{tabular}""" + (("\n\\caption{Evaluation results on the " + table_rows[0][0][0] + " task.}") if generate_caption else "") + """
-\\end{table}"""
-            
-            line_strings = get_horizontal_lines(table_rows)
-            header_string = "\n".join(render_header_row(row) + line_strings[i] for i, row in enumerate(table_rows))
-            table_string = table_beginning + header_string + "\\hline\n" + score_string + "\\\\\n" + table_end
-            table_string = re.sub("_", "\_", table_string)
-
-            return table_string
-        
-        column_widths, total_cols = get_column_widths(data)
-    
-        table, scores, models = get_table_rows(data, column_widths)
-        table = table[remove_headers:]
-
-        # Split the table according to a natural subdivision in the data
-        if natural_split:
-            i = 0
-            # If an int, use the natural split of this row
-            if type(natural_split) == int:
-                i = natural_split
-            # Otherwise, choose the first row that has a split
-            else:
-                for j, row in enumerate(table):
-                    if len(row) > 1:
-                        i = j
-                        break
-            split_col = []
-            for _, w in table[i]:
-                if max_w is not None and max_w > 0:
-                    split_col.extend([max_w for _ in range(w // max_w)])
-                    if w % max_w != 0:
-                        split_col.append(w % max_w)
-                else:
-                    split_col.append(w)
-
-        else:
-            # If we don't split the table, this is done by splitting the table into itself
-            if max_w is None:
-                split_col = [total_cols]
-            # If max_w is an int, all tables should be of this width (except maybe the last one)
-            elif type(max_w) == int and max_w > 0:
-                if max_w > total_cols:
-                    split_col = [total_cols]
-                else:
-                    split_col = [max_w for _ in range(total_cols // max_w)]
-                    if total_cols % max_w != 0:
-                        split_col.append(total_cols % max_w)
-            # If max_w is a list of ints, it defines a custom table split
-            elif type(max_w) == list:
-                split_col = max_w
-            else:
-                raise TypeError("'max_w' has to be either None, an int or a list[int].")
-
-        split_tables = [[] for _ in range(len(split_col))]
-        for row in table:
-            split_rows = split_header_row(row, split_col)
-            for i, r in enumerate(split_rows):
-                # Only add the rows which are not empty after splitting
-                if not all(s == "" for s, _ in r):
-                    split_tables[i].append(r)
-                    # Each item in split_tables represents one subtable once the original table has been split
-
-        # If decimals is provided, round each score to the amount of decimals set
-        if decimals != None and type(decimals) == int:
-            for model_scores in scores:
-                if highlight_best is not False:
-                    if callable(highlight_best):
-                        better_than = highlight_best
-                    elif highlight_best == "min":
-                        better_than = lambda s1, s2 : s1 < s2
-                    else:
-                        better_than = lambda s1, s2 : s1 > s2
-                else:
-                    better_than = None
+        # Rounds scores to a number of decimals, if provided, and optionally sorts the score rows by model name.
+        def format_scores(d):
+            if not all (type(v) == dict for v in d.values()):
                 best_model = None
                 best_score = None
+                model_scores = d
                 for model, score in model_scores.items():
                     if score is None:
                         model_scores[model] = '--'
                     else:
                         try:
-                            model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
+                            # If decimals is provided, round each score to the amount of decimals set
+                            if decimals != None and type(decimals) == int:
+                                model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
+                            else:
+                                model_scores[model] = str(score)
                             if better_than is not None:
                                 if best_score is None or better_than(score, best_score):
                                     best_score = score
@@ -304,24 +257,130 @@ class Pipeline:
                             continue
                 if best_model is not None:
                     model_scores[best_model] = "\\textbf{" + model_scores[best_model] + "}"
-
-        scores_per_model = {model: [s.get(model, '--') for s in scores] for model in models}
+            else:
+                for v in d.values():
+                    format_scores(v)
         
-        if sort_models:
-            scores_per_model_items = sorted(scores_per_model.items(), key = lambda item : item[0])
+        def render_content_rows(side_rows, content_rows, n_content_cols):
+            score_string = []
+
+            def format_side_cell(c):
+                if c is None:
+                    return ""
+                if c[1] > 1:
+                    return "\\multirow{" + str(c[1]) + "}{*}{" + str(c[0]) + "}"
+                return str(c[0])
+
+            for r, (side_row, content_row) in enumerate(zip(side_rows, content_rows)):
+                side_cells = [format_side_cell(c) for c in side_row]
+                content_cells = [c[0] if c[0] is not None else "--" for c in content_row]
+                if r == 0:
+                    lines = ["\\hline"]
+                else:
+                    lines =  ["\\cline{"+str(i+1)+"-"+str(n_method_cols+n_content_cols)+"}" if c != "" else "" for i, c in enumerate(side_cells[:-1])]
+                row_string = "".join(lines) + "\t" + "\t&".join(side_cells + content_cells)
+                score_string.append(row_string)
+            return "\\\\\n".join(score_string)
+            
+        # Puts together the different parts of a table
+        def create_table_string(header_rows, side_rows, content_rows, n_content_cols):
+            columns_str = "|"+"|".join(["c"] * (n_method_cols+n_content_cols))+"|"
+
+            table_beginning = """
+\\begin{table}[h]
+    \\centering
+    \\begin{tabular}{"""+ columns_str +"}\\cline{"+str(n_method_cols+1)+"-"+str(n_content_cols+n_method_cols)+"}"
+                
+            table_end = """
+        \hline
+    \\end{tabular}""" + (("\n\\caption{Evaluation results on the " + header_rows[0][0][0] + " task.}") if generate_caption else "") + """
+\\end{table}"""
+            
+            line_strings = get_horizontal_lines(header_rows)
+            header_string = "".join(render_header_row(row) + "\\\\\n" + line_strings[i] for i, row in enumerate(header_rows))
+            score_string = render_content_rows(side_rows, content_rows, n_content_cols)            
+
+            table_string = table_beginning + header_string + score_string + "\\\\\n" + table_end
+            table_string = re.sub("_", "\_", table_string)
+
+            return table_string
+    
+        header_cells, scores_per_method = get_header_cells_and_scores(data)
+        header_cells = header_cells[remove_headers:]
+        n_content_cols = sum(w for _, w in header_cells[0])
+
+        # Split the table according to a natural subdivision in the data
+        if natural_split:
+            if header_cells == []:
+                logging.error("The table has to have headers to split it naturally.")
+                raise ValueError
+            i = 0
+            # If an int, use the natural split of this row
+            if type(natural_split) == int:
+                i = natural_split
+            # Otherwise, choose the first row that has a split
+            else:
+                for j, row in enumerate(header_cells):
+                    if len(row) > 1:
+                        i = j
+                        break
+            split_cols = []
+            for _, w in header_cells[i]:
+                if max_w is not None and max_w > 0:
+                    split_cols.extend([max_w for _ in range(w // max_w)])
+                    if w % max_w != 0:
+                        split_cols.append(w % max_w)
+                else:
+                    split_cols.append(w)
+
         else:
-            scores_per_model_items = scores_per_model.items()
+            # If we don't split the table, this is done by splitting the table into itself
+            if max_w is None:
+                split_cols = [n_content_cols]
+            # If max_w is an int, all tables should be of this width (except maybe the last one)
+            elif type(max_w) == int and max_w > 0:
+                if max_w > n_content_cols:
+                    split_cols = [n_content_cols]
+                else:
+                    split_cols = [max_w for _ in range(n_content_cols // max_w)]
+                    if n_content_cols % max_w != 0:
+                        split_cols.append(n_content_cols % max_w)
+            # If max_w is a list of ints, it defines a custom table split
+            elif type(max_w) == list:
+                split_cols = max_w
+            else:
+                raise TypeError("'max_w' has to be either None, an int or a list[int].")
 
-        score_strings = [[] for _ in range(len(split_col))]
-        i = 0
-        for j, w in enumerate(split_col):
-            for model, scores in scores_per_model_items:
-                if not remove_empty or not all(s=='--' for s in scores[i:i+w]):
-                    score_strings[j].append("\\multicolumn{1}{|c|}{" + model + "}" + "\t&" + "\t&".join(str(s) for s in scores[i:i+w]))
-            score_strings[j] = "\\\\".join(score_strings[j])
-            i += w
+        split_header_rows = [[] for _ in range(len(split_cols))]
 
-        table_string = "\n".join(create_table_string(split_tables[i], score_strings[i]) for i in range(len(split_tables)))
+        for row in header_cells:
+            split_rows = split_header_row(row, split_cols)
+            for i, r in enumerate(split_rows):
+                # Only add the rows which are not empty after splitting
+                if not all(s == "" for s, _ in r):
+                    split_header_rows[i].append(r)
+                    # Each item in split_tables represents one subtable once the original table has been split
+        
+        if highlight_best is not False:
+            if callable(highlight_best):
+                better_than = highlight_best
+            elif highlight_best == "min":
+                better_than = lambda s1, s2 : s1 < s2
+            else:
+                better_than = lambda s1, s2 : s1 > s2
+        else:
+            better_than = None
+
+        all_methods = dict()
+        for scores in scores_per_method:
+            format_scores(scores)
+            all_methods = deep_update(all_methods, scores)
+            
+        content_cells = get_content_cells(all_methods, scores_per_method)
+
+        split_content_rows, split_side_rows = split_content_and_side_cells([c[n_method_cols:] for c in content_cells], [c[:n_method_cols] for c in content_cells], split_cols)
+
+        table_string = "\n".join([create_table_string(split_header_rows[i], split_side_rows[i], split_content_rows[i], w) for i, w in enumerate(split_cols)])
 
         # Save the LaTeX string to a .tex file
         if save_path.endswith(".tex"):
@@ -648,7 +707,7 @@ class GCDPipeline(Pipeline):
             else:
                 model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
                 if hasattr(self.dataset, 'name'):
-                    scores_dict = {'GCD': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
+                    scores_dict = {'GCD': {self.dataset.name: {metric: {self.metric: {model_name: score}} for metric, score in scores.items()}}}
                     self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset'):
