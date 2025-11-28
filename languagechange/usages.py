@@ -125,12 +125,12 @@ class UsageDictionary(dict):
         self.clear()
         words = set(words)
         for fn in os.listdir(path):
-            match = re.findall(r'([a-zA-Z]*)_usages\.jsonl', fn)
+            match = re.findall(r'(.*)_usages\.jsonl', fn)
             if len(match) != 0:
-                lemma = match[0]
-                if lemma in words or len(words) == 0:
+                key = match[0]
+                if key in words or len(words) == 0:
                     with jsonlines.open(os.path.join(path, fn), 'r') as reader:
-                        self[lemma] = TargetUsageList(TargetUsage(**tu) for tu in reader)
+                        self[key] = TargetUsageList(TargetUsage(**tu) for tu in reader)
                         logging.info(f"Loaded usages from {os.path.join(path, fn)}")
         not_loaded_words = words.difference(set(self.keys()))
         if len(not_loaded_words) != 0:
