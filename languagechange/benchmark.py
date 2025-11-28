@@ -229,7 +229,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             if matches == []:
                 logging.error(f"Path does not exist: {os.path.join(self.home_path, f'subset{self.subset}','stats',self.config)}/stats_groupings.[ct]sv")
                 raise FileNotFoundError
-            with open(os.path.join(self.home_path, f'subset{self.subset}','stats',self.config,matches[0])) as f:
+            with open(matches[0]) as f:
                 for line in islice(f, 1, None):
                     line = line.strip('\n').split('\t')
                     word, binary, graded = line[0], line[11], line[14]
@@ -244,7 +244,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             if matches == []:
                 logging.error(f"Path does not exist: {self.home_path}/annotated_all.[ct]sv")
                 raise FileNotFoundError
-            with open(os.path.join(self.home_path, matches[0])) as f:
+            with open(matches[0]) as f:
                 for line in f:
                     line = line.strip('\n').split('\t')
                     word = line[0]
@@ -276,7 +276,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             if matches == []:
                 logging.error(f"Path does not exist: {os.path.join(self.home_path,f'subset{self.subset}','data',word)}/uses.(c|t)sv")
                 raise FileNotFoundError
-            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,matches[0])) as f:
+            with open(matches[0]) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -298,7 +298,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             if matches == []:
                 logging.error(f"Path does not exist: {os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word)}/uses.(c|t)sv")
                 raise FileNotFoundError
-            with open(os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word,matches[0])) as f:
+            with open(matches[0]) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -355,7 +355,7 @@ class DWUG(SemanticChangeEvaluationDataset):
 
         matches = list(Path(stats_path).glob('stats_groupings.[ct]sv'))
         if matches != []:
-            with open(os.path.join(stats_path, matches[0])) as f:
+            with open(matches[0]) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -369,7 +369,7 @@ class DWUG(SemanticChangeEvaluationDataset):
         if stats_path is not None:
             matches = list(Path(stats_path).glob('stats.[ct]sv'))
             if matches != []:
-                with open(os.path.join(stats_path,matches[0])) as f:
+                with open(matches[0]) as f:
                     keys = []
                     for j,line in enumerate(f):
                         line = line.replace('\n','').split('\t')
@@ -445,7 +445,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             logging.error(f"Did not find {os.path.join(self.home_path,'data',word)}/uses.(c|t)sv.")
             raise FileNotFoundError
         
-        with open(os.path.join(self.home_path,'data',word,matches[0])) as f:
+        with open(matches[0]) as f:
             keys = []
             for j,line in enumerate(f):
                 line = line.replace('\n','').split('\t')
@@ -548,7 +548,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             else:
                 clusters_path = os.path.join(self.home_path,'clusters',self.config)
                 matches = list(Path(clusters_path).glob(f'{word}.[ct]sv'))
-            with open(os.path.join(clusters_path, matches[0])) as f:
+            with open(matches[0]) as f:
                 for line in islice(f, 1, None):
                     line = line.replace('\n','').split('\t')
                     id, label = line
@@ -586,7 +586,7 @@ class DWUG(SemanticChangeEvaluationDataset):
         usages_by_key = {}
         matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
         try:
-            with open(os.path.join(self.home_path,'data',word,matches[0])) as f:
+            with open(matches[0]) as f:
                 for line in islice(f, 0, 1):
                     columns = line.replace('\n','').split('\t')
                     column_ids = {c : i for i,c in enumerate(columns)}
@@ -621,7 +621,7 @@ class DWUG(SemanticChangeEvaluationDataset):
         try:
             if self.dataset == "DWUG Sense":
                 matches = list(Path(os.path.join(self.home_path,"labels",word,self.config)).glob('labels_proximity.[ct]sv'))
-                with open(os.path.join(self.home_path,"labels",word,self.config,matches[0])) as f:
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
@@ -636,7 +636,7 @@ class DWUG(SemanticChangeEvaluationDataset):
                                 temp_labels[frozenset([id1,id2])].append(label)
             else:
                 matches = list(Path(os.path.join(self.home_path,"data",word)).glob('judgments.[ct]sv'))
-                with open(os.path.join(self.home_path,"data",word,matches[0])) as f:
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
@@ -726,11 +726,11 @@ class DWUG(SemanticChangeEvaluationDataset):
                 senses_path = os.path.join(self.home_path,'labels',word,self.config)
                 matches = list(Path(senses_path).glob('labels_senses.[ct]sv'))
             else:
-                senses_path = os.path.join(self.home_path,'clusters/opt')
+                senses_path = os.path.join(self.home_path,f'clusters/{self.config}')
                 matches = list(Path(senses_path).glob(f'{word}.[ct]sv'))
 
             try:
-                with open(os.path.join(senses_path, matches[0])) as f:
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}
@@ -749,7 +749,7 @@ class DWUG(SemanticChangeEvaluationDataset):
 
             try:
                 matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
-                with open(os.path.join(self.home_path,'data',word,matches[0])) as f:
+                with open(matches[0]) as f:
                     for line in islice(f, 0, 1):
                         columns = line.replace('\n','').split('\t')
                         column_ids = {c : i for i,c in enumerate(columns)}

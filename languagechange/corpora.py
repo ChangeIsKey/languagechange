@@ -521,45 +521,38 @@ class Corpus:
                             f.write(' '.join(line.tokens())+'\n') 
                     elif lemmas:
                         for line in corpus.lemmatize(lemmatizer, split_sentences=split_sentences, batch_size=batch_size):
-                            f.write(' '.join(line.lemmas())+'\n') 
+                            f.write(' '.join(line.lemmas())+'\n')
                     elif pos:
                         for line in corpus.pos_tagging(pos_tagger,split_sentences=split_sentences, batch_size=batch_size):
                             f.write(' '.join(line.pos_tags())+'\n')
                 elif save_format == 'vertical':
+
+                    def write_vertical_line(fields):
+                        fields = [f for f in fields if f is not None]
+                        for tup in zip(*fields):
+                            f.write('\t'.join(tup) + '\n')
+                        f.write('\n')
+
                     if lemmas:
                         if pos:
                             # tokens_lemmas_pos (with or without tokens)
                             for line in corpus.tokens_lemmas_pos_tags(tokenizer, tokens=tokens,split_sentences=split_sentences, batch_size=batch_size):
-                                if tokens:
-                                    for triple in zip(*(line.tokens(), line.lemmas(), line.pos_tags())):
-                                        f.write('\t'.join(triple)+'\n') 
-                                else:
-                                    for pair in zip(*(line.lemmas(), line.pos_tags())):
-                                        f.write('\t'.join(pair)+'\n')
-                                f.write('\n')
+                                write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
+    
                         else:
                             # lemmatize (with or without tokens)
-                            for line in corpus.lemmatize(tokenizer, tokenize=tokens,split_sentences=split_sentences, batch_size=batch_size):
-                                if tokens:
-                                    for pair in zip(*(line.tokens(), line.lemmas())):
-                                        f.write('\t'.join(pair)+'\n')
-                                else:
-                                    f.write('\n'.join(line.lemmas()))
-                                f.write('\n') 
+                            for line in corpus.lemmatize(lemmatizer, tokenize=tokens,split_sentences=split_sentences, batch_size=batch_size):
+                                write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
                     elif pos:
                         # pos_tagging (with or without tokens)
-                        for line in corpus.pos_tagging(tokenizer, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
-                            if tokens:
-                                for pair in zip(*(line.tokens(), line.pos_tags())):
-                                    f.write('\t'.join(pair)+'\n')
-                            else:
-                                f.write('\n'.join(line.pos_tags()))
-                            f.write('\n')
+                        for line in corpus.pos_tagging(pos_tagger, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
+                            write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
+
                     elif tokens:
                         # tokenize only
                         for line in corpus.tokenize(tokenizer,split_sentences=split_sentences, batch_size=batch_size):
-                            f.write('\n'.join(line.tokens())+'\n')
+                            write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
 
 class LinebyLineCorpus(Corpus):
@@ -845,7 +838,7 @@ class XMLCorpus(Corpus):
         field_separator = vertical_corpus.field_separator
         sentence_separator = vertical_corpus.sentence_separator
         # We need to make sure that the line features (token, lemma, pos, etc.) come in the same order as in the field_map in the vertical_corpus
-        sorted_field_names = [key for (key, value) in sorted(vertical_corpus.field_map.items(), key = lambda x : x[1])]
+        sorted_field_names = [key for (key, _) in sorted(vertical_corpus.field_map.items(), key = lambda x : x[1])]
         
         def get_line_feature(line, key):
             field_name_to_line_feature = {'token': line.tokens, 'lemma': line.lemmas, 'pos_tag': line.pos_tags}
