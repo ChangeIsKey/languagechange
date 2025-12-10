@@ -42,7 +42,12 @@ class Pipeline:
         if json_path != None:
             if os.path.exists(json_path):
                 with open(json_path, 'r+') as f:
-                    previous_results = json.load(f)
+                    try:
+                        previous_results = json.load(f)
+                    except json.JSONDecodeError as e:
+                        logging.info("Could not save the results to a JSON file due to the following error: ")
+                        logging.info(repr(e))
+                        return
                     results = deep_update(previous_results, results)
                     f.seek(0)
                     json.dump(results, f, indent=4)
@@ -50,7 +55,12 @@ class Pipeline:
                     logging.info(f'Evaluation results saved to {json_path}') 
             else:
                 with open(json_path, 'w') as f:
-                    json.dump(results, f, indent=4)
+                    try:
+                        json.dump(results, f, indent=4)
+                    except json.JSONDecodeError as e:
+                        logging.info("Could not save the results to a JSON file due to the following error: ")
+                        logging.info(repr(e))
+                        return
                     logging.info(f'Evaluation results saved to {json_path}')
         if latex_path != None:
             self.generate_latex_table(results, latex_path, decimals)
@@ -633,10 +643,12 @@ class GCDPipeline(Pipeline):
         self.metric = metric
         self.clustering = clustering
 
-    def evaluate(self, save = False, json_path = None, latex_path = None, decimals = None):
+    def evaluate(self, n_sampled_usages = 0, random_seed = None, save = False, json_path = None, latex_path = None, decimals = None):
         """
             Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
             Args:
+                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use all usages.
+                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed is used.
                 save (bool): Whether to save the results to json or LaTeX.
                 json_path (str): The path to save the results in JSON format. If None, the results are not saved.
                 latex_path (str): The path to save the results in LaTeX format. If None, no LaTeX table is generated.
@@ -674,6 +686,16 @@ class GCDPipeline(Pipeline):
                     target_usages_t1 = self.dataset.target_usages_t1[word]
                     target_usages_t2 = self.dataset.target_usages_t2[word]
 
+                def get_sampled_usages(target_usages, generator, n_samples):
+                    if n_samples < len(target_usages):
+                        return generator.choice(target_usages, size=n_samples, replace=False).tolist()
+                    return target_usages
+
+                if n_sampled_usages > 0:
+                    rng = np.random.default_rng(seed=random_seed)
+                    target_usages_t1 = get_sampled_usages(target_usages_t1, rng, n_sampled_usages)
+                    target_usages_t2 = get_sampled_usages(target_usages_t2, rng, n_sampled_usages)
+
                 if isinstance(self.usage_encoding, DefinitionGenerator):
                     encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1, encode_definitions='vectors')
                     encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2, encode_definitions='vectors')
@@ -707,7 +729,7 @@ class GCDPipeline(Pipeline):
             else:
                 model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
                 if hasattr(self.dataset, 'name'):
-                    scores_dict = {'GCD': {self.dataset.name: {metric: {self.metric: {model_name: score}} for metric, score in scores.items()}}}
+                    scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
                     self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset'):
@@ -719,7 +741,7 @@ class GCDPipeline(Pipeline):
                             d[str(getattr(self.dataset, param))] = {}
                             d = d[str(getattr(self.dataset, param))]
                     for metric, score in scores.items():
-                        d[metric] = {model_name: score}
+                        d[metric] = {type(self.metric).__name__: {model_name: score}}
                     scores_dict = {'GCD': dataset_info}
                     self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
