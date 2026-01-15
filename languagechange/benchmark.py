@@ -320,7 +320,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                         usages.append(DWUGUsage(**D))
                     else:
                         keys = line
-        return usages   
+        return usages
 
 
 class DWUG(SemanticChangeEvaluationDataset):
@@ -470,23 +470,26 @@ class DWUG(SemanticChangeEvaluationDataset):
                     keys = line
         return usages
 
-    def annotate_word(self, 
-            word, 
-            model, 
-            metric : str | Callable, 
-            n : int | str = "all",
-            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-            ):
+    def annotate_word(self,
+            word,
+            model,
+            metric: str | Callable,
+            n_judgments: int | str="all",
+            prompt_template = """Please tell me how similar the meaning of the word \'{target}\' 
+            is in the following example sentences: \n1. {usage_1}\n2. {usage_2}"""):
         """
             Compares all usages of the target word in question and uses a model to compute judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
             Args:
                 word (str): the target word to annotate.
                 model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to use to annotate the usages.
-                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two vectors. Supported string values are 'cosine', 'durel' and 'binary'. Alternatively, a function taking two vectors as input and returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
-                prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
+                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two 
+                    vectors. Supported string values are 'cosine', 'durel' and 'binary'. Alternatively, a function taking two vectors as input and 
+                    returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
+                prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. 
+                    The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
         """
-        def generate_index_pairs(N, n = "all"):
-            all_index_pairs = [(i, j) for i in range(N) for j in range(i+1,N)]
+        def generate_index_pairs(total, n = "all"):
+            all_index_pairs = [(i, j) for i in range(total) for j in range(i+1,total)]
             if n != "all":
                 assert n > 0, "Cannot randomly choose a negative amount of samples"
                 rng = np.random.default_rng()
@@ -502,7 +505,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             elif isinstance(model, DefinitionGenerator):
                 embeddings = model.generate_definitions(usages, encode_definitions = 'vectors')
             
-            if type(metric) == str:
+            if isinstance(metric, str):
                 if metric.lower() == 'cosine':
                     similarity_func = lambda e1, e2 : np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
                 elif metric.lower() == 'durel':
@@ -520,49 +523,50 @@ class DWUG(SemanticChangeEvaluationDataset):
                     return None
                 similarity_func = metric
 
-            index_pairs = generate_index_pairs(len(embeddings), n = n)
+            index_pairs = generate_index_pairs(len(embeddings), n = n_judgments)
                 
             for i, j in index_pairs:
                 id1, id2 = usages[i].identifier, usages[j].identifier
                 similarity_scores[frozenset([id1, id2])] = similarity_func(embeddings[i], embeddings[j])
-            """for i, emb1 in enumerate(embeddings):
-                id1 = usages[i].identifier
-                for j, emb2 in enumerate(embeddings[i+1:]):
-                    similarity = similarity_func(emb1, emb2)
-                    id2 = usages[i + j + 1].identifier
-                    similarity_scores[frozenset([id1, id2])] = similarity"""
 
         elif isinstance(model, PromptModel):
-            index_pairs = generate_index_pairs(len(usages), n = n)
+            index_pairs = generate_index_pairs(len(usages), n = n_judgments)
 
             for i, j in index_pairs:
                 u1, u2 = usages[i], usages[j]
                 id1, id2 = u1.identifier, u2.identifier
                 similarity_scores[frozenset([id1, id2])] = model.get_response([u1, u2], user_prompt_template = prompt_template)
-            """for i, usage1 in enumerate(usages):
-                id1 = usage1.identifier
-                for j, usage2 in enumerate(usages[i+1:]):
-                    id2 = usage2.identifier
-                    similarity = model.get_response([usage1, usage2], user_prompt_template = prompt_template)
-                    similarity_scores[frozenset([id1, id2])] = similarity"""
 
-        with open(os.path.join(self.home_path,'data',word,'judgments.csv'), 'w', newline='') as f:
+        judgments_f = os.path.join(self.home_path,'data',word,'judgments.csv')
+        with open(judgments_f, 'w', newline='') as f:
             writer = csv.writer(f, delimiter='\t')
             writer.writerow(['identifier1', 'identifier2', 'annotator', 'judgment', 'lemma'])
             for ids, similarity in similarity_scores.items():
                 ids = list(ids)
                 id1, id2 = ids[0], ids[1]
                 writer.writerow([id1, id2, type(model).__name__, similarity, word])
-            logging.info(f"Usages for {word} annotated by {type(model).__name__}.")
+            logging.info(f"Usages for {word} annotated by {type(model).__name__} and written to {judgments_f}.")
 
-    def annotate_all_words(self, model, metric : str | Callable = None):
+    def annotate_all(self, model, metric : str | Callable = None, n_judgments : int | str = "all",
+            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',):
         """
-            Annotates all target words in the dataset using the given model and metric (if applicable), and saves the judgments to data/word/judgments.csv.
+            Annotates all target words in the dataset using the given model and metric (if applicable), 
+            and saves the judgments to data/word/judgments.csv. Parameters as in self.annotate_word.
         """
         for word in self.target_words:
-            self.annotate_word(word, model, metric)
+            self.annotate_word(word, model, metric, n_judgments, prompt_template)
 
-    def cluster(self, word, plot = True, outfile = None, plot_id_labels = True):
+    def cluster(self,
+                word,
+                s=20,
+                max_attempts=2000,
+                max_iters=50000,
+                initial = [],
+                split_flag = True,
+                plot = True,
+                outfile = None,
+                plot_id_labels = True):
+
         def load_graph(judgments_f):
             G = nx.Graph()
             df = pd.read_csv(judgments_f, sep="\t")
@@ -583,7 +587,8 @@ class DWUG(SemanticChangeEvaluationDataset):
         transform_edge_weights(G, transformation = lambda w : w - 2.5)
 
         # Perform correlation clustering on the similarity graph
-        clustering = Clustering(CorrelationClustering())
+        clustering = Clustering(CorrelationClustering(s=s, max_attempts=max_attempts,
+        max_iters=max_iters, initial=initial, split_flag=split_flag))
         clustering_results = clustering.get_cluster_results(G)
         cluster_labels = clustering_results.labels
 
@@ -633,13 +638,27 @@ class DWUG(SemanticChangeEvaluationDataset):
             plt.show()
         plt.close()
 
-    def annotate_and_cluster(self, word, annotator, metric, plot = True, outfile = None, plot_id_labels = True):
-        self.annotate_word(word, annotator, metric)
-        self.cluster(word, plot = plot, outfile = outfile, plot_id_labels=plot_id_labels)
+    def annotate_and_cluster(self,
+            word,
+            annotator,
+            metric,
+            n_judgments : int | str = "all",
+            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            s = 20,
+            max_attempts = 2000,
+            max_iters = 50000,
+            initial = [],
+            split_flag = True, 
+            plot = True, 
+            outfile = None, 
+            plot_id_labels = True):
+        self.annotate_word(word, annotator, metric, n_judgments=n_judgments, prompt_template=prompt_template)
+        self.cluster(word, s=s, max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, plot=plot, outfile=outfile,
+        plot_id_labels=plot_id_labels)
 
-    def annotate_and_cluster_all(self, word, annotator, metric, plot = True, outfile = None, plot_id_labels = True):
+    def annotate_and_cluster_all(self, annotator, metric, **kwargs):
         for word in self.target_words:
-            self.annotate_and_cluster(word, annotator, metric, plot, outfile, plot_id_labels)
+            self.annotate_and_cluster(word, annotator, metric, **kwargs)
 
     def _get_outliers(self, word):
         """
@@ -974,14 +993,16 @@ class WiC(Benchmark):
                  version : str = None, 
                  language : str = None, 
                  linguality : str = None,
+                 subset : str = None,
                  name : str = None):
         self.data = {}
         self.dataset = dataset
         self.version = version
         self.language = language
         self.linguality = linguality
+        self.subset = subset
         self.target_words = set()
-        if name != None:
+        if name is not None:
             self.name = name
 
         # Get the dataset from the resource hub, or load a locally stored dataset from files
@@ -1382,13 +1403,15 @@ class WSD(Benchmark):
                  dataset : str = None, 
                  language : str = None, 
                  version : str = None,
+                 subset : str = None,
                  name : str = None):
         self.data = {}
         self.target_words = set()
         self.dataset = dataset
         self.version = version
         self.language = language
-        if name != None:
+        self.subset = subset
+        if name is not None:
             self.name = name
 
         # Loads from the resource hub or a local path containing the necessary files
@@ -1621,13 +1644,15 @@ class WSI(Benchmark):
                  dataset : str = None,
                  version : str = None,
                  language : str = None,
+                 subset : str = None,
                  name : str = None):
         self.data = {}
         self.dataset = dataset
         self.version = version
         self.language = language
+        self.subset = subset
         self.target_words = set()
-        if name != None:
+        if name is not None:
             self.name = name
         if wsi_data is not None:
             self.load_from_data(wsi_data)

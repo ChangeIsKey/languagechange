@@ -10,3 +10,9 @@ trankit
 openai
 langchain
 pydantic
+networkx
+scipy
+six
+joblib==1.2
+pandas
+mlrose-hiive
