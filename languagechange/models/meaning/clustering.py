@@ -2,6 +2,9 @@ import numpy as np
 from sklearn.cluster import AffinityPropagation
 from sklearn.base import ClusterMixin, BaseEstimator
 from sklearn.metrics.pairwise import euclidean_distances, cosine_similarity
+import networkx
+# TEMPORARY import, needs a proper installation from requirements.txt
+from correlation import cluster_correlation_search
 
 
 class ClusteringResults():
@@ -21,8 +24,8 @@ class Clustering():
     def __init__(self, algorithm):
         self.algorithm = algorithm
 
-    def get_cluster_results(self, embeddings:np.array):
-        self.labels = self.algorithm.fit_predict(embeddings)
+    def get_cluster_results(self, examples):
+        self.labels = self.algorithm.fit_predict(examples)
         return ClusteringResults(self.labels)
     
 # The class below is a modified version of the class in https://github.com/FrancescoPeriti/WiDiD/blob/main/src/cluster.py
@@ -160,7 +163,7 @@ class APosterioriaffinityPropagation(ClusterMixin, BaseEstimator):
                              for l, idx in zip(labels, exemplar_indices)])
         
     # This method is not in the priginal package by Francesco Periti
-    def fit_predict(self, embs): # embs is a list of embeddings
+    def fit_predict(self, embs : [np.array]): # embs is a list of embeddings
         for emb in embs:
             self.fit(emb)
         return self.labels_
@@ -370,4 +373,40 @@ class APosterioriaffinityPropagation(ClusterMixin, BaseEstimator):
                 tot += len(values)
         return tot
     
-    
+
+class CorrelationClustering():
+    def __init__(self, s = 10, max_attempts = 200, max_iters = 5000, initial = [], split_flag = True):
+        self.s = s
+        self.max_attempts = max_attempts
+        self.max_iters = max_iters
+        self.initial = initial
+        self.split_flag = split_flag
+
+    def classes_to_node2cluster(self, classes):
+        """
+        classes: list of sets, each set is a cluster of node IDs.
+        returns: dict node -> cluster_index
+        """
+        node2cluster = {}
+        for c_idx, cluster in enumerate(classes):
+            for node in cluster:
+                node2cluster[node] = c_idx
+        return node2cluster
+
+    def fit_predict(self, similarity_graph : networkx.classes.graph.Graph):
+        """
+            Args:
+                similarity_graph (networkx.classes.graph.Graph) : a graph where each node is the id of a usage and each edge is a similarity between two usages (>0 for positive edges and <0 for negative edges)
+        """
+        for init in range(5):
+            classes, _ = cluster_correlation_search(
+                similarity_graph, 
+                s=self.s,
+                max_attempts=self.max_attempts,
+                max_iters=self.max_iters,
+                initial=self.initial,
+                split_flag=self.split_flag
+            )
+        node2cluster = self.classes_to_node2cluster(classes)
+        labels = [node2cluster[n] for n in list(similarity_graph.nodes)]
+        return labels

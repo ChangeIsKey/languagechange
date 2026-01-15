@@ -5,6 +5,7 @@ from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
 from languagechange.utils import NumericalTime, LiteralTime
+from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
 import webbrowser
 import os
 import pickle
@@ -23,6 +24,11 @@ import lxml.etree as ET
 from typing import List, Dict, Union, Callable, Tuple
 import inspect
 from pathlib import Path
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+import matplotlib.cm
+import matplotlib.colors
 
 
 def purity(labels_true, cluster_labels):
@@ -464,7 +470,13 @@ class DWUG(SemanticChangeEvaluationDataset):
                     keys = line
         return usages
 
-    def annotate_word(self, word, model, metric : str | Callable, prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}'):
+    def annotate_word(self, 
+            word, 
+            model, 
+            metric : str | Callable, 
+            n : int | str = "all",
+            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            ):
         """
             Compares all usages of the target word in question and uses a model to compute judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
             Args:
@@ -473,6 +485,14 @@ class DWUG(SemanticChangeEvaluationDataset):
                 metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two vectors. Supported string values are 'cosine', 'durel' and 'binary'. Alternatively, a function taking two vectors as input and returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
                 prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
         """
+        def generate_index_pairs(N, n = "all"):
+            all_index_pairs = [(i, j) for i in range(N) for j in range(i+1,N)]
+            if n != "all":
+                assert n > 0, "Cannot randomly choose a negative amount of samples"
+                rng = np.random.default_rng()
+                return rng.choice(all_index_pairs, n, replace=False)
+            return all_index_pairs
+
         usages = self.get_word_usages(word)
         similarity_scores = {}
 
@@ -500,20 +520,31 @@ class DWUG(SemanticChangeEvaluationDataset):
                     return None
                 similarity_func = metric
 
-            for i, emb1 in enumerate(embeddings):
+            index_pairs = generate_index_pairs(len(embeddings), n = n)
+                
+            for i, j in index_pairs:
+                id1, id2 = usages[i].identifier, usages[j].identifier
+                similarity_scores[frozenset([id1, id2])] = similarity_func(embeddings[i], embeddings[j])
+            """for i, emb1 in enumerate(embeddings):
                 id1 = usages[i].identifier
                 for j, emb2 in enumerate(embeddings[i+1:]):
                     similarity = similarity_func(emb1, emb2)
                     id2 = usages[i + j + 1].identifier
-                    similarity_scores[frozenset([id1, id2])] = similarity
+                    similarity_scores[frozenset([id1, id2])] = similarity"""
 
         elif isinstance(model, PromptModel):
-            for i, usage1 in enumerate(usages):
+            index_pairs = generate_index_pairs(len(usages), n = n)
+
+            for i, j in index_pairs:
+                u1, u2 = usages[i], usages[j]
+                id1, id2 = u1.identifier, u2.identifier
+                similarity_scores[frozenset([id1, id2])] = model.get_response([u1, u2], user_prompt_template = prompt_template)
+            """for i, usage1 in enumerate(usages):
                 id1 = usage1.identifier
                 for j, usage2 in enumerate(usages[i+1:]):
                     id2 = usage2.identifier
                     similarity = model.get_response([usage1, usage2], user_prompt_template = prompt_template)
-                    similarity_scores[frozenset([id1, id2])] = similarity
+                    similarity_scores[frozenset([id1, id2])] = similarity"""
 
         with open(os.path.join(self.home_path,'data',word,'judgments.csv'), 'w', newline='') as f:
             writer = csv.writer(f, delimiter='\t')
@@ -530,6 +561,85 @@ class DWUG(SemanticChangeEvaluationDataset):
         """
         for word in self.target_words:
             self.annotate_word(word, model, metric)
+
+    def cluster(self, word, plot = True, outfile = None, plot_id_labels = True):
+        def load_graph(judgments_f):
+            G = nx.Graph()
+            df = pd.read_csv(judgments_f, sep="\t")
+            
+            for _, row in df.iterrows():
+                id1 = row["identifier1"]
+                id2 = row["identifier2"]
+                w = float(row["judgment"])
+                G.add_edge(id1, id2, weight=w)
+            return G
+
+        def transform_edge_weights(G, transformation = lambda x : x):
+            for (i,j) in G.edges():
+                G[i][j]['weight'] = transformation(G[i][j]['weight'])
+
+        # Load the judgments as a graph
+        G = load_graph(os.path.join(self.home_path,'data',word,'judgments.csv'))
+        transform_edge_weights(G, transformation = lambda w : w - 2.5)
+
+        # Perform correlation clustering on the similarity graph
+        clustering = Clustering(CorrelationClustering())
+        clustering_results = clustering.get_cluster_results(G)
+        cluster_labels = clustering_results.labels
+
+        # Write the clustering labels to the clusters file of the word
+        clusters_path = f"{self.home_path}/clusters/{self.config}/{word}.csv"
+        with open(clusters_path, "w") as f:
+            w = csv.writer(f, delimiter='\t')
+            w.writerow(["identifier", "cluster"])
+            for identifier, label in zip(G.nodes, cluster_labels):
+                w.writerow([identifier, label])
+        logging.info(f"Wrote cluster labels to {clusters_path}")
+
+        if plot:
+            self.plot_clustering(G, cluster_labels, outfile=outfile, plot_id_labels=plot_id_labels)
+
+        return G, cluster_labels
+
+    def plot_clustering(self, G, classes, outfile : str = None, plot_id_labels = True):
+        pos = nx.spring_layout(G, seed=42)
+
+        weights = [G[u][v]["weight"] for u, v in G.edges()]
+        edge_widths = [0.5 + 0.5 * abs(w) for w in weights]
+
+        plt.figure(figsize=(10, 8))
+        plt.axis("off")
+
+        # If classes are supplied, plot each node in a color corresponding to the class
+        if classes is not None:
+            cmap = plt.cm.turbo
+            norm = matplotlib.colors.Normalize(vmin=0, vmax=len(set(classes)))
+            discrete_cmap = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap).get_cmap()
+
+            nx.draw_networkx_nodes(G, pos, node_size=60, node_color=classes, cmap=discrete_cmap)
+        else:
+            nx.draw_networkx_nodes(G, pos, node_color="blue", node_size=60)
+
+        nx.draw_networkx_edges(G, pos, edge_color="grey", width=edge_widths)
+
+        if plot_id_labels:
+            nx.draw_networkx_labels(G, pos, font_size=8, font_color="black")
+
+        plt.tight_layout()
+        if outfile is not None:
+            plt.savefig(outfile, dpi=300)
+            logging.info(f"Plot saved to {outfile}.")
+        else:
+            plt.show()
+        plt.close()
+
+    def annotate_and_cluster(self, word, annotator, metric, plot = True, outfile = None, plot_id_labels = True):
+        self.annotate_word(word, annotator, metric)
+        self.cluster(word, plot = plot, outfile = outfile, plot_id_labels=plot_id_labels)
+
+    def annotate_and_cluster_all(self, word, annotator, metric, plot = True, outfile = None, plot_id_labels = True):
+        for word in self.target_words:
+            self.annotate_and_cluster(word, annotator, metric, plot, outfile, plot_id_labels)
 
     def _get_outliers(self, word):
         """
@@ -713,7 +823,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             judgments = self.get_word_annotations(word, only_between_groups=only_between_groups, remove_outliers=remove_outliers, exclude_non_judgments=exclude_non_judgments, transform_labels=transform_labels)
             data.extend(judgments.values())
 
-        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC' if self.dataset is not None else None, language=self.language, version=self.version)
+        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC' if self.dataset is not None else None, language=self.language, version=self.version, subset=self.subset)
         return wic
     
     def get_usages_and_senses(self, remove_outliers = True):
@@ -789,12 +899,12 @@ class DWUG(SemanticChangeEvaluationDataset):
         
     def cast_to_WSD(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsd = WSD(wsd_data=data, dataset=f'{self.dataset} WSD' if self.dataset is not None else None, language=self.language, version=self.version)
+        wsd = WSD(wsd_data=data, dataset=f'{self.dataset} WSD' if self.dataset is not None else None, language=self.language, version=self.version, subset=self.subset)
         return wsd
 
     def cast_to_WSI(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
-        wsi = WSI(wsi_data=data, dataset=f'{self.dataset} WSI' if self.dataset is not None else None, language=self.language, version=self.version)
+        wsi = WSI(wsi_data=data, dataset=f'{self.dataset} WSI' if self.dataset is not None else None, language=self.language, version=self.version, subset=self.subset)
         return wsi
     
     def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):
