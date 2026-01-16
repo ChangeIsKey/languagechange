@@ -473,7 +473,7 @@ class DWUG(SemanticChangeEvaluationDataset):
     def annotate_word(self,
             word,
             model,
-            metric: str | Callable,
+            metric: str | Callable = "durel",
             n_judgments: int | str="all",
             prompt_template = """Please tell me how similar the meaning of the word \'{target}\' 
             is in the following example sentences: \n1. {usage_1}\n2. {usage_2}"""):
@@ -547,7 +547,7 @@ class DWUG(SemanticChangeEvaluationDataset):
                 writer.writerow([id1, id2, type(model).__name__, similarity, word])
             logging.info(f"Usages for {word} annotated by {type(model).__name__} and written to {judgments_f}.")
 
-    def annotate_all(self, model, metric : str | Callable = None, n_judgments : int | str = "all",
+    def annotate_all(self, model, metric : str | Callable = "durel", n_judgments : int | str = "all",
             prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',):
         """
             Annotates all target words in the dataset using the given model and metric (if applicable), 
@@ -558,6 +558,7 @@ class DWUG(SemanticChangeEvaluationDataset):
 
     def cluster(self,
                 word,
+                edge_weight_transformation = lambda w : w - 2.5,
                 s=20,
                 max_attempts=2000,
                 max_iters=50000,
@@ -578,13 +579,13 @@ class DWUG(SemanticChangeEvaluationDataset):
                 G.add_edge(id1, id2, weight=w)
             return G
 
-        def transform_edge_weights(G, transformation = lambda x : x):
+        def transform_edge_weights(G, transformation):
             for (i,j) in G.edges():
                 G[i][j]['weight'] = transformation(G[i][j]['weight'])
 
         # Load the judgments as a graph
         G = load_graph(os.path.join(self.home_path,'data',word,'judgments.csv'))
-        transform_edge_weights(G, transformation = lambda w : w - 2.5)
+        transform_edge_weights(G, transformation = edge_weight_transformation)
 
         # Perform correlation clustering on the similarity graph
         clustering = Clustering(CorrelationClustering(s=s, max_attempts=max_attempts,
@@ -641,9 +642,10 @@ class DWUG(SemanticChangeEvaluationDataset):
     def annotate_and_cluster(self,
             word,
             annotator,
-            metric,
+            metric = "durel",
             n_judgments : int | str = "all",
             prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            edge_weight_transformation = lambda w : w - 2.5,
             s = 20,
             max_attempts = 2000,
             max_iters = 50000,
@@ -652,13 +654,13 @@ class DWUG(SemanticChangeEvaluationDataset):
             plot = True, 
             outfile = None, 
             plot_id_labels = True):
-        self.annotate_word(word, annotator, metric, n_judgments=n_judgments, prompt_template=prompt_template)
-        self.cluster(word, s=s, max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, plot=plot, outfile=outfile,
+        self.annotate_word(word, annotator, metric=metric, n_judgments=n_judgments, prompt_template=prompt_template)
+        self.cluster(word, edge_weight_transformation=edge_weight_transformation, s=s, max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, plot=plot, outfile=outfile,
         plot_id_labels=plot_id_labels)
 
-    def annotate_and_cluster_all(self, annotator, metric, **kwargs):
+    def annotate_and_cluster_all(self, annotator, **kwargs):
         for word in self.target_words:
-            self.annotate_and_cluster(word, annotator, metric, **kwargs)
+            self.annotate_and_cluster(word, annotator, **kwargs)
 
     def _get_outliers(self, word):
         """
