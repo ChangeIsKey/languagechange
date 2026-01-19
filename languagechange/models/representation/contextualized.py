@@ -318,7 +318,7 @@ class BERT(ContextualizedModel):
         logger.info("Processing input tokens")
         max_seq_len = self._tokenizer.model_max_length
 
-        input_ids_ = self._tokenizer.convert_tokens_to_ids(tokens)
+        input_ids_ = self._tokenizer.convert_tokens_to_ids(tokens[:max_seq_len])
         attention_mask_ = [1] * len(input_ids_)
 
         offset_len = max_seq_len - len(input_ids_)
