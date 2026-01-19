@@ -5,6 +5,7 @@ import os
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
+from jsonschema import ValidationError
 import logging
 import trankit
 
@@ -18,76 +19,105 @@ class SCDURel(BaseModel):
 
 
 class PromptModel:
-    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", language : str = None, lemmatize = False, **kwargs):
-        self.model_name = model_name
+    def __init__(self, model_name_or_path : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", language : str = None, lemmatize = False, **kwargs):
+        if os.path.exists(model_name_or_path) and model_name_or_path.endswith(".gguf"):
+            # Load a local model using Llama cpp
+            try:
+                # pip install -qU langchain-community llama-cpp-python
+                from langchain_community.chat_models import ChatLlamaCpp
+                llm = ChatLlamaCpp(
+                    model_path=model_name_or_path,
+                    n_gpu_layers=kwargs.get("n_gpu_layers", -1),
+                    n_batch=kwargs.get("n_batch", 2048),
+                    n_ctx=kwargs.get("n_ctx", 0),
+                    n_threads=kwargs.get("n_threads", -1),
+                    max_tokens=kwargs.get("max_tokens", 512),
+                    temperature=kwargs.get("temperature", 0.0),
+                    top_k=kwargs.get("top_k", 40),
+                    top_p=kwargs.get("top_p", 0.95),
+                    min_p=kwargs.get("min_p", 0.05),
+                    penalty_repeat=kwargs.get("penalty_repeat", 1.00),
+                    penalty_last_n=kwargs.get("penalty_last_n", 64),
+                    model_kwargs=kwargs.get("model_kwargs", {}), # should be {"chat_format": "llama-3"} for Llama3
+                    verbose=kwargs.get("verbose", False),
+                )
+                self.model_name = os.path.basename(model_name_or_path).strip(".gguf")
+            except ValidationError as e:
+                logging.error(f"Could not load a local model from {model_name_or_path}.")
+                raise e
+
+        else:
+            # Use the Langchain API
+            self.model_name = model_name
+
+            os.environ["LANGSMITH_TRACING"] = "true"
+            
+            # The keys can either be passed as arguments, stored as an environment variable or put in manually
+            if langsmith_key != None:
+                os.environ["LANGSMITH_API_KEY"] = langsmith_key
+            elif not os.environ.get("LANGSMITH_API_KEY"):
+                os.environ["LANGSMITH_API_KEY"] = getpass.getpass("Enter API key for LangSmith: ")
+
+            if provider_key_name is None:
+                provider_key_names = {"openai":"OPENAI_API_KEY",
+                                    "anthropic":"ANTHROPIC_API_KEY",
+                                    "azure":"AZURE_OPENAI_API_KEY",
+                                    "groq":"GROQ_API_KEY",
+                                    "cohere":"COHERE_API_KEY",
+                                    "nvidia":"NVIDIA_API_KEY",
+                                    "fireworks":"FIREWORKS_API_KEY",
+                                    "mistralai":"MISTRAL_API_KEY",
+                                    "together":"TOGETHER_API_KEY",
+                                    "ibm":"WATSONX_APIKEY",
+                                    "databricks":"DATABRICKS_TOKEN",
+                                    "xai":"XAI_API_KEY"}
+                if model_provider in provider_key_names.keys():
+                    provider_key_name = provider_key_names[model_provider]
+                    
+            if provider_key != None:
+                os.environ[provider_key_name] = provider_key
+            elif provider_key_name != None and not os.environ.get(provider_key_name):
+                os.environ[provider_key_name] = getpass.getpass(f"Enter API key for {model_provider}: ")
+
+            # special cases
+            if model_provider == "azure":
+                # pip install -qU "langchain[openai]"
+                from langchain_openai import AzureChatOpenAI
+                llm = AzureChatOpenAI(
+                    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+                    azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
+                    openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+                )
+
+            elif model_provider == "ibm":
+                if 'url' in kwargs and 'project_id' in kwargs:
+                    # pip install -qU "langchain-ibm"
+                    from langchain_ibm import ChatWatsonx
+                    
+                    llm = ChatWatsonx(model_id = model_name,
+                                url=kwargs.get('url'),
+                                project_id=kwargs.get('project_id')
+                                )
+                else:
+                    raise Exception("Pass 'url' and 'project_id' to initialize a ChatWatsonx model.")
+                
+            elif model_provider == "databricks":
+                if 'databricks_host_url' in kwargs:
+                    os.environ["DATABRICKS_HOST"] = kwargs.get('databricks_host_url')
+                else:
+                    raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
+                # pip install -qU "databricks-langchain"
+                from databricks_langchain import ChatDatabricks
+                llm = ChatDatabricks(endpoint=model_name)
+            else:
+                try:
+                    llm = init_chat_model(model_name, model_provider=model_provider)
+                except:
+                    logging.error("Could not initialize chat model.")
+                    raise Exception
+        
         self.name = "PromptModel_" + self.model_name
         self.language = language
-
-        os.environ["LANGSMITH_TRACING"] = "true"
-        
-        # The keys can either be passed as arguments, stored as an environment variable or put in manually
-        if langsmith_key != None:
-            os.environ["LANGSMITH_API_KEY"] = langsmith_key
-        elif not os.environ.get("LANGSMITH_API_KEY"):
-            os.environ["LANGSMITH_API_KEY"] = getpass.getpass("Enter API key for LangSmith: ")
-
-        if provider_key_name is None:
-            provider_key_names = {"openai":"OPENAI_API_KEY",
-                                 "anthropic":"ANTHROPIC_API_KEY",
-                                 "azure":"AZURE_OPENAI_API_KEY",
-                                 "groq":"GROQ_API_KEY",
-                                 "cohere":"COHERE_API_KEY",
-                                 "nvidia":"NVIDIA_API_KEY",
-                                 "fireworks":"FIREWORKS_API_KEY",
-                                 "mistralai":"MISTRAL_API_KEY",
-                                 "together":"TOGETHER_API_KEY",
-                                 "ibm":"WATSONX_APIKEY",
-                                 "databricks":"DATABRICKS_TOKEN",
-                                 "xai":"XAI_API_KEY"}
-            if model_provider in provider_key_names.keys():
-                provider_key_name = provider_key_names[model_provider]
-                
-        if provider_key != None:
-            os.environ[provider_key_name] = provider_key
-        elif provider_key_name != None and not os.environ.get(provider_key_name):
-            os.environ[provider_key_name] = getpass.getpass(f"Enter API key for {model_provider}: ")
-
-        # special cases
-        if model_provider == "azure":
-            # pip install -qU "langchain[openai]"
-            from langchain_openai import AzureChatOpenAI
-            llm = AzureChatOpenAI(
-                azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-                azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
-                openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
-            )
-
-        elif model_provider == "ibm":
-            if 'url' in kwargs and 'project_id' in kwargs:
-                # pip install -qU "langchain-ibm"
-                from langchain_ibm import ChatWatsonx
-                
-                llm = ChatWatsonx(model_id = model_name,
-                              url=kwargs.get('url'),
-                              project_id=kwargs.get('project_id')
-                              )
-            else:
-                raise Exception("Pass 'url' and 'project_id' to initialize a ChatWatsonx model.")
-            
-        elif model_provider == "databricks":
-            if 'databricks_host_url' in kwargs:
-                os.environ["DATABRICKS_HOST"] = kwargs.get('databricks_host_url')
-            else:
-                raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
-            # pip install -qU "databricks-langchain"
-            from databricks_langchain import ChatDatabricks
-            llm = ChatDatabricks(endpoint=model_name)
-        else:
-            try:
-                llm = init_chat_model(model_name, model_provider=model_provider)
-            except:
-                logging.error("Could not initialize chat model.")
-                raise Exception
 
         if not isinstance(structure,str) and issubclass(structure, BaseModel):
             if 'change' in structure.model_fields:

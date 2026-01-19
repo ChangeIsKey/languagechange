@@ -13,6 +13,7 @@ import logging
 import inspect
 import os
 import re
+import csv
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -63,9 +64,21 @@ class Pipeline:
                         return
                     logging.info(f'Evaluation results saved to {json_path}')
         if latex_path != None:
-            self.generate_latex_table(results, latex_path, decimals)
+            self.generate_table(results, latex_path, decimals)
                 
-    def generate_latex_table(self, data, save_path, decimals=None, remove_headers=0, max_w=None, natural_split=False, remove_empty=False, sort_models=False, generate_caption=False, highlight_best=False, n_method_cols=1):
+    def generate_table(self, 
+                            data, 
+                            save_path,
+                            save_format="tex", 
+                            decimals=None, 
+                            remove_headers=0, 
+                            max_w=None, 
+                            natural_split=False, 
+                            remove_empty=False, 
+                            sort_models=False, 
+                            generate_caption=False, 
+                            highlight_best=False, 
+                            n_method_cols=1):
         """
             Generates one or more tables of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
             Args:
@@ -242,6 +255,12 @@ class Pipeline:
         
         def render_header_row(row):
             return f"\\multicolumn{{{n_method_cols}}}{{c}}{{}}\t&" + "\t&".join([f"\\multicolumn{{{w}}}{{|c|}}{{{s}}}" for (s,w) in row])
+
+        def render_header_row_tsv(row):
+            r = [""] * n_method_cols
+            for (s,w) in row:
+                r.extend([s] + [""] * (w - 1))
+            return r
         
         # Rounds scores to a number of decimals, if provided, and optionally sorts the score rows by model name.
         def format_scores(d):
@@ -265,8 +284,8 @@ class Pipeline:
                                     best_model = model
                         except (ValueError, TypeError):
                             continue
-                if best_model is not None:
-                    model_scores[best_model] = "\\textbf{" + model_scores[best_model] + "}"
+                if best_model is not None and save_format == "tex":
+                    model_scores[best_model] = ("\\textbf{" + model_scores[best_model] + "}")
             else:
                 for v in d.values():
                     format_scores(v)
@@ -282,7 +301,7 @@ class Pipeline:
                 return str(c[0])
 
             for r, (side_row, content_row) in enumerate(zip(side_rows, content_rows)):
-                side_cells = [format_side_cell(c) for c in side_row]
+                side_cells = list(map(format_side_cell, side_row))
                 content_cells = [c[0] if c[0] is not None else "--" for c in content_row]
                 if r == 0:
                     lines = ["\\hline"]
@@ -291,6 +310,21 @@ class Pipeline:
                 row_string = "".join(lines) + "\t" + "\t&".join(side_cells + content_cells)
                 score_string.append(row_string)
             return "\\\\\n".join(score_string)
+
+        def render_content_rows_tsv(side_rows, content_rows, n_content_cols):
+            score_string = []
+
+            def format_side_cell(c):
+                if c is None:
+                    return ""
+                return str(c[0])
+
+            for r, (side_row, content_row) in enumerate(zip(side_rows, content_rows)):
+                side_cells = list(map(format_side_cell, side_row))
+                content_cells = [c[0] if c[0] is not None else "--" for c in content_row]
+                row_string = side_cells + content_cells
+                score_string.append(row_string)
+            return score_string
             
         # Puts together the different parts of a table
         def create_table_string(header_rows, side_rows, content_rows, n_content_cols):
@@ -314,6 +348,11 @@ class Pipeline:
             table_string = re.sub("_", "\_", table_string)
 
             return table_string
+
+        def create_table_string_tsv(header_rows, side_rows, content_rows, n_content_cols):
+            header_string = list(map(render_header_row_tsv, header_rows))
+            score_string = render_content_rows_tsv(side_rows, content_rows, n_content_cols)
+            return header_string + score_string
     
         header_cells, scores_per_method = get_header_cells_and_scores(data)
         header_cells = header_cells[remove_headers:]
@@ -324,24 +363,20 @@ class Pipeline:
             if header_cells == []:
                 logging.error("The table has to have headers to split it naturally.")
                 raise ValueError
-            i = 0
             # If an int, use the natural split of this row
             if type(natural_split) == int:
                 i = natural_split
             # Otherwise, choose the first row that has a split
             else:
-                for j, row in enumerate(header_cells):
-                    if len(row) > 1:
-                        i = j
-                        break
-            split_cols = []
-            for _, w in header_cells[i]:
-                if max_w is not None and max_w > 0:
+                i = next((j for j, row in enumerate(header_cells) if len(row) > 1), 0)
+            if max_w is not None and max_w > 0:
+                split_cols = []
+                for _, w in header_cells[i]:
                     split_cols.extend([max_w for _ in range(w // max_w)])
                     if w % max_w != 0:
                         split_cols.append(w % max_w)
-                else:
-                    split_cols.append(w)
+            else:
+                split_cols = [w for _, w in header_cells[i]]
 
         else:
             # If we don't split the table, this is done by splitting the table into itself
@@ -359,7 +394,7 @@ class Pipeline:
             elif type(max_w) == list:
                 split_cols = max_w
             else:
-                raise TypeError("'max_w' has to be either None, an int or a list[int].")
+                raise TypeError("'max_w' has to be either None, an int > 0 or a list[int].")
 
         split_header_rows = [[] for _ in range(len(split_cols))]
 
@@ -390,14 +425,22 @@ class Pipeline:
 
         split_content_rows, split_side_rows = split_content_and_side_cells([c[n_method_cols:] for c in content_cells], [c[:n_method_cols] for c in content_cells], split_cols)
 
-        table_string = "\n".join([create_table_string(split_header_rows[i], split_side_rows[i], split_content_rows[i], w) for i, w in enumerate(split_cols)])
+        if save_format == "tex":
+            table_string = "\n".join([create_table_string(split_header_rows[i], split_side_rows[i], split_content_rows[i], split_cols[i]) for i in range(len(split_cols))])
 
-        # Save the LaTeX string to a .tex file
-        if save_path.endswith(".tex"):
-            with open(save_path,'w+') as f:
-                f.write(table_string)
-        else:
-            raise Exception("The file needs to end in .tex")
+            # Save the LaTeX string to a .tex file
+            if save_path.endswith(".tex"):
+                with open(save_path,'w+') as f:
+                    f.write(table_string)
+            else:
+                raise Exception("The file needs to end in .tex")
+        elif save_format == "tsv":
+            with open(save_path, 'w', newline = "") as f:
+                writer = csv.writer(f, delimiter="\t")
+                for i in range(len(split_cols)):
+                    tsv_content = create_table_string_tsv(split_header_rows[i], split_side_rows[i], split_content_rows[i], split_cols[i])
+                    writer.writerows(tsv_content + [])
+        logging.info(f"Wrote results to {save_path}.")
 
 
 class WSIPipeline(Pipeline):
@@ -459,7 +502,7 @@ class WSIPipeline(Pipeline):
                     self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
-                    parameters = ['dataset', 'language', 'version']
+                    parameters = ['dataset', 'language', 'version', 'subset']
                     dataset_info = {}
                     d = dataset_info
                     for param in parameters:
@@ -597,7 +640,7 @@ class WiCPipeline(Pipeline):
                     self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
-                    parameters = ['dataset', 'version', 'linguality', 'language']
+                    parameters = ['dataset', 'language', 'version', 'linguality', 'subset']
                     dataset_info = {}
                     d = dataset_info
                     for param in parameters:
