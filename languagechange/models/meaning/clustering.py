@@ -384,6 +384,19 @@ class APosterioriaffinityPropagation(ClusterMixin, BaseEstimator):
                 tot += len(values)
         return tot
     
+""" 
+The CorrelationClustering and Loss classes below use code from 
+https://github.com/Garrafao/correlation_clustering/blob/main/src/correlation.py
+
+Corresponding papers / theses:
+
+Dominik Schlechtweg, Nina Tahmasebi, Simon Hengchen, Haim Dubossarsky, Barbara McGillivray. 2021. 
+DWUG: A large Resource of Diachronic Word Usage Graphs in Four Languages. 
+In Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing.
+
+Dominik Schlechtweg. 2023. Human and Computational Measurement of Lexical Semantic Change. 
+PhD thesis. University of Stuttgart.
+"""
 
 class CorrelationClustering():
     def __init__(self, s = 10, max_attempts = 200, max_iters = 5000, initial = [], split_flag = True):
@@ -396,7 +409,9 @@ class CorrelationClustering():
     def fit_predict(self, similarity_graph : nx.classes.graph.Graph):
         """
             Args:
-                similarity_graph (networkx.classes.graph.Graph) : a graph where each node is the id of a usage and each edge is a similarity between two usages (>0 for positive edges and <0 for negative edges)
+                similarity_graph (networkx.classes.graph.Graph) : a graph where each node is the id 
+                    of a usage and each edge is a similarity between two usages (>0 for positive 
+                    edges and <0 for negative edges)
         """
         for init in range(5):
             classes, _ = self.cluster_correlation_search(
@@ -422,7 +437,6 @@ class CorrelationClustering():
                 node2cluster[node] = c_idx
         return node2cluster
 
-    # Code below from Garrafao/cluster_correlation_search
     def cluster_correlation_search(self, G, s = 10, max_attempts = 200, max_iters = 5000, initial = [], split_flag = True):
         """
         Apply correlation clustering. Assumes that negative edges have weights < 0, and positive edges have weights >= 0, that edges with nan have been removed and that weights are stored under edge attribute G[i][j]['weight'].

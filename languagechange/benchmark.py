@@ -558,15 +558,39 @@ class DWUG(SemanticChangeEvaluationDataset):
 
     def cluster(self,
                 word,
-                edge_weight_transformation = lambda w : w - 2.5,
+                edge_weight_transformation=lambda w : w - 2.5,
                 s=20,
                 max_attempts=2000,
                 max_iters=50000,
-                initial = [],
-                split_flag = True,
-                plot = True,
-                outfile = None,
-                plot_id_labels = True):
+                initial=[],
+                split_flag=True,
+                plot=True,
+                save_to_file=False,
+                outfile=None,
+                plot_id_labels=False,
+                plot_cluster_labels=False):
+        """
+            Performs correlation clustering (see languagechange.models.meaning.clustering.CorrelationClustering) 
+            on usages for the word specified. The resulted clustering labels are written to
+            {self.home_path}/clusters/{self.config}/{word}.csv. Optionally, the clusters are plotted.
+
+            Args:
+                word (str): the target word to cluster for
+                edge_weight_transformation (Callable, default=lambda w : w - 2.5): a function that 
+                    transforms the edge weights of the graph (corresponding to similarity judgments) 
+                    before clustering, in order to form positive and negative weights. By default, the 
+                    DURel scale is assumed, and 2.5 is subtracted from each weight.
+                s (int): see languagechange.models.meaning.clustering.CorrelationClustering
+                max_attempts (int): see languagechange.models.meaning.clustering.CorrelationClustering
+                max_iters (int): see languagechange.models.meaning.clustering.CorrelationClustering
+                initial (List[Set[int]]): see languagechange.models.meaning.clustering.CorrelationClustering
+                split_flag (bool): see languagechange.models.meaning.clustering.CorrelationClustering
+                plot (bool): whether to plot the clustering or not
+                save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
+                outfile (Union[str, NoneType], default=None): if not None and save_to_file=True, saves the file to the string specified
+                plot_id_labels (bool, default=False): whether to plot the ids next to the nodes they belong to
+                plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster classes
+        """
 
         def load_graph(judgments_f):
             G = nx.Graph()
@@ -603,36 +627,60 @@ class DWUG(SemanticChangeEvaluationDataset):
         logging.info(f"Wrote cluster labels to {clusters_path}")
 
         if plot:
-            self.plot_clustering(G, cluster_labels, outfile=outfile, plot_id_labels=plot_id_labels)
+            if outfile is None:
+                outfile = f"{word}.png"
+            self.plot_clustering(G, cluster_labels, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels, plot_cluster_labels=plot_cluster_labels)
 
         return G, cluster_labels
 
-    def plot_clustering(self, G, classes, outfile : str = None, plot_id_labels = True):
+    def plot_clustering(self, G, classes, save_to_file=False, outfile : str=None, plot_id_labels=False, plot_cluster_labels=False):
+        """
+            Plots the nodes corresponding to usages and edges corresponding to judgments.
+            If classes are provided, nodes are colored according to their respective class.
+            Args:
+                G (networkx.classes.graph.Graph): a networkx graph containing usage ids and similarity scores between them
+                classes (List[int]): a list of classes (labels), each entry corresponding to the id in G.nodes
+                save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
+                outfile (Union[str, NoneType], default=None): if not None and save_to_file=True, saves the file to the string specified
+                plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
+                plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster classes
+        """
         pos = nx.spring_layout(G, seed=42)
 
         weights = [G[u][v]["weight"] for u, v in G.edges()]
-        edge_widths = [0.5 + 0.5 * abs(w) for w in weights]
+
+        min_w, max_w = min(weights), max(weights)
 
         plt.figure(figsize=(10, 8))
         plt.axis("off")
 
+        # More nodes leads to smaller node size
+        node_size = max(min(12000 / (len(G.nodes) + 60), 200), 50)
+        edge_width = max(min(100 / (len(G.nodes) + 20), 5), 0.5)
+
         # If classes are supplied, plot each node in a color corresponding to the class
         if classes is not None:
+            unique_classes = set(classes)
             cmap = plt.cm.turbo
-            norm = matplotlib.colors.Normalize(vmin=0, vmax=len(set(classes)))
+            norm = matplotlib.colors.Normalize(vmin=0, vmax=len(unique_classes))
             discrete_cmap = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap).get_cmap()
 
-            nx.draw_networkx_nodes(G, pos, node_size=60, node_color=classes, cmap=discrete_cmap)
-        else:
-            nx.draw_networkx_nodes(G, pos, node_color="blue", node_size=60)
+            nx.draw_networkx_nodes(G, pos, node_size=node_size, node_color=classes, cmap=discrete_cmap)
 
-        nx.draw_networkx_edges(G, pos, edge_color="grey", width=edge_widths)
+            if plot_cluster_labels:
+                for v in unique_classes:
+                    plt.scatter([],[], c=discrete_cmap(v/len(unique_classes)), label='Cluster {}'.format(v))
+                plt.legend()
+        else:
+            nx.draw_networkx_nodes(G, pos, node_color="blue", node_size=node_size)
+
+        nx.draw_networkx_edges(G, pos, edge_color=weights, edge_cmap=plt.cm.Greys, edge_vmin=min_w - (max_w - min_w) * 0.2, edge_vmax=max_w, width=edge_width)
 
         if plot_id_labels:
             nx.draw_networkx_labels(G, pos, font_size=8, font_color="black")
 
         plt.tight_layout()
-        if outfile is not None:
+        if save_to_file and outfile is not None:
             plt.savefig(outfile, dpi=300)
             logging.info(f"Plot saved to {outfile}.")
         else:
@@ -642,25 +690,42 @@ class DWUG(SemanticChangeEvaluationDataset):
     def annotate_and_cluster(self,
             word,
             annotator,
-            metric = "durel",
-            n_judgments : int | str = "all",
-            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-            edge_weight_transformation = lambda w : w - 2.5,
-            s = 20,
-            max_attempts = 2000,
-            max_iters = 50000,
-            initial = [],
-            split_flag = True, 
-            plot = True, 
-            outfile = None, 
-            plot_id_labels = True):
+            metric="durel",
+            n_judgments : int | str="all",
+            prompt_template='Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            edge_weight_transformation=lambda w : w - 2.5,
+            s=20,
+            max_attempts=2000,
+            max_iters=50000,
+            initial=[],
+            split_flag=True,
+            plot=True,
+            save_to_file=False,
+            outfile=None,
+            plot_id_labels=False,
+            plot_cluster_labels=False):
+        """
+            Annotates and clusters for the word specified. Arguments as in self.annotate_word 
+            and self.cluster.
+        """
         self.annotate_word(word, annotator, metric=metric, n_judgments=n_judgments, prompt_template=prompt_template)
-        self.cluster(word, edge_weight_transformation=edge_weight_transformation, s=s, max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, plot=plot, outfile=outfile,
-        plot_id_labels=plot_id_labels)
+        self.cluster(word, edge_weight_transformation=edge_weight_transformation, s=s, 
+            max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, 
+            plot=plot, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels)
 
-    def annotate_and_cluster_all(self, annotator, **kwargs):
-        for word in self.target_words:
-            self.annotate_and_cluster(word, annotator, **kwargs)
+    def annotate_and_cluster_all(self, annotator, outfiles : List[str] = None, **kwargs):
+        """
+            Annotates and clusters all words. All arguments except outfiles as in 
+            self.annotate_word and self.cluster.
+            Args:
+                annotator: see self.annotate_word
+                outfiles (List[str]): a list of outfiles to save the figure, in the case of 
+                    plotting.
+        """
+        if outfiles is None:
+            outfiles = [None] * len(self.target_words)
+        for word, outfile in zip(self.target_words, outfiles):
+            self.annotate_and_cluster(word, annotator, outfile=outfile, **kwargs)
 
     def _get_outliers(self, word):
         """
@@ -682,10 +747,10 @@ class DWUG(SemanticChangeEvaluationDataset):
             with open(matches[0]) as f:
                 for line in islice(f, 1, None):
                     line = line.replace('\n','').split('\t')
-                    id, label = line
+                    identifier, label = line
                     try:
                         if int(label) == -1:
-                            outliers.add(id)
+                            outliers.add(identifier)
                     except ValueError:
                         continue
         except Exception as e:
@@ -725,25 +790,25 @@ class DWUG(SemanticChangeEvaluationDataset):
                 if 'context_tokenized' in column_ids and 'indexes_target_token_tokenized' in column_ids:
                     for line in f:
                         line = line.replace('\n','').split('\t')
-                        id = line[column_ids['identifier']]
-                        if not id in excluded_instances:
+                        identifier = line[column_ids['identifier']]
+                        if not identifier in excluded_instances:
                             lemma = line[column_ids['lemma']]
                             grouping = line[column_ids['grouping']]
                             context = line[column_ids['context_tokenized']]
                             word_index = int(line[column_ids['indexes_target_token_tokenized']])
                             start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
-                            usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
+                            usages_by_key[identifier] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
                 else:
                     for line in f:
                         line = line.replace('\n','').split('\t')
-                        id = line[column_ids['identifier']]
-                        if not id in excluded_instances:
+                        identifier = line[column_ids['identifier']]
+                        if not identifier in excluded_instances:
                             lemma = line[column_ids['lemma']]
                             grouping = line[column_ids['grouping']]
                             context = line[column_ids['context']]
                             start, end = line[column_ids['indexes_target_token']].split(":")
                             start, end = int(start), int(end)
-                            usages_by_key[id] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
+                            usages_by_key[identifier] = {'word': lemma, 'text':context, 'start':start, 'end':end, 'grouping':grouping}
         except Exception as e:
             logging.error(f"Could not load usage data for '{word}' due to the following error: {e}")
             raise e
@@ -867,13 +932,13 @@ class DWUG(SemanticChangeEvaluationDataset):
                         column_ids = {c : i for i,c in enumerate(columns)}
                     for line in f:
                         line = line.replace('\n','').split('\t')
-                        id = line[column_ids['identifier']]
+                        identifier = line[column_ids['identifier']]
                         label = line[column_ids['label'] if self.dataset == "DWUG Sense" else column_ids['cluster']]
                         try:
                             if not (remove_outliers and int(label) == -1):
-                                usages_by_id[id] = {'id': id, 'label': label}
+                                usages_by_id[identifier] = {'id': identifier, 'label': label}
                         except ValueError:
-                            usages_by_id[id] = {'id': id, 'label': label}
+                            usages_by_id[identifier] = {'id': identifier, 'label': label}
             except Exception as e:
                 logging.error(f"Could not load sense labels for '{word}' due to the following error: {e}")
                 raise e
@@ -888,31 +953,31 @@ class DWUG(SemanticChangeEvaluationDataset):
                     if 'context_tokenized' in column_ids and 'indexes_target_token_tokenized' in column_ids:
                         for line in f:
                             line = line.replace('\n','').split('\t')
-                            id = line[column_ids['identifier']]
-                            if id in usages_by_id:
+                            identifier = line[column_ids['identifier']]
+                            if identifier in usages_by_id:
                                 lemma = line[column_ids['lemma']]
                                 context = line[column_ids['context_tokenized']]
                                 word_index = int(line[column_ids['indexes_target_token_tokenized']])
                                 start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
-                                usages_by_id[id].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
+                                usages_by_id[identifier].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
                     else:
                         for line in f:
                             line = line.replace('\n','').split('\t')
-                            id = line[column_ids['identifier']]
-                            if id in usages_by_id:
+                            identifier = line[column_ids['identifier']]
+                            if identifier in usages_by_id:
                                 lemma = line[column_ids['lemma']]
                                 context = line[column_ids['context']]
                                 start, end = line[column_ids['indexes_target_token']].split(":")
                                 start, end = int(start), int(end)
-                                usages_by_id[id].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
+                                usages_by_id[identifier].update({'word': lemma, 'text':context, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
             except Exception as e:
                 logging.error(f"Could not load usages for '{word}' due to the following error: {e}")
                 raise e
             
-            for id, ex in usages_by_id.items():
+            for identifier, ex in usages_by_id.items():
                 for k in {'text','start','end','word','label'}:
                     if not k in ex:
-                        logging.error(f"A value for {k} in missing in the example of id {id}. Make sure that {senses_path} and {os.path.join(self.home_path,'data',word,'uses.(c|t)sv')} contain the same examples.")
+                        logging.error(f"A value for {k} in missing in the example of id {identifier}. Make sure that {senses_path} and {os.path.join(self.home_path,'data',word,'uses.(c|t)sv')} contain the same examples.")
                         raise KeyError
             
             data.extend(list(usages_by_id.values()))
@@ -1243,8 +1308,8 @@ class WiC(Benchmark):
                 if data_paths[key]['labels'] is not None:
                     with open(os.path.join(self.home_path, data_paths[key]['labels'])) as f:
                         for i, line in enumerate(f):
-                            id, label = line.strip('\n').split('\t')
-                            data_dict[id] = {'label': self.format_label(label)}
+                            identifier, label = line.strip('\n').split('\t')
+                            data_dict[identifier] = {'label': self.format_label(label)}
 
                 if data_paths[key]['data'] is not None:
                     with open(os.path.join(self.home_path, data_paths[key]['data'])) as f:
@@ -1541,18 +1606,18 @@ class WSD(Benchmark):
                     with open(os.path.join(self.home_path, data_paths[key]['labels'])) as f:
                         for line in f:
                             line_data = line.strip("\n").split(" ")
-                            id = line_data[0]
+                            identifier = line_data[0]
                             labels = line_data[1:]
                             if len(labels) > 1:
                                 # If there are multiple lables, create new examples for each.
                                 for i, label in enumerate(labels):
-                                    data_by_id[f'{id}:{i}'] = data_by_id[id]
-                                    data_by_id[f'{id}:{i}']['label'] = label
-                                    data_by_id[f'{id}:{i}']['id'] = f'{id}:{i}'
-                                del data_by_id[id]
+                                    data_by_id[f'{identifier}:{i}'] = data_by_id[identifier]
+                                    data_by_id[f'{identifier}:{i}']['label'] = label
+                                    data_by_id[f'{identifier}:{i}']['id'] = f'{identifier}:{i}'
+                                del data_by_id[identifier]
                             else:
-                                data_by_id[id]['label'] = labels[0]
-                                data_by_id[id]['id'] = id
+                                data_by_id[identifier]['label'] = labels[0]
+                                data_by_id[identifier]['id'] = identifier
 
                 data[key] = list(data_by_id.values())
 
@@ -1584,7 +1649,6 @@ class WSD(Benchmark):
         wsi.language = self.language
         if hasattr(self, 'name'):
             wsi.name = self.name
-        #wsi.load_from_data(self.data)
         return wsi
 
     def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric, word = None):
