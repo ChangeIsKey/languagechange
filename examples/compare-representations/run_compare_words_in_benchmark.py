@@ -127,7 +127,6 @@ if __name__ == '__main__':
     parser.add_argument('--output_folder', required=False, default='examples/compare-representations/intermediate-outputs')
     args = parser.parse_args()
     Path(args.output_folder).mkdir(parents=True, exist_ok=True)
-     
 
     semeval_en = SemEval2020Task1('EN')
 
