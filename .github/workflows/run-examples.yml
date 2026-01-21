@@ -10,14 +10,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11.5'  # Choose your required version
-      - name: Cache pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          python-version: '3.11.5'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            examples/compare-representations/requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -28,4 +25,4 @@ jobs:
       - name: Run examples of comparing embeddings
         run: |
           pip install -r examples/compare-representations/requirements.txt
-          python examples/compare-representations/run_compare_representations.py
+          python examples/compare-representations/run_compare_words_in_benchmark.py
