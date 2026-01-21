@@ -4,35 +4,43 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "languagechange"
-version = "0.0.1"
+version = "0.1.0"
 description = "Python Library for Language Change"
 authors = [
     { name = "Change is Key!" }
 ]
-readme = ""
+readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent"
 ]
 dependencies = [
-    "dload",
-    "LSCDetection @ git+https://github.com/pierluigic/LSCDetection.git",
-    "WordTransformer @ git+https://github.com/pierluigic/xl-lexeme.git",
-    "sortedcontainers",
-    "bs4",
-    "lxml",
-    "gensim",
+    "dload==0.6",
+    "LSCDetection@git+https://github.com/felixhultin/LSCDetection.git",
+    "WordTransformer@git+https://github.com/felixhultin/xl-lexeme.git",
+    "datasets==4.0.0",
+    "filelock==3.12.2",
+    "gensim==4.3.3",
+    "huggingface-hub==0.25.0",
+    "jsonlines==4.0.0",
+    "langchain==0.3.27",
+    "lxml==6.0.0",
+    "numpy==1.26.4",
+    "pandas==2.3.1",
+    "peft==0.17.0",
+    "pydantic==2.11.7",
+    "scikit-learn==1.7.1",
+    "scipy==1.11.1",
+    "sentence-transformers==3.1.0",
+    "sortedcontainers==2.4.0",
     "torch==2.0.1",
-    "torchvision",
-    "torchaudio",
-    "transformers==4.48.3",
-    "trankit",
-    "openai",
-    "langchain",
-    "pydantic"
+    "transformers==4.47.1",
+    "trankit==1.1.2",
+    "tqdm==4.67.1",
+    "platformdirs==3.8.0"
 ]
 
 [project.urls]
@@ -40,3 +48,15 @@ Homepage = "https://github.com/pierluigic/languagechange"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["languagechange*"]
+exclude = ["build*", "dist*", "examples*"]
+
+[tool.setuptools.package-data]
+languagechange = ["resources_hub.json"]
+
+[project.optional-dependencies]
+providers = [
+    "langchain-openai==0.3.28",
+    "langchain-ibm",
+    "databricks-langchain",
+]
