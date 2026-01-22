@@ -53,13 +53,17 @@ More end-to-end walkthroughs live in the [examples](examples):
 Clone the repository and install an editable build with the project extras you need:
 
 ```bash
-git clone https://github.com/pierluigic/languagechange.git
+git clone https://github.com/ChangeIsKey/languagechange.git
 cd languagechange
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
 Running the examples may require additional packages listed under each example directory.
+
+## Documentation
+
+For more detailed information, read the [API reference guide](https://languagechange.readthedocs.io/en/latest/).
 
 ## Citation
 
