@@ -2,12 +2,13 @@ LanguageChange documentation
 ============================
 
 LanguageChange is a Python toolkit for studying lexical semantic change; this documentation site mirrors the
-API described in the README and extends it with automatically generated module references.
+API described in the README and extends it with automatically generated module references from the package source.
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
+   languagechange
    modules
 
 Indices and tables

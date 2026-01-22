@@ -1,7 +1,7 @@
-LanguageChange API
-==================
+languagechange
+==============
 
-.. automodule:: languagechange
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. toctree::
+   :maxdepth: 4
+
+   languagechange
