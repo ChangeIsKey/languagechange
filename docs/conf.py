@@ -17,6 +17,9 @@ try:
 except PackageNotFoundError:  # fallback when the package is not installed in the environment
     release = "0.1.0"
 
+# Version may differ from release by omitting patch-level info for short references.
+version = ".".join(release.split(".")[:2])
+
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
