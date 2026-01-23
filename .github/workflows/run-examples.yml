@@ -19,9 +19,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install .
-      - run: pip show torch
-      - name: Show module
-        run: pip show languagechange
       - name: Run examples of comparing embeddings
         run: |
           pip install -r examples/compare-representations/requirements.txt
