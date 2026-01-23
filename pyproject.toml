@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "languagechange"
+name = "langchange"
 version = "0.1.0"
 description = "Python Library for Language Change"
 authors = [
@@ -19,8 +19,8 @@ classifiers = [
 ]
 dependencies = [
     "dload==0.6",
-    "LSCDetection@git+https://github.com/felixhultin/LSCDetection.git",
-    "WordTransformer@git+https://github.com/felixhultin/xl-lexeme.git",
+    "LSCDetection-LanguageChange==0.0.1",
+    "WordTransformer-LanguageChange==0.0.1",
     "datasets==4.0.0",
     "filelock==3.12.2",
     "gensim==4.3.3",
@@ -59,4 +59,11 @@ providers = [
     "langchain-openai==0.3.28",
     "langchain-ibm",
     "databricks-langchain",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:.*SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:.*SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:.*Swigvarlink has no __module__ attribute:DeprecationWarning",
 ]
