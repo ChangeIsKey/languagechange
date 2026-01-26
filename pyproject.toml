@@ -60,9 +60,6 @@ providers = [
     "langchain-ibm",
     "databricks-langchain",
 ]
-docs = [
-    "piccolo-theme==0.24.0"
-]
 
 [tool.pytest.ini_options]
 filterwarnings = [
