@@ -11,7 +11,7 @@ LanguageChange is a Python toolkit for exploring lexical semantic change across 
 ## Installation
 
 ```bash
-pip install languagechange
+pip install langchange
 ```
 
 LanguageChange targets Python 3.8+ and depends on PyTorch, transformers, and several NLP/visualisation libraries. Installing inside a virtual environment is recommended.
