@@ -60,17 +60,13 @@ providers = [
     "langchain-ibm",
     "databricks-langchain",
 ]
+docs = [
+    "piccolo-theme==0.24.0"
+]
 
 [tool.pytest.ini_options]
 filterwarnings = [
     "ignore:.*SwigPyPacked has no __module__ attribute:DeprecationWarning",
     "ignore:.*SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:.*Swigvarlink has no __module__ attribute:DeprecationWarning",
-]
-
-[project.optional-dependencies]
-docs = [
-    "piccolo-theme==0.24.0"
-]
-
-    
+]   
