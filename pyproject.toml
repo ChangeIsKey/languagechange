@@ -18,6 +18,7 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
+    "piccolo-theme-0.24.0",
     "dload==0.6",
     "LSCDetection-LanguageChange==0.0.1",
     "WordTransformer-LanguageChange==0.0.1",
