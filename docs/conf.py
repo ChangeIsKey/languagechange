@@ -31,7 +31,6 @@ templates_path = ["_templates"]
 exclude_patterns: list[str] = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = 'piccolo_theme'
-html_static_path = ["_static"]
 
 # Configure autodoc defaults.
 autodoc_member_order = "bysource"
