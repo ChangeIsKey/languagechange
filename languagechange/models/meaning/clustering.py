@@ -399,7 +399,7 @@ PhD thesis. University of Stuttgart.
 """
 
 class CorrelationClustering():
-    def __init__(self, s = 10, max_attempts = 200, max_iters = 5000, initial = [], split_flag = True):
+    def __init__(self, s = 10, max_attempts = 2000, max_iters = 50000, initial = [], split_flag = True):
         self.s = s
         self.max_attempts = max_attempts
         self.max_iters = max_iters
@@ -413,13 +413,14 @@ class CorrelationClustering():
                     of a usage and each edge is a similarity between two usages (>0 for positive 
                     edges and <0 for negative edges)
         """
-        for init in range(5):
+        classes = self.initial
+        for _ in range(5):
             classes, _ = self.cluster_correlation_search(
                 similarity_graph, 
                 s=self.s,
                 max_attempts=self.max_attempts,
                 max_iters=self.max_iters,
-                initial=self.initial,
+                initial=classes,
                 split_flag=self.split_flag
             )
         node2cluster = self.classes_to_node2cluster(classes)
