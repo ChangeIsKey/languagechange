@@ -27,6 +27,32 @@ extensions = [
     "sphinx.ext.intersphinx",
 ]
 
+autodoc_mock_imports = [
+    "WordTransformer",
+    "LSCDetection",
+    "dload",
+    "datasets",
+    "filelock",
+    "gensim",
+    "huggingface_hub",
+    "jsonlines",
+    "langchain",
+    "lxml",
+    "numpy",
+    "pandas",
+    "peft",
+    "platformdirs",
+    "pydantic",
+    "scipy",
+    "sentence_transformers",
+    "sklearn",
+    "sortedcontainers",
+    "torch",
+    "transformers",
+    "trankit",
+    "tqdm",
+]
+
 templates_path = ["_templates"]
 exclude_patterns: list[str] = ["_build", "Thumbs.db", ".DS_Store"]
 
