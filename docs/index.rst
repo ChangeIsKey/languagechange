@@ -8,8 +8,8 @@ LanguageChange is a Python toolkit for exploring lexical semantic change across 
    :maxdepth: 2
    :caption: Contents:
 
-   languagechange
-   modules
+   source/api/languagechange
+   source/api/modules
 
 Indices and tables
 ==================

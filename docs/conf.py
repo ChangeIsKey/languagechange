@@ -7,7 +7,7 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 
 # Ensure the project root can be imported when building docs.
-sys.path.insert(0, os.path.abspath("../languagechange/"))
+sys.path.insert(0, os.path.abspath(".."))
 
 project = "languagechange"
 author = "Change is Key!"
