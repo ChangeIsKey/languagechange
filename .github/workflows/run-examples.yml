@@ -1,0 +1,25 @@
+name: Run examples
+run-name: Run the example scripts in examples/
+on: [push, pull_request]
+jobs:
+  Run-Examples:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11.5'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            examples/compare-representations/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install .
+      - name: Run examples of comparing embeddings
+        run: |
+          pip install -r examples/compare-representations/requirements.txt
+          python examples/compare-representations/run_compare_words_in_benchmark.py

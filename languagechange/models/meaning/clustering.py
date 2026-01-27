@@ -29,7 +29,9 @@ class Clustering():
 # Author: Francesco Periti francesco.periti@unimi.it
 class APosterioriaffinityPropagation(ClusterMixin, BaseEstimator):
     """A class that implements the APP clustering algorithm.
+
     This class is compatible with the [scikit-learn](https://scikit-learn.org) ecosystem.
+
     Parameters
     ----------
     damping : float, default=0.9
@@ -168,6 +170,7 @@ class APosterioriaffinityPropagation(ClusterMixin, BaseEstimator):
     def fit(self, X, y=None):
         """
         Fit the clustering from features.
+
         Parameters
         ----------
         X : {array-like, sparse matrix} of shape (n_samples, n_features)
