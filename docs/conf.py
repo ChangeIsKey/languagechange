@@ -37,6 +37,7 @@ autodoc_mock_imports = [
     "huggingface_hub",
     "jsonlines",
     "langchain",
+    "langchain_core",
     "lxml",
     "numpy",
     "pandas",
