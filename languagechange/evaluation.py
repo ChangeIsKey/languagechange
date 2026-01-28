@@ -1,4 +1,4 @@
-import models
+from languagechange import models
 
 
 class Evaluation():

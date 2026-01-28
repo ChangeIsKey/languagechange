@@ -1,0 +1,24 @@
+name: Run tests
+run-name: Run the pytest suite
+on: [push, pull_request]
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11.5'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install .
+          pip install pytest
+      - name: Run pytest suite
+        run: pytest tests

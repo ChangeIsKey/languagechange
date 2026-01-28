@@ -14,7 +14,11 @@ class SCFloat(BaseModel):
     change : float = Field(description='The semantic change on a scale from 0 to 1.',le=1, ge=0)
 
 
-class SCDURel(BaseModel):
+class CosSim(BaseModel):
+    change : float = Field(description='The semantic similarity on a scale from 0 to 1.',le=1, ge=0)
+
+
+class DURel(BaseModel):
     change : int = Field(description='The semantic similary from 1 to 4, where 1 is unrelated, 2 is distantly related, 3 is closely related and 4 is identical.',le=4, ge=1)
 
 
@@ -79,45 +83,42 @@ class PromptModel:
             elif provider_key_name != None and not os.environ.get(provider_key_name):
                 os.environ[provider_key_name] = getpass.getpass(f"Enter API key for {model_provider}: ")
 
-            # special cases
-            if model_provider == "azure":
-                # pip install -qU "langchain[openai]"
-                from langchain_openai import AzureChatOpenAI
-                llm = AzureChatOpenAI(
-                    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-                    azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
-                    openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
-                )
+        # special cases
+        if model_provider == "azure":
+            # pip install -qU "langchain[openai]"
+            from langchain_openai import AzureChatOpenAI
+            self.llm = AzureChatOpenAI(
+                azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+                azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
+                openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+            )
 
-            elif model_provider == "ibm":
-                if 'url' in kwargs and 'project_id' in kwargs:
-                    # pip install -qU "langchain-ibm"
-                    from langchain_ibm import ChatWatsonx
-                    
-                    llm = ChatWatsonx(model_id = model_name,
-                                url=kwargs.get('url'),
-                                project_id=kwargs.get('project_id')
-                                )
-                else:
-                    raise Exception("Pass 'url' and 'project_id' to initialize a ChatWatsonx model.")
+        elif model_provider == "ibm":
+            if 'url' in kwargs and 'project_id' in kwargs:
+                # pip install -qU "langchain-ibm"
+                from langchain_ibm import ChatWatsonx
                 
-            elif model_provider == "databricks":
-                if 'databricks_host_url' in kwargs:
-                    os.environ["DATABRICKS_HOST"] = kwargs.get('databricks_host_url')
-                else:
-                    raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
-                # pip install -qU "databricks-langchain"
-                from databricks_langchain import ChatDatabricks
-                llm = ChatDatabricks(endpoint=model_name)
+                self.llm = ChatWatsonx(model_id = model_name,
+                              url=kwargs.get('url'),
+                              project_id=kwargs.get('project_id')
+                              )
             else:
-                try:
-                    llm = init_chat_model(model_name, model_provider=model_provider)
-                except:
-                    logging.error("Could not initialize chat model.")
-                    raise Exception
-        
-        self.name = "PromptModel_" + self.model_name
-        self.language = language
+                raise Exception("Pass 'url' and 'project_id' to initialize a ChatWatsonx model.")
+            
+        elif model_provider == "databricks":
+            if 'databricks_host_url' in kwargs:
+                os.environ["DATABRICKS_HOST"] = kwargs.get('databricks_host_url')
+            else:
+                raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
+            # pip install -qU "databricks-langchain"
+            from databricks_langchain import ChatDatabricks
+            self.llm = ChatDatabricks(endpoint=model_name)
+        else:
+            try:
+                self.llm = init_chat_model(model_name, model_provider=model_provider)
+            except:
+                logging.error("Could not initialize chat model.")
+                raise Exception
 
         if not isinstance(structure,str) and issubclass(structure, BaseModel):
             if 'change' in structure.model_fields:
@@ -125,20 +126,16 @@ class PromptModel:
             else:
                 logging.error("A custom BaseModel needs to have a field named 'change'.")
                 raise Exception
-        elif structure == "float":
-            self.structure = SCFloat
-        elif structure == "DURel":
-            self.structure = SCDURel
+        
+        self.set_structure(structure)
+
+    def set_structure(self, structure):
+        if isinstance(structure, str):
+            structure = {"float": SCFloat, "DURel": DURel, "cosine": CosSim}.get(structure, None)
+        if structure is not None:
+            self.model = self.llm.with_structured_output(structure)
         else:
-            self.structure = None
-
-        if self.structure != None:
-            self.model = llm.with_structured_output(self.structure)
-        else:
-            self.model = llm
-
-        self.lemmatize = lemmatize
-
+            self.model = self.llm
 
     def get_response(self, target_usages : List[TargetUsage], 
                      system_message = 'You are a lexicographer',
