@@ -474,12 +474,7 @@ class DWUG(SemanticChangeEvaluationDataset):
                 plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
                 plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster classes
         """
-        # Set widths of edges corresponding to the similarities
-        weights = [judgments_graph[u][v]["weight"] for u, v in judgments_graph.edges()]
-        min_w, max_w = min(weights), max(weights)
-        edge_widths = [0.25 + 0.75 * (w - min_w) / (max_w - min_w) for w in weights]
-
-        # Binarize similarities for networkx to be able to plot the graph nicely
+        # Binarize similarities based on threshold for networkx to be able to plot the graph nicely
         judgments_graph = judgments_graph.copy()
         for u, v in judgments_graph.edges():
             judgments_graph[u][v]["weight"] = int(judgments_graph[u][v]["weight"] >= threshold)
@@ -491,7 +486,7 @@ class DWUG(SemanticChangeEvaluationDataset):
 
         # More nodes leads to smaller node size
         node_size = max(min(12000 / (len(judgments_graph.nodes) + 60), 200), 50)
-        edge_width = max(min(100 / (len(judgments_graph.nodes) + 20), 5), 0.5)
+        edge_width = max(min(60 / (len(judgments_graph.nodes) + 20), 3), 0.5)
 
         # If classes are supplied, plot each node in a color corresponding to the class
         if classes is not None:
@@ -526,7 +521,10 @@ class DWUG(SemanticChangeEvaluationDataset):
         else:
             nx.draw_networkx_nodes(judgments_graph, pos, node_color="blue", node_size=node_size)
 
-        nx.draw_networkx_edges(judgments_graph, pos, edge_color=weights, edge_cmap=plt.cm.Greys, width=edge_width)
+        positive = [(u, v) for u, v in judgments_graph.edges() if judgments_graph[u][v]["weight"] == 1]
+        negative = [(u, v) for u, v in judgments_graph.edges() if judgments_graph[u][v]["weight"] == 0]
+        nx.draw_networkx_edges(judgments_graph, pos, edgelist=negative, edge_color=[0.5,0.5,0.5], width=edge_width)
+        nx.draw_networkx_edges(judgments_graph, pos, edgelist=positive, edge_color=[0,0,0], width=edge_width)
 
         if plot_id_labels:
             nx.draw_networkx_labels(judgments_graph, pos, font_size=8, font_color="black")
@@ -796,25 +794,32 @@ class DWUG(SemanticChangeEvaluationDataset):
             metric: str | Callable = "cosine",
             n_usages: int | str="all",
             n_judgments: int | str="all",
+            random_seed=42,
             prompt_template = """Please tell me how similar the meaning of the word \'{target}\' 
             is in the following example sentences: \n1. {usage_1}\n2. {usage_2}""",
             structure="cosine"):
         """
-            Compares all usages of the target word in question and uses a model to compute judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
+            Compares all usages of the target word in question and uses a model to compute 
+                judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
             Args:
                 word (str): the target word to annotate.
-                model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to use to annotate the usages.
-                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two 
-                    vectors. Supported string values are 'cosine' and 'binary'. Alternatively, a function taking two vectors as input and 
-                    returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
+                model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to 
+                    use to annotate the usages.
+                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, 
+                    the metric to use to compute similarity between two vectors. Supported string 
+                    values are 'cosine' and 'binary'. Alternatively, a function taking two vectors 
+                    as input and returning a similarity score can be passed. If a PromptModel is 
+                    used, this argument is ignored.
                 n_usages (Union[int, str], default="all"): the amount of usages to select
                 n_judgments (Union[int, str], default="all"): the amount of judgments to perform
-                prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. 
-                    The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
-                structure (Union[str, pydantic.BaseModel], default="cosine"): the structure to use, if a PromptModel is used.
+                random_seed (int, default=42): the seed to use for random selection of usages and 
+                    judgments.
+                prompt_template (str): if a PromptModel is used, the template to use for the user 
+                    message in the prompt. The template must contain the placeholders '{target}', 
+                    '{usage_1}' and '{usage_2}'.
+                structure (Union[str, pydantic.BaseModel], default="cosine"): the structure to 
+                    use, if a PromptModel is used.
         """
-
-        np.random.seed(42)
 
         usages = self.get_word_usages(word)
 
@@ -831,14 +836,14 @@ class DWUG(SemanticChangeEvaluationDataset):
             n_judgments = max_possible_judgments
 
         if isinstance(n_usages, int) and n_usages < len(usages):
-            rng = np.random.default_rng()
+            rng = np.random.default_rng(seed=random_seed)
             usages = TargetUsageList(rng.choice(usages, n_usages, replace=False))
         
         def generate_index_pairs(total, n):
             all_index_pairs = [(i, j) for i in range(total) for j in range(i+1,total)]
             if n == len(all_index_pairs):
                 return all_index_pairs
-            rng = np.random.default_rng()
+            rng = np.random.default_rng(seed=random_seed)
             return rng.choice(all_index_pairs, n, replace=False)
 
         similarity_scores = {}
@@ -890,14 +895,20 @@ class DWUG(SemanticChangeEvaluationDataset):
                 writer.writerow([id1, id2, type(model).__name__, similarity, word])
             logging.info(f"Usages for {word} annotated by {type(model).__name__} and written to {judgments_f}.")
 
-    def annotate_all(self, model, metric : str | Callable = "cosine", n_judgments : int | str = "all",
-            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',):
+    def annotate_all(self,
+            model,
+            metric : str | Callable = "cosine", 
+            n_usages: int | str="all", 
+            n_judgments : int | str ="all",
+            random_seed=42,
+            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            structure="cosine"):
         """
             Annotates all target words in the dataset using the given model and metric (if applicable), 
             and saves the judgments to data/word/judgments.csv. Parameters as in self.annotate_word.
         """
         for word in self.target_words:
-            self.annotate_word(word, model, metric, n_judgments, prompt_template)
+            self.annotate_word(word, model, metric, n_usages, n_judgments, random_seed, prompt_template, structure)
 
     def cluster(self,
                 word,
@@ -973,8 +984,11 @@ class DWUG(SemanticChangeEvaluationDataset):
             word,
             annotator,
             metric="cosine",
+            n_usages: int | str="all",
             n_judgments : int | str="all",
+            random_seed=42,
             prompt_template='Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            structure="cosine",
             threshold=0.5,
             s=20,
             max_attempts=2000,
@@ -990,8 +1004,10 @@ class DWUG(SemanticChangeEvaluationDataset):
             Annotates and clusters for the word specified. Arguments as in self.annotate_word 
             and self.cluster.
         """
-        self.annotate_word(word, annotator, metric=metric, n_judgments=n_judgments, prompt_template=prompt_template)
-        self.cluster(word, edge_weight_transformation=edge_weight_transformation, s=s, 
+        self.annotate_word(word, annotator, metric=metric, n_usages=n_usages, 
+            n_judgments=n_judgments, random_seed=random_seed, prompt_template=prompt_template, 
+            structure=structure)
+        self.cluster(word, threshold=threshold, s=s, 
             max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, 
             plot=plot, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels, 
             plot_cluster_labels=plot_cluster_labels)
