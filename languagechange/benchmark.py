@@ -1,23 +1,16 @@
-from languagechange.resource_manager import LanguageChange
-from languagechange.corpora import LinebyLineCorpus
-from languagechange.models.representation.contextualized import ContextualizedModel
-from languagechange.models.representation.definition import DefinitionGenerator
-from languagechange.models.representation.prompting import PromptModel
-from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
-from languagechange.utils import NumericalTime, LiteralTime
-from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
-import webbrowser
 import os
-import pickle
-import json
 from itertools import islice
-import logging
 import re
-import zipfile
+import json
 import random
-import numpy as np
+import webbrowser
+import pickle
 import math
+from math import comb
 import csv
+import logging
+import zipfile
+import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
@@ -29,7 +22,14 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.cm
 import matplotlib.colors
-from math import comb
+from languagechange.resource_manager import LanguageChange
+from languagechange.corpora import LinebyLineCorpus
+from languagechange.models.representation.contextualized import ContextualizedModel
+from languagechange.models.representation.definition import DefinitionGenerator
+from languagechange.models.representation.prompting import PromptModel
+from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
+from languagechange.utils import NumericalTime, LiteralTime
+from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
 
 
 def purity(labels_true, cluster_labels):

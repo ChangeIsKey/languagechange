@@ -438,7 +438,7 @@ class CorrelationClustering():
                 node2cluster[node] = c_idx
         return node2cluster
 
-    def cluster_correlation_search(self, G, s = 10, max_attempts = 200, max_iters = 5000, initial = [], split_flag = True):
+    def cluster_correlation_search(self, G, s = 10, max_attempts = 2000, max_iters = 50000, initial = [], split_flag = True):
         """
         Apply correlation clustering. Assumes that negative edges have weights < 0, and positive edges have weights >= 0, that edges with nan have been removed and that weights are stored under edge attribute G[i][j]['weight'].
 
