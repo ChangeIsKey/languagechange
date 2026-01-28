@@ -13,7 +13,11 @@ class SCFloat(BaseModel):
     change : float = Field(description='The semantic change on a scale from 0 to 1.',le=1, ge=0)
 
 
-class SCDURel(BaseModel):
+class CosSim(BaseModel):
+    change : float = Field(description='The semantic similarity on a scale from 0 to 1.',le=1, ge=0)
+
+
+class DURel(BaseModel):
     change : int = Field(description='The semantic similary from 1 to 4, where 1 is unrelated, 2 is distantly related, 3 is closely related and 4 is identical.',le=4, ge=1)
 
 
@@ -55,7 +59,7 @@ class PromptModel:
         if model_provider == "azure":
             # pip install -qU "langchain[openai]"
             from langchain_openai import AzureChatOpenAI
-            llm = AzureChatOpenAI(
+            self.llm = AzureChatOpenAI(
                 azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
                 azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
                 openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
@@ -66,7 +70,7 @@ class PromptModel:
                 # pip install -qU "langchain-ibm"
                 from langchain_ibm import ChatWatsonx
                 
-                llm = ChatWatsonx(model_id = model_name,
+                self.llm = ChatWatsonx(model_id = model_name,
                               url=kwargs.get('url'),
                               project_id=kwargs.get('project_id')
                               )
@@ -80,10 +84,10 @@ class PromptModel:
                 raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
             # pip install -qU "databricks-langchain"
             from databricks_langchain import ChatDatabricks
-            llm = ChatDatabricks(endpoint=model_name)
+            self.llm = ChatDatabricks(endpoint=model_name)
         else:
             try:
-                llm = init_chat_model(model_name, model_provider=model_provider)
+                self.llm = init_chat_model(model_name, model_provider=model_provider)
             except:
                 logging.error("Could not initialize chat model.")
                 raise Exception
@@ -94,18 +98,16 @@ class PromptModel:
             else:
                 logging.error("A custom BaseModel needs to have a field named 'change'.")
                 raise Exception
-        elif structure == "float":
-            self.structure = SCFloat
-        elif structure == "DURel":
-            self.structure = SCDURel
-        else:
-            self.structure = None
+        
+        self.set_structure(structure)
 
-        if self.structure != None:
-            self.model = llm.with_structured_output(self.structure)
+    def set_structure(self, structure):
+        if isinstance(structure, str):
+            structure = {"float": SCFloat, "DURel": DURel, "cosine": CosSim}.get(structure, None)
+        if structure is not None:
+            self.model = self.llm.with_structured_output(structure)
         else:
-            self.model = llm
-
+            self.model = self.llm
 
     def get_response(self, target_usages : List[TargetUsage], 
                      system_message = 'You are a lexicographer',

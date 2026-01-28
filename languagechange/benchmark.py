@@ -29,6 +29,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.cm
 import matplotlib.colors
+from math import comb
 
 
 def purity(labels_true, cluster_labels):
@@ -276,6 +277,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
     def get_word_usages(self, word, group='all'):
         group = str(group)
         usages = TargetUsageList()
+
         if self.dataset == 'NorDiaChange':
             matches = list(Path(os.path.join(self.home_path,f'subset{self.subset}','data',word)).glob('uses.[ct]sv'))
             if not matches:
@@ -293,6 +295,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                     u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
                     u['time'] = LiteralTime(u['date'])
                     usages.append(DWUGUsage(**u))
+
         elif self.dataset == 'RuShiftEval':
             matches = list(Path(os.path.join(self.home_path,'durel',f'rushifteval{self.subset}','data',word)).glob('uses.[ct]sv'))
             if not matches:
@@ -309,6 +312,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                 u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
                 u['time'] = LiteralTime(u['date'])
                 usages.append(DWUGUsage(**u))
+
         return usages
 
 
@@ -419,129 +423,20 @@ class DWUG(SemanticChangeEvaluationDataset):
                 html = f.read()
                 display(HTML(html))
 
-    def get_word_usages(self, word, group='all'):
-        group = str(group)
-        usages = TargetUsageList()
-        matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
-
-        if not matches:
-            logging.error(f"Did not find {os.path.join(self.home_path,'data',word)}/uses.(c|t)sv.")
-            raise FileNotFoundError
-        
-        df = pd.read_csv(matches[0], sep="\t", quoting=csv.QUOTE_NONE)
-        column_ids = list(df)
-        for _, row in df.iterrows():
-            u = {c:row[c] for c in column_ids}
-            if group == 'all' or u['grouping'] == group:
-                u['text'] = u['context']
-                u['target'] = Target(u['lemma'])
-                u['target'].set_lemma(u['lemma'])
-                u['target'].set_pos(u['pos'])
-                u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
-                u['time'] = LiteralTime(u['date'])
-                usages.append(DWUGUsage(**u))
-        return usages
-
-    def annotate_word(self,
-            word,
-            model,
-            metric: str | Callable = "durel",
-            n_judgments: int | str="all",
-            prompt_template = """Please tell me how similar the meaning of the word \'{target}\' 
-            is in the following example sentences: \n1. {usage_1}\n2. {usage_2}"""):
-        """
-            Compares all usages of the target word in question and uses a model to compute judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
-            Args:
-                word (str): the target word to annotate.
-                model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to use to annotate the usages.
-                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two 
-                    vectors. Supported string values are 'cosine', 'durel' and 'binary'. Alternatively, a function taking two vectors as input and 
-                    returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
-                prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. 
-                    The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
-        """
-        def generate_index_pairs(total, n = "all"):
-            all_index_pairs = [(i, j) for i in range(total) for j in range(i+1,total)]
-            if n != "all":
-                assert n > 0, "Cannot randomly choose a negative amount of samples"
-                rng = np.random.default_rng()
-                return rng.choice(all_index_pairs, n, replace=False)
-            return all_index_pairs
-
-        usages = self.get_word_usages(word)
-        similarity_scores = {}
-
-        if isinstance(model, ContextualizedModel) or isinstance(model, DefinitionGenerator):
-            if isinstance(model, ContextualizedModel):
-                embeddings = model.encode(usages)
-            elif isinstance(model, DefinitionGenerator):
-                embeddings = model.generate_definitions(usages, encode_definitions = 'vectors')
-            
-            if isinstance(metric, str):
-                if metric.lower() == 'cosine':
-                    similarity_func = lambda e1, e2 : np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
-                elif metric.lower() == 'durel':
-                    similarity_func = lambda e1, e2 : math.ceil(4 * (np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))))
-                elif metric.lower() == 'binary':
-                    similarity_func = lambda e1, e2 : int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
-                else:
-                    logging.error(f"Metric '{metric}' not recognized. Supported metrics are 'cosine', 'durel' and 'binary'.")
-                    raise ValueError
-            elif callable(metric):
-                signature = inspect.signature(similarity_func)
-                n_req_args = sum([int(p.default == p.empty) for p in signature.parameters.values()])
-                if n_req_args != 2:
-                    logging.error(f"'label_func' must take 2 arguments but takes {n_req_args}.")
-                    return None
-                similarity_func = metric
-
-            index_pairs = generate_index_pairs(len(embeddings), n = n_judgments)
-                
-            for i, j in index_pairs:
-                id1, id2 = usages[i].identifier, usages[j].identifier
-                similarity_scores[frozenset([id1, id2])] = similarity_func(embeddings[i], embeddings[j])
-
-        elif isinstance(model, PromptModel):
-            index_pairs = generate_index_pairs(len(usages), n = n_judgments)
-
-            for i, j in index_pairs:
-                u1, u2 = usages[i], usages[j]
-                id1, id2 = u1.identifier, u2.identifier
-                similarity_scores[frozenset([id1, id2])] = model.get_response([u1, u2], user_prompt_template = prompt_template)
-
-        judgments_f = os.path.join(self.home_path,'data',word,'judgments.csv')
-        with open(judgments_f, 'w', newline='') as f:
-            writer = csv.writer(f, delimiter='\t')
-            writer.writerow(['identifier1', 'identifier2', 'annotator', 'judgment', 'lemma'])
-            for ids, similarity in similarity_scores.items():
-                ids = list(ids)
-                id1, id2 = ids[0], ids[1]
-                writer.writerow([id1, id2, type(model).__name__, similarity, word])
-            logging.info(f"Usages for {word} annotated by {type(model).__name__} and written to {judgments_f}.")
-
-    def annotate_all(self, model, metric : str | Callable = "durel", n_judgments : int | str = "all",
-            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',):
-        """
-            Annotates all target words in the dataset using the given model and metric (if applicable), 
-            and saves the judgments to data/word/judgments.csv. Parameters as in self.annotate_word.
-        """
-        for word in self.target_words:
-            self.annotate_word(word, model, metric, n_judgments, prompt_template)
-
-    def load_graph_from_csv(self, 
-        word, 
-        only_between_groups=False, 
-        remove_outliers=False, 
-        exclude_non_judgments=True, 
-        transform_labels=lambda labels:np.mean(labels)-2.5,
-        include_senses=True):
+    def load_graph_from_csv(self,
+        word,
+        only_between_groups=False,
+        remove_outliers=False,
+        exclude_non_judgments=True,
+        include_senses=True,
+        transform_labels="mean"):
         """
             Loads usage id:s, judgments and possibly senses as a networkx Graph object.
             Args:
                 word (str): the target word to load the graph for
                 only_between_groups (bool, default=False): see self.get_word_judgments
+                remove_outliers (bool, default=False): see self.get_word_judgments
                 exclude_non_judgments (bool, default=True): see self.get_word_judgments
-                transform_labels (Callable, default=lambda labels:np.mean(labels)-2.5): see self.get_word_judgments
                 include_senses (bool, default=False): if True, load also the senses of each instance of the target word
         """
         judgments_graph = nx.Graph()
@@ -566,90 +461,30 @@ class DWUG(SemanticChangeEvaluationDataset):
         
         return judgments_graph, classes
 
-    def cluster(self,
-                word,
-                edge_weight_transformation=lambda labels : np.mean(labels) - 2.5,
-                s=20,
-                max_attempts=2000,
-                max_iters=50000,
-                initial=[],
-                split_flag=True,
-                plot=True,
-                save_to_file=False,
-                outfile=None,
-                plot_id_labels=False,
-                plot_cluster_labels=False):
-        """
-            Performs correlation clustering (see languagechange.models.meaning.clustering.CorrelationClustering) 
-            on usages for the word specified. The resulted clustering labels are written to
-            {self.home_path}/clusters/{self.config}/{word}.csv. Optionally, the clusters are plotted.
-
-            Args:
-                word (str): the target word to cluster for
-                edge_weight_transformation (Callable, default=lambda w : w - 2.5): a function that 
-                    transforms the edge weights of the graph (corresponding to similarity judgments) 
-                    before clustering, in order to form positive and negative weights. By default, the 
-                    DURel scale is assumed, and 2.5 is subtracted from each weight.
-                s (int): see languagechange.models.meaning.clustering.CorrelationClustering
-                max_attempts (int): see languagechange.models.meaning.clustering.CorrelationClustering
-                max_iters (int): see languagechange.models.meaning.clustering.CorrelationClustering
-                initial (List[Set[int]]): see languagechange.models.meaning.clustering.CorrelationClustering
-                split_flag (bool): see languagechange.models.meaning.clustering.CorrelationClustering
-                plot (bool): whether to plot the clustering or not
-                save_to_file (bool, default=False): plot argument, see self.plot_clustering
-                outfile (Union[str, NoneType], default=None): plot argument, see self.plot_clustering
-                plot_id_labels (bool, default=False): plot argument, see self.plot_clustering
-                plot_cluster_labels (bool, default=False): plot argument, see self.plot_clustering
-
-            Returns:
-                judgments_graph (networkx.classes.graph.Graph): a graph containing the similarity
-                    judgments between usages of the target word
-                cluster_labels (List[int]): a list of cluster labels, corresponding to each node 
-                    in judgments_graph.nodes
-        """
-
-        # Load the judgments as a graph
-        judgments_graph, _ = self.load_graph_from_csv(word, include_senses=False, transform_labels=edge_weight_transformation)
-
-        # Perform correlation clustering on the similarity graph
-        clustering = Clustering(CorrelationClustering(s=s, max_attempts=max_attempts,
-        max_iters=max_iters, initial=initial, split_flag=split_flag))
-        clustering_results = clustering.get_cluster_results(judgments_graph)
-        cluster_labels = clustering_results.labels
-
-        # Write the clustering labels to the clusters file of the word
-        clusters_path = f"{self.home_path}/clusters/{self.config}/{word}.csv"
-        with open(clusters_path, "w") as f:
-            w = csv.writer(f, delimiter='\t')
-            w.writerow(["identifier", "cluster"])
-            for identifier, label in zip(judgments_graph.nodes, cluster_labels):
-                w.writerow([identifier, label])
-        logging.info(f"Wrote cluster labels to {clusters_path}")
-
-        if plot:
-            if outfile is None:
-                outfile = f"{word}.png"
-            self.plot_clustering(judgments_graph, cluster_labels, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels, plot_cluster_labels=plot_cluster_labels)
-
-        return judgments_graph, cluster_labels
-
-    def plot_clustering(self, judgments_graph, classes, save_to_file=False, outfile : str=None, plot_id_labels=False, plot_cluster_labels=False):
+    def plot_graph(self, judgments_graph, classes, threshold=2.5, save_to_file=False, outfile : str=None, plot_id_labels=False, plot_cluster_labels=False):
         """
             Plots the nodes corresponding to usages and edges corresponding to judgments.
             If classes are provided, nodes are colored according to their respective class.
             Args:
                 judgments_graph (networkx.classes.graph.Graph): a networkx graph containing usage ids and similarity scores between them
                 classes (List[int]): a list of classes (labels), each entry corresponding to the id in G.nodes
+                threshold (int, default=2.5): the threshold for distinguishing between positive and negative edges
                 save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
                 outfile (Union[str, NoneType], default=None): if not None and save_to_file=True, saves the file to the string specified
                 plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
                 plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster classes
         """
-        pos = nx.spring_layout(judgments_graph, seed=42)
-
+        # Set widths of edges corresponding to the similarities
         weights = [judgments_graph[u][v]["weight"] for u, v in judgments_graph.edges()]
-
         min_w, max_w = min(weights), max(weights)
+        edge_widths = [0.25 + 0.75 * (w - min_w) / (max_w - min_w) for w in weights]
+
+        # Binarize similarities for networkx to be able to plot the graph nicely
+        judgments_graph = judgments_graph.copy()
+        for u, v in judgments_graph.edges():
+            judgments_graph[u][v]["weight"] = int(judgments_graph[u][v]["weight"] >= threshold)
+
+        pos = nx.spring_layout(judgments_graph, seed=42)
 
         plt.figure(figsize=(10, 8))
         plt.axis("off")
@@ -691,7 +526,7 @@ class DWUG(SemanticChangeEvaluationDataset):
         else:
             nx.draw_networkx_nodes(judgments_graph, pos, node_color="blue", node_size=node_size)
 
-        nx.draw_networkx_edges(judgments_graph, pos, edge_color=weights, edge_cmap=plt.cm.Greys, edge_vmin=min_w - (max_w - min_w) * 0.2, edge_vmax=max_w, width=edge_width)
+        nx.draw_networkx_edges(judgments_graph, pos, edge_color=weights, edge_cmap=plt.cm.Greys, width=edge_width)
 
         if plot_id_labels:
             nx.draw_networkx_labels(judgments_graph, pos, font_size=8, font_color="black")
@@ -704,50 +539,34 @@ class DWUG(SemanticChangeEvaluationDataset):
             plt.show()
         plt.close()
 
-    def annotate_and_cluster(self,
-            word,
-            annotator,
-            metric="durel",
-            n_judgments : int | str="all",
-            prompt_template='Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-            edge_weight_transformation=lambda w : w - 2.5,
-            s=20,
-            max_attempts=2000,
-            max_iters=50000,
-            initial=[],
-            split_flag=True,
-            plot=True,
-            save_to_file=False,
-            outfile=None,
-            plot_id_labels=False,
-            plot_cluster_labels=False):
-        """
-            Annotates and clusters for the word specified. Arguments as in self.annotate_word 
-            and self.cluster.
-        """
-        self.annotate_word(word, annotator, metric=metric, n_judgments=n_judgments, prompt_template=prompt_template)
-        self.cluster(word, edge_weight_transformation=edge_weight_transformation, s=s, 
-            max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, 
-            plot=plot, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels, 
-            plot_cluster_labels=plot_cluster_labels)
+    def get_word_usages(self, word, group='all'):
+        group = str(group)
+        usages = TargetUsageList()
+        matches = list(Path(os.path.join(self.home_path,'data',word)).glob('uses.[ct]sv'))
 
-    def annotate_and_cluster_all(self, annotator, outfiles : List[str] = None, **kwargs):
-        """
-            Annotates and clusters all words. All arguments except outfiles as in 
-            self.annotate_word and self.cluster.
-            Args:
-                annotator: see self.annotate_word
-                outfiles (List[str]): a list of outfiles to save the figure, in the case of 
-                    plotting.
-        """
-        if outfiles is None:
-            outfiles = [None] * len(self.target_words)
-        for word, outfile in zip(self.target_words, outfiles):
-            self.annotate_and_cluster(word, annotator, outfile=outfile, **kwargs)
+        if not matches:
+            logging.error(f"Did not find {os.path.join(self.home_path,'data',word)}/uses.(c|t)sv.")
+            raise FileNotFoundError
+        
+        df = pd.read_csv(matches[0], sep="\t", quoting=csv.QUOTE_NONE)
+        column_ids = list(df)
+        for _, row in df.iterrows():
+            u = {c:row[c] for c in column_ids}
+            if group == 'all' or u['grouping'] == group:
+                u['text'] = u['context']
+                u['target'] = Target(u['lemma'])
+                u['target'].set_lemma(u['lemma'])
+                u['target'].set_pos(u['pos'])
+                u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
+                u['time'] = LiteralTime(u['date'])
+                usages.append(DWUGUsage(**u))
+
+        return usages
 
     def _get_outliers(self, word):
         """
-            Finds all usages of a given word which have been marked as outliers in the clustering step (cluster label = -1).
+            Finds all usages of a given word which have been marked as outliers in the clustering 
+                step (cluster label = -1).
             Args:
                 word (str): the target word to find outliers for.
             Returns:
@@ -896,30 +715,6 @@ class DWUG(SemanticChangeEvaluationDataset):
             return judgments.values()
         return judgments
 
-    def get_stats(self):
-        return self.stats
-
-    def get_stats_groupings(self):
-        return self.stats_groupings
-    
-    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels : Callable | str = 'mean'):
-        """
-            Casts the DWUG to a Word in Context (WiC) dataset.
-
-            Args:
-                only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
-                remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
-                exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
-                transform_labels (Callable|str): a function or a string denoting a function (see self.get_word_annotation) which takes a list of labels and returns a label, by default the mean of the labels.
-        """
-        data = []
-        for word in self.target_words:
-            judgments = self.get_word_judgments(word, only_between_groups=only_between_groups, remove_outliers=remove_outliers, exclude_non_judgments=exclude_non_judgments, transform_labels=transform_labels, include_usages=True)
-            data.extend(judgments.values())
-
-        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC' if self.dataset is not None else None, language=self.language, version=self.version, subset=self.subset)
-        return wic
-
     def get_usage_senses(self, word, remove_outliers=True, include_usages=False):
         usages_by_id = {}
 
@@ -988,6 +783,250 @@ class DWUG(SemanticChangeEvaluationDataset):
             usages_by_id = self.get_usage_senses(word, remove_outliers, include_usages)
             data.extend(list(usages_by_id.values()))
         return data
+
+    def get_stats(self):
+        return self.stats
+
+    def get_stats_groupings(self):
+        return self.stats_groupings
+
+    def annotate_word(self,
+            word,
+            model,
+            metric: str | Callable = "cosine",
+            n_usages: int | str="all",
+            n_judgments: int | str="all",
+            prompt_template = """Please tell me how similar the meaning of the word \'{target}\' 
+            is in the following example sentences: \n1. {usage_1}\n2. {usage_2}""",
+            structure="cosine"):
+        """
+            Compares all usages of the target word in question and uses a model to compute judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
+            Args:
+                word (str): the target word to annotate.
+                model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to use to annotate the usages.
+                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, the metric to use to compute similarity between two 
+                    vectors. Supported string values are 'cosine' and 'binary'. Alternatively, a function taking two vectors as input and 
+                    returning a similarity score can be passed. If a PromptModel is used, this argument is ignored.
+                n_usages (Union[int, str], default="all"): the amount of usages to select
+                n_judgments (Union[int, str], default="all"): the amount of judgments to perform
+                prompt_template (str): if a PromptModel is used, the template to use for the user message in the prompt. 
+                    The template must contain the placeholders '{target}', '{usage_1}' and '{usage_2}'.
+                structure (Union[str, pydantic.BaseModel], default="cosine"): the structure to use, if a PromptModel is used.
+        """
+
+        np.random.seed(42)
+
+        usages = self.get_word_usages(word)
+
+        if n_usages == "all":
+            n_usages = len(usages)
+        elif n_usages > len(usages):
+            logging.info(f"Trying to select more usages ({n_usages}) than is contained in the DWUG ({len(usages)}). Setting n_usages to {len(usages)}")
+            n_usages = len(usages)
+        max_possible_judgments = comb(n_usages, 2)
+        if n_judgments == "all":
+            n_judgments = max_possible_judgments
+        elif n_judgments > max_possible_judgments:
+            logging.info(f"Trying to do more judgments ({n_judgments}) than is possible for the amount of usages ({n_usages}). Setting n_judgments to {max_possible_judgments}.")
+            n_judgments = max_possible_judgments
+
+        if isinstance(n_usages, int) and n_usages < len(usages):
+            rng = np.random.default_rng()
+            usages = TargetUsageList(rng.choice(usages, n_usages, replace=False))
+        
+        def generate_index_pairs(total, n):
+            all_index_pairs = [(i, j) for i in range(total) for j in range(i+1,total)]
+            if n == len(all_index_pairs):
+                return all_index_pairs
+            rng = np.random.default_rng()
+            return rng.choice(all_index_pairs, n, replace=False)
+
+        similarity_scores = {}
+
+        if isinstance(model, ContextualizedModel) or isinstance(model, DefinitionGenerator):
+            if isinstance(model, ContextualizedModel):
+                embeddings = model.encode(usages)
+            elif isinstance(model, DefinitionGenerator):
+                embeddings = model.generate_definitions(usages, encode_definitions = 'vectors')
+            
+            if isinstance(metric, str):
+                if metric.lower() == 'cosine':
+                    similarity_func = lambda e1, e2 : np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
+                elif metric.lower() == 'binary':
+                    similarity_func = lambda e1, e2 : int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
+                else:
+                    logging.error(f"Metric '{metric}' not recognized. Supported metrics are 'cosine' and 'binary'.")
+                    raise ValueError
+            elif callable(metric):
+                signature = inspect.signature(similarity_func)
+                n_req_args = sum([int(p.default == p.empty) for p in signature.parameters.values()])
+                if n_req_args != 2:
+                    logging.error(f"'label_func' must take 2 arguments but takes {n_req_args}.")
+                    return None
+                similarity_func = metric
+
+            index_pairs = generate_index_pairs(len(embeddings), n_judgments)
+                
+            for i, j in index_pairs:
+                id1, id2 = usages[i].identifier, usages[j].identifier
+                similarity_scores[frozenset([id1, id2])] = similarity_func(embeddings[i], embeddings[j])
+
+        elif isinstance(model, PromptModel):
+            model.set_structure(structure)
+            index_pairs = generate_index_pairs(len(usages), n = n_judgments)
+
+            for i, j in index_pairs:
+                u1, u2 = usages[i], usages[j]
+                id1, id2 = u1.identifier, u2.identifier
+                similarity_scores[frozenset([id1, id2])] = model.get_response([u1, u2], user_prompt_template = prompt_template, lemmatize=False)
+
+        judgments_f = os.path.join(self.home_path,'data',word,'judgments.csv')
+        with open(judgments_f, 'w', newline='') as f:
+            writer = csv.writer(f, delimiter='\t')
+            writer.writerow(['identifier1', 'identifier2', 'annotator', 'judgment', 'lemma'])
+            for ids, similarity in similarity_scores.items():
+                ids = list(ids)
+                id1, id2 = ids[0], ids[1]
+                writer.writerow([id1, id2, type(model).__name__, similarity, word])
+            logging.info(f"Usages for {word} annotated by {type(model).__name__} and written to {judgments_f}.")
+
+    def annotate_all(self, model, metric : str | Callable = "cosine", n_judgments : int | str = "all",
+            prompt_template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',):
+        """
+            Annotates all target words in the dataset using the given model and metric (if applicable), 
+            and saves the judgments to data/word/judgments.csv. Parameters as in self.annotate_word.
+        """
+        for word in self.target_words:
+            self.annotate_word(word, model, metric, n_judgments, prompt_template)
+
+    def cluster(self,
+                word,
+                threshold=0.5,
+                s=20,
+                max_attempts=2000,
+                max_iters=50000,
+                initial=[],
+                split_flag=True,
+                plot=True,
+                save_to_file=False,
+                outfile=None,
+                plot_id_labels=False,
+                plot_cluster_labels=False):
+        """
+            Performs correlation clustering (see languagechange.models.meaning.clustering.CorrelationClustering) 
+            on usages for the word specified. The resulted clustering labels are written to
+            {self.home_path}/clusters/{self.config}/{word}.csv. Optionally, the clusters are plotted.
+
+            Args:
+                word (str): the target word to cluster for
+                threshold (float, default=0.5): the threshold for discriminating between positive
+                    and negative edges
+                s (int): see languagechange.models.meaning.clustering.CorrelationClustering
+                max_attempts (int): see languagechange.models.meaning.clustering.CorrelationClustering
+                max_iters (int): see languagechange.models.meaning.clustering.CorrelationClustering
+                initial (List[Set[int]]): see languagechange.models.meaning.clustering.CorrelationClustering
+                split_flag (bool): see languagechange.models.meaning.clustering.CorrelationClustering
+                plot (bool): whether to plot the clustering or not
+                save_to_file (bool, default=False): plot argument, see self.plot_clustering
+                outfile (Union[str, NoneType], default=None): plot argument, see self.plot_clustering
+                plot_id_labels (bool, default=False): plot argument, see self.plot_clustering
+                plot_cluster_labels (bool, default=False): plot argument, see self.plot_clustering
+
+            Returns:
+                judgments_graph (networkx.classes.graph.Graph): a graph containing the similarity
+                    judgments between usages of the target word
+                cluster_labels (List[int]): a list of cluster labels, corresponding to each node 
+                    in judgments_graph.nodes
+        """
+
+        # Load the judgments as a graph
+        judgments_graph, _ = self.load_graph_from_csv(word, include_senses=False)
+
+        # Create positive and negative edges depending on the threshold
+        transformed_graph = judgments_graph.copy()
+        for u, v in transformed_graph.edges():
+            transformed_graph[u][v]["weight"] = int(transformed_graph[u][v]["weight"] >= threshold)
+
+        # Perform correlation clustering on the similarity graph
+        clustering = Clustering(CorrelationClustering(s=s, max_attempts=max_attempts,
+        max_iters=max_iters, initial=initial, split_flag=split_flag))
+        clustering_results = clustering.get_cluster_results(transformed_graph)
+        cluster_labels = clustering_results.labels
+
+        # Write the clustering labels to the clusters file of the word
+        clusters_path = f"{self.home_path}/clusters/{self.config}/{word}.csv"
+        with open(clusters_path, "w") as f:
+            w = csv.writer(f, delimiter='\t')
+            w.writerow(["identifier", "cluster"])
+            for identifier, label in zip(judgments_graph.nodes, cluster_labels):
+                w.writerow([identifier, label])
+        logging.info(f"Wrote cluster labels to {clusters_path}")
+
+        if plot:
+            if outfile is None:
+                outfile = f"{word}.png"
+            self.plot_graph(judgments_graph, cluster_labels, threshold=threshold, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels, plot_cluster_labels=plot_cluster_labels)
+
+        return judgments_graph, cluster_labels
+
+    def annotate_and_cluster(self,
+            word,
+            annotator,
+            metric="cosine",
+            n_judgments : int | str="all",
+            prompt_template='Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            threshold=0.5,
+            s=20,
+            max_attempts=2000,
+            max_iters=50000,
+            initial=[],
+            split_flag=True,
+            plot=True,
+            save_to_file=False,
+            outfile=None,
+            plot_id_labels=False,
+            plot_cluster_labels=False):
+        """
+            Annotates and clusters for the word specified. Arguments as in self.annotate_word 
+            and self.cluster.
+        """
+        self.annotate_word(word, annotator, metric=metric, n_judgments=n_judgments, prompt_template=prompt_template)
+        self.cluster(word, edge_weight_transformation=edge_weight_transformation, s=s, 
+            max_attempts=max_attempts, max_iters=max_iters, initial=initial, split_flag=split_flag, 
+            plot=plot, save_to_file=save_to_file, outfile=outfile, plot_id_labels=plot_id_labels, 
+            plot_cluster_labels=plot_cluster_labels)
+
+    def annotate_and_cluster_all(self, annotator, outfiles : List[str] = None, **kwargs):
+        """
+            Annotates and clusters all words. All arguments except outfiles as in 
+            self.annotate_word and self.cluster.
+            Args:
+                annotator: see self.annotate_word
+                outfiles (List[str]): a list of outfiles to save the figure, in the case of 
+                    plotting.
+        """
+        if outfiles is None:
+            outfiles = [None] * len(self.target_words)
+        for word, outfile in zip(self.target_words, outfiles):
+            self.annotate_and_cluster(word, annotator, outfile=outfile, **kwargs)
+    
+    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels : Callable | str = 'mean'):
+        """
+            Casts the DWUG to a Word in Context (WiC) dataset.
+
+            Args:
+                only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
+                remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
+                exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
+                transform_labels (Callable|str): a function or a string denoting a function (see self.get_word_annotation) which takes a list of labels and returns a label, by default the mean of the labels.
+        """
+        data = []
+        for word in self.target_words:
+            judgments = self.get_word_judgments(word, only_between_groups=only_between_groups, remove_outliers=remove_outliers, exclude_non_judgments=exclude_non_judgments, transform_labels=transform_labels, include_usages=True)
+            data.extend(judgments.values())
+
+        wic = WiC(wic_data=data, dataset=f'{self.dataset} WiC' if self.dataset is not None else None, language=self.language, version=self.version, subset=self.subset)
+        return wic
         
     def cast_to_WSD(self, remove_outliers = True):
         """
