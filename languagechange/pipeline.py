@@ -1,19 +1,20 @@
-from languagechange.models.representation.contextualized import ContextualizedModel
-from languagechange.models.representation.definition import DefinitionGenerator
-from languagechange.models.representation.prompting import PromptModel
-from languagechange.usages import TargetUsage, TargetUsageList
-from languagechange.models.change.metrics import GradedChange, APD, PRT, PJSD
-from languagechange.models.change.widid import WiDiD
-from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
-from pydantic import BaseModel, Field
 from typing import List, Set, Union
-import numpy as np
 import json
 import logging
 import inspect
 import os
 import re
 import csv
+import copy
+from pydantic import BaseModel, Field
+import numpy as np
+from languagechange.models.representation.contextualized import ContextualizedModel
+from languagechange.models.representation.definition import DefinitionGenerator
+from languagechange.models.representation.prompting import PromptModel
+from languagechange.usages import TargetUsage, TargetUsageList
+from languagechange.models.change.metrics import GradedChange, PJSD
+from languagechange.models.change.widid import WiDiD
+from languagechange.benchmark import WiC, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -39,37 +40,46 @@ class Pipeline:
     def __init__(self):
         pass
 
-    def save_evaluation_results(self, results, json_path : str = None, latex_path : str = None, decimals = None):
-        if json_path != None:
-            if os.path.exists(json_path):
-                with open(json_path, 'r+') as f:
-                    try:
-                        previous_results = json.load(f)
-                    except json.JSONDecodeError as e:
-                        logging.info("Could not save the results to a JSON file due to the following error: ")
-                        logging.info(repr(e))
-                        return
-                    results = deep_update(previous_results, results)
-                    f.seek(0)
+    def save_evaluation_results(self, results, json_path : str, table_path : str = None, **kwargs):
+        """
+            Saves evaluation results to a json file, and optionally generates a table of the
+                results (see self.generate_table). If there is already content in the json file,
+                the results will be merged with this.
+            Args:
+                results (dict): a nested dictionary containing the new results(s) to add. See for
+                    example WiCPipeline.evaluate for an example usage.
+                json_path (str): the path to save results in as a dictionary.
+                table_path (Union[str, NoneType], default=None): the path for saving the generated
+                    table, see self.generate table.
+        """
+        if os.path.exists(json_path):
+            with open(json_path, 'r+') as f:
+                try:
+                    previous_results = json.load(f)
+                except json.JSONDecodeError as e:
+                    logging.info("Could not save the results to a JSON file due to the following error: ")
+                    logging.info(repr(e))
+                    return
+                results = deep_update(previous_results, results)
+                f.seek(0)
+                json.dump(results, f, indent=4)
+                f.truncate()
+                logging.info(f'Evaluation results saved to {json_path}') 
+        else:
+            with open(json_path, 'w') as f:
+                try:
                     json.dump(results, f, indent=4)
-                    f.truncate()
-                    logging.info(f'Evaluation results saved to {json_path}') 
-            else:
-                with open(json_path, 'w') as f:
-                    try:
-                        json.dump(results, f, indent=4)
-                    except json.JSONDecodeError as e:
-                        logging.info("Could not save the results to a JSON file due to the following error: ")
-                        logging.info(repr(e))
-                        return
-                    logging.info(f'Evaluation results saved to {json_path}')
-        if latex_path != None:
-            self.generate_table(results, latex_path, decimals)
+                except json.JSONDecodeError as e:
+                    logging.info("Could not save the results to a JSON file due to the following error: ")
+                    logging.info(repr(e))
+                    return
+                logging.info(f'Evaluation results saved to {json_path}')
+        if table_path is not None:
+            self.generate_table(results, table_path, **kwargs)
                 
     def generate_table(self, 
                             data, 
                             save_path,
-                            save_format="tex", 
                             decimals=None, 
                             remove_headers=0, 
                             max_w=None, 
@@ -80,19 +90,27 @@ class Pipeline:
                             highlight_best=False, 
                             n_method_cols=1):
         """
-            Generates one or more tables of results in LaTeX format, to be saved in a .tex file. Meant to be used together with self.save_evaluation_results.
+            Generates one or more tables of results in LaTeX or TSV format, to be saved in a .tex 
+                or .tsv file. Meant to be used together with self.save_evaluation_results.
             Args:
-                data (dict): the evaluation results, in a dictionary (similar to that produced by self.save_evaluation results).
-                save_path (str): where to save the .tex file.
+                data (dict): the evaluation results, in a dictionary (similar to that produced by 
+                    self.save_evaluation results).
+                save_path (str): where to save the .tex or .tsv file.
                 decimals (int): the amount of decimals to round evaluation results to.
                 remove_headers (int): if >0, the first remove_headers rows of the table are removed.
-                max_w (int|List[int]): if not None, split the table into smaller tables. If an int, each table will be max_w columns wide (excluding the model names to the very left). If a list of ints, the value of max_w[i] is the width of table i.
-                natural_split (int|bool): if True, split the table according to the first row which has a natural split. If an int >= 0, split the table according to the split of this row.
+                max_w (int|List[int]): if not None, split the table into smaller tables. If an int, 
+                    each table will be max_w columns wide (excluding the model names to the very 
+                    left). If a list of ints, the value of max_w[i] is the width of table i.
+                natural_split (int|bool): if True, split the table according to the first row which 
+                    has a natural split. If an int >= 0, split the table according to the split of this row.
                 remove_empty (bool): If True, remove all rows containing no value.
                 sort_models (bool): If True, sort the rows by the names of the models.
                 generate_caption (bool): If True, generate a caption for each table.
-                highlight_best (bool|Callable|str): If "max", highlight the highest value in each column. If "min", highlight the lowest value in each column. If a callable, use this as a function to compare values.
-                n_method_cols (int): the amount of columns storing method info to the left of the table content, as opposed to above the table content.
+                highlight_best (bool|Callable|str): If "max", highlight the highest value in each column. 
+                    If "min", highlight the lowest value in each column. If a callable, use this as a 
+                    function to compare values.
+                n_method_cols (int): the amount of columns storing method info to the left of the table 
+                    content, as opposed to above the table content.
         """
 
         def get_header_cells_and_scores(data):
@@ -211,7 +229,7 @@ class Pipeline:
                 row_i = 0
                 # Take the current content along with the side cells, which are the same for all split tables
                 for content, side in zip([c[i:i+w] for c in content_cells], side_cells):
-                    if all (c is None for c, _ in content):
+                    if remove_empty and all (c is None for c, _ in content):
                         # If the row is empty and not the first one, decrease the multirow height of rows above
                         if row_i > 0:
                             for c in range(side_width):
@@ -353,7 +371,16 @@ class Pipeline:
             header_string = list(map(render_header_row_tsv, header_rows))
             score_string = render_content_rows_tsv(side_rows, content_rows, n_content_cols)
             return header_string + score_string
+
+        if save_path.endswith(".tex"):
+            save_format = "tex"
+        elif save_path.endswith(".tsv"):
+            save_format = "tsv"
+        else:
+            logging.error("save_path needs to end in .tex or .tsv")
+            raise ValueError
     
+        data = copy.deepcopy(data)
         header_cells, scores_per_method = get_header_cells_and_scores(data)
         header_cells = header_cells[remove_headers:]
         n_content_cols = sum(w for _, w in header_cells[0])
@@ -426,7 +453,7 @@ class Pipeline:
         split_content_rows, split_side_rows = split_content_and_side_cells([c[n_method_cols:] for c in content_cells], [c[:n_method_cols] for c in content_cells], split_cols)
 
         if save_format == "tex":
-            table_string = "\n".join([create_table_string(split_header_rows[i], split_side_rows[i], split_content_rows[i], split_cols[i]) for i in range(len(split_cols))])
+            table_string = "\n".join([create_table_string(split_header_rows[i], split_side_rows[i], split_content_rows[i], split_cols[i]) for i, _ in enumerate(split_cols)])
 
             # Save the LaTeX string to a .tex file
             if save_path.endswith(".tex"):
@@ -437,9 +464,9 @@ class Pipeline:
         elif save_format == "tsv":
             with open(save_path, 'w', newline = "") as f:
                 writer = csv.writer(f, delimiter="\t")
-                for i in range(len(split_cols)):
+                for i, _ in enumerate(split_cols):
                     tsv_content = create_table_string_tsv(split_header_rows[i], split_side_rows[i], split_content_rows[i], split_cols[i])
-                    writer.writerows(tsv_content + [])
+                    writer.writerows(tsv_content + [""])
         logging.info(f"Wrote results to {save_path}.")
 
 
@@ -461,7 +488,7 @@ class WSIPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False, average = True, save = False, json_path = None, latex_path = None, decimals = None):
+    def evaluate(self, return_labels = False, average = True, save = False, json_path = None, table_path = None, **kwargs):
         """
             Evaluate on the WSI task. Returns the ARI and purity scores and optionally the clustering labels.
         """
@@ -493,13 +520,13 @@ class WSIPipeline(Pipeline):
         scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition, average=average)
 
         if save:
-            if json_path == None and latex_path == None:
+            if json_path == None and table_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
                 model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
 
                 if hasattr(self.dataset, 'name'):
-                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, latex_path, decimals)
+                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, table_path=table_path, **kwargs)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version', 'subset']
@@ -511,7 +538,7 @@ class WSIPipeline(Pipeline):
                             d = d[str(getattr(self.dataset, param))]
                     for metric, score in scores.items():
                         d[metric] = {model_name: score}
-                    self.save_evaluation_results({'WSI': dataset_info}, json_path, latex_path, decimals)
+                    self.save_evaluation_results({'WSI': dataset_info}, json_path, table_path=table_path, **kwargs)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
@@ -538,7 +565,7 @@ class WiCPipeline(Pipeline):
             raise Exception
         self.usage_encoding = usage_encoding
 
-    def evaluate(self, task, label_func = None, save = False, json_path = None, latex_path = None, decimals = None):
+    def evaluate(self, task, label_func = None, save = False, json_path = None, table_path = None, **kwargs):
         """
             Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if task='graded'.
         """
@@ -631,13 +658,13 @@ class WiCPipeline(Pipeline):
             scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
         if save:
-            if json_path == None and latex_path == None:
+            if json_path == None and table_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
                 model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
                 if hasattr(self.dataset, 'name'):
                     scores_dict = {f'{task.title()} WiC': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
-                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
+                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
                 elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
                     parameters = ['dataset', 'language', 'version', 'linguality', 'subset']
@@ -650,7 +677,7 @@ class WiCPipeline(Pipeline):
                     for metric, score in scores.items():
                         d[metric] = {model_name: score}
                     scores_dict = {f'{task.title()} WiC': dataset_info}
-                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
+                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
@@ -686,7 +713,7 @@ class GCDPipeline(Pipeline):
         self.metric = metric
         self.clustering = clustering
 
-    def evaluate(self, n_sampled_usages = 0, random_seed = None, save = False, json_path = None, latex_path = None, decimals = None):
+    def evaluate(self, n_sampled_usages = 0, random_seed = None, save = False, json_path = None, table_path = None, **kwargs):
         """
             Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
             Args:
@@ -694,8 +721,7 @@ class GCDPipeline(Pipeline):
                 random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed is used.
                 save (bool): Whether to save the results to json or LaTeX.
                 json_path (str): The path to save the results in JSON format. If None, the results are not saved.
-                latex_path (str): The path to save the results in LaTeX format. If None, no LaTeX table is generated.
-                decimals (int): The number of decimals to round the scores to in the LaTeX table.
+                table_path (str): The path to save the results in a table. If None, no table is generated.
             Returns:
                 scores (dict): A dictionary containing the Spearman correlation score (rho).
         """
@@ -767,13 +793,13 @@ class GCDPipeline(Pipeline):
         scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
         if save:
-            if json_path == None and latex_path == None:
+            if json_path == None and table_path == None:
                 logging.error("Tried to save results but no path was specified.")
             else:
                 model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
                 if hasattr(self.dataset, 'name'):
                     scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
-                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
+                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
                 elif hasattr(self.dataset, 'dataset'):
                     parameters = ['dataset', 'language', 'version', 'subset']
@@ -786,7 +812,7 @@ class GCDPipeline(Pipeline):
                     for metric, score in scores.items():
                         d[metric] = {type(self.metric).__name__: {model_name: score}}
                     scores_dict = {'GCD': dataset_info}
-                    self.save_evaluation_results(scores_dict, json_path, latex_path, decimals)
+                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
                 else:
                     logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
