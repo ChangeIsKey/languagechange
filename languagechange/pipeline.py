@@ -37,6 +37,10 @@ def get_depth(d):
 
 
 class Pipeline:
+    """
+        A general class for evaluation pipelines, containing methods common to WSIPipeline, WiCPipeline and
+        GCDPipeline, used for saving evaluation results and generating tables from the results.
+    """
     def __init__(self):
         pass
 
@@ -64,7 +68,7 @@ class Pipeline:
                 f.seek(0)
                 json.dump(results, f, indent=4)
                 f.truncate()
-                logging.info(f'Evaluation results saved to {json_path}') 
+                logging.info(f'Evaluation results saved to {json_path}')
         else:
             with open(json_path, 'w') as f:
                 try:
@@ -90,34 +94,34 @@ class Pipeline:
                             highlight_best=False, 
                             n_method_cols=1):
         """
-            Generates one or more tables of results in LaTeX or TSV format, to be saved in a .tex 
-                or .tsv file. Meant to be used together with self.save_evaluation_results.
+            Generates one or more tables of results in LaTeX or TSV format, to be saved in a .tex or .tsv file. Meant 
+            to be used together with self.save_evaluation_results.
+
             Args:
                 data (dict): the evaluation results, in a dictionary (similar to that produced by 
                     self.save_evaluation results).
                 save_path (str): where to save the .tex or .tsv file.
                 decimals (int): the amount of decimals to round evaluation results to.
                 remove_headers (int): if >0, the first remove_headers rows of the table are removed.
-                max_w (int|List[int]): if not None, split the table into smaller tables. If an int, 
-                    each table will be max_w columns wide (excluding the model names to the very 
-                    left). If a list of ints, the value of max_w[i] is the width of table i.
-                natural_split (int|bool): if True, split the table according to the first row which 
-                    has a natural split. If an int >= 0, split the table according to the split of this row.
+                max_w (int|List[int]): if not None, split the table into smaller tables. If an int, each table will be 
+                    max_w columns wide (excluding the model names to the very left). If a list of ints, the value of 
+                    max_w[i] is the width of table i.
+                natural_split (int|bool): if True, split the table according to the first row which has a natural 
+                    split. If an int >= 0, split the table according to the split of this row.
                 remove_empty (bool): If True, remove all rows containing no value.
                 sort_models (bool): If True, sort the rows by the names of the models.
                 generate_caption (bool): If True, generate a caption for each table.
-                highlight_best (bool|Callable|str): If "max", highlight the highest value in each column. 
-                    If "min", highlight the lowest value in each column. If a callable, use this as a 
-                    function to compare values.
-                n_method_cols (int): the amount of columns storing method info to the left of the table 
-                    content, as opposed to above the table content.
+                highlight_best (bool|Callable|str): If "max", highlight the highest value in each column. If "min", 
+                    highlight the lowest value in each column. If a callable, use this as a function to compare values.
+                n_method_cols (int): the amount of columns storing method info to the left of the table content, as 
+                    opposed to above the table content.
         """
 
         def get_header_cells_and_scores(data):
             """
                 Joins the content of each entry with the width of the cell in the table.
                 Merges empty cells together if they belong to the same supercolumn.
-                Gets all the models and their scores in the right order.
+                Gets all the methods and their scores in the right order.
             """
             total_depth = get_depth(data)
             header_cells = [[] for _ in range(total_depth-n_method_cols)]
@@ -259,7 +263,8 @@ class Pipeline:
                     index2 = 0
                     match = False
                     for s2, w2 in header_cells[i+1]:
-                        # If the two rows have matching multicolumns and one of them is empty, don't draw a horizontal line between them
+                        # If the two rows have matching multicolumns and one of them is empty, don't draw a horizontal 
+                        # line between them
                         if index2 == index1 and index2 + w2 == index1 + w1 and (s1 == '' or s2 == ''):
                             match = True
                         index2 += w2
@@ -280,8 +285,10 @@ class Pipeline:
                 r.extend([s] + [""] * (w - 1))
             return r
         
-        # Rounds scores to a number of decimals, if provided, and optionally sorts the score rows by model name.
         def format_scores(d):
+            """
+                Rounds scores to a number of decimals, if provided, and optionally sorts the score rows by model name.
+            """
             if not all (type(v) == dict for v in d.values()):
                 best_model = None
                 best_score = None
@@ -471,26 +478,66 @@ class Pipeline:
 
 
 class WSIPipeline(Pipeline):
+    """
+        Pipeline for evaluating the Word Sense Induction (WSI) task.
+
+        This pipeline:
+        1. encodes usages using either a ContextualizedModel or a definition generator 
+        (`DefinitionGenerator`) producing embeddings
+        2. clusters the resulting embeddings using the provided clustering algorithm
+        3. evaluates cluster assignments with ARI and purity
+
+        Parameters:
+            dataset (Union[WSI,List[TargetUsage],TargetUsageList]): The dataset to evaluate on. Can
+            be a WSI instance or a list of TargetUsage instances, describing WSI examples.
+            usage_encoding: The model used to encode the usages. Can be a ContextualizedModel or a 
+            DefinitionGenerator.
+            clustering (Clustering): A Clustering object (see 
+            languagechange.models.meaning.clustering) containing a get_cluster_results method, to 
+            use to cluster the encoded usages.
+            partition (str, default="test"): Dataset split to evaluate on: commonly "train", "dev", 
+            or "test".
+            shuffle (bool, default=True): Whether to shuffle when splitting the dataset if it is 
+            loaded from raw usages.
+            labels (List): A list of labels to use for evaluation, in the case of loading from 
+            TargetUsages.
+            dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
+    """
     def __init__(self, dataset, usage_encoding, clustering, partition = 'test', shuffle = True, labels=[], dataset_name = None):
         super().__init__()
+        if not (isinstance(usage_encoding, ContextualizedModel) or isinstance(usage_encoding, DefinitionGenerator)):
+            logging.error("usage_encoding must be either a ContextualizedModel or a DefinitionGenerator.")
+            raise TypeError
+        self.usage_encoding = usage_encoding
+
         if isinstance(dataset, WSI):
             self.dataset = dataset
         else:
-            self.dataset = WSI(name=dataset_name) #TODO: exceptions
+            self.dataset = WSI(name=dataset_name)
             self.dataset.load_from_target_usages(dataset, labels)
             self.dataset.split_train_dev_test(shuffle=shuffle)
-
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
         if len(self.evaluation_set) == 0:
             logging.error('Dataset used for evaluating does not contain any examples.')
             raise Exception
-        self.usage_encoding = usage_encoding
+        
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False, average = True, save = False, json_path = None, table_path = None, **kwargs):
+    def evaluate(self, return_labels = False, average = True, json_path = None, table_path = None, **kwargs):
         """
-            Evaluate on the WSI task. Returns the ARI and purity scores and optionally the clustering labels.
+            Evaluate on the WSI task.
+
+            Args:
+                return_labels (bool, default=False): if True, return not only the scores but also the cluster labels.
+                average (bool, default=True): whether to average across words for ARI and purity.
+                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
+                    results to this json file.
+                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
+                    json_path is also specified, add the results to a table in this file.
+
+            Returns:
+                scores (dict): a dictionary containing the ARI and putiry scores.
         """
         target_usages = TargetUsageList()
 
@@ -502,16 +549,9 @@ class WSIPipeline(Pipeline):
 
         if isinstance(self.usage_encoding, DefinitionGenerator):
             encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
-
-        elif isinstance(self.usage_encoding, PromptModel):
-            return None # Is this possible?
         
         elif isinstance(self.usage_encoding, ContextualizedModel):
             encoded_usages = self.usage_encoding.encode(target_usages)
-            
-        else:
-            logging.error('Model not supported.')
-            return None
 
         # Cluster the encoded usages
         clustering_results = self.clustering.get_cluster_results(encoded_usages)
@@ -519,29 +559,26 @@ class WSIPipeline(Pipeline):
         # Compute ARI and purity scores
         scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition, average=average)
 
-        if save:
-            if json_path == None and table_path == None:
-                logging.error("Tried to save results but no path was specified.")
+        if json_path is not None:
+            model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
+
+            if hasattr(self.dataset, 'name'):
+                self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, table_path=table_path, **kwargs)
+
+            elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
+                parameters = ['dataset', 'language', 'version', 'subset']
+                dataset_info = {}
+                d = dataset_info
+                for param in parameters:
+                    if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                        d[str(getattr(self.dataset, param))] = {}
+                        d = d[str(getattr(self.dataset, param))]
+                for metric, score in scores.items():
+                    d[metric] = {model_name: score}
+                self.save_evaluation_results({'WSI': dataset_info}, json_path, table_path=table_path, **kwargs)
+
             else:
-                model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
-
-                if hasattr(self.dataset, 'name'):
-                    self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, table_path=table_path, **kwargs)
-
-                elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
-                    parameters = ['dataset', 'language', 'version', 'subset']
-                    dataset_info = {}
-                    d = dataset_info
-                    for param in parameters:
-                        if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                            d[str(getattr(self.dataset, param))] = {}
-                            d = d[str(getattr(self.dataset, param))]
-                    for metric, score in scores.items():
-                        d[metric] = {model_name: score}
-                    self.save_evaluation_results({'WSI': dataset_info}, json_path, table_path=table_path, **kwargs)
-
-                else:
-                    logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
+                logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
 
         if return_labels:
             return scores, clustering_results.labels
@@ -549,12 +586,40 @@ class WSIPipeline(Pipeline):
 
         
 class WiCPipeline(Pipeline):
+    """
+    A pipeline for evaluating the Word-in-Context (WiC) task.
+
+    This pipeline:
+        1. loads a dataset that can be used for the WiC task
+        2. either
+            a) encodes usages of the dataset using either a ContextualizedModel or a DefinitionGenerator producing 
+            embeddings, and then compute similarities within embedding pairs corresponding to the WiC examples, or
+            b) uses a PromptModel to directly make pairwise similarity judgments
+        3. evaluates the similarity judgments using accuracy and F1 or Spearman correlation, depending on the kind
+        of task.
+
+    Parameters:
+        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of 
+            sets of TargetUsage instances, describing .
+        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
+            PromptModel.
+        metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a 
+            GradedChange (including APD, PRT or PJSD) or WiDiD instance.
+        clustering: the clustering algorithm used in the case of PJSD or WiDiD. Needs to be provided for PJSD, 
+            defaults to APosterioriaffinityPropagation for WiDiD.
+        scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
+        dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
+    """
     def __init__(self, dataset, usage_encoding, partition = 'test', shuffle = True, labels=[], dataset_name = None):
         super().__init__()
+        if not (isinstance(usage_encoding, ContextualizedModel) or isinstance(usage_encoding, DefinitionGenerator) or isinstance(usage_encoding, PromptModel)):
+            logging.error("usage_encoding must be either a ContextualizedModel, a DefinitionGenerator or a PromptModel.")
+            raise TypeError
+        self.usage_encoding = usage_encoding
         if isinstance(dataset, WiC):
             self.dataset = dataset
         else:
-            self.dataset = WiC(name=dataset_name) #TODO: exceptions
+            self.dataset = WiC(name=dataset_name)
             self.dataset.load_from_target_usages(dataset, labels)
             self.dataset.split_train_dev_test(shuffle=shuffle)
 
@@ -563,11 +628,24 @@ class WiCPipeline(Pipeline):
         if len(self.evaluation_set) == 0:
             logging.error('Dataset used for evaluating does not contain any examples.')
             raise Exception
-        self.usage_encoding = usage_encoding
 
-    def evaluate(self, task, label_func = None, save = False, json_path = None, table_path = None, **kwargs):
+    def evaluate(self, task, label_func = None, json_path = None, table_path = None, **kwargs):
         """
-            Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if task='graded'.
+            Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if 
+            task='graded'.
+
+            Args:
+                task (str): the kind of Word-in-Context task ('binary' or 'graded')
+                label_func (Callable, default=None): an optional function to use for pairwise similarity judgments of
+                    embeddings. By default, cosine similarity is used if task='graded', and a binary threshold at 0.5
+                    if task='binary'.
+                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
+                    results to this json file.
+                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
+                    json_path is also specified, add the results to a table in this file.
+
+            Returns:
+                scores (dict): a dictionary of scores (accuracy and f1 or Spearman correlation)
         """
         if task not in {'binary','graded'}:
             logging.error(f'Invalid argument for \'task\', should be one of [\'binary\', \'graded\']')
@@ -595,9 +673,9 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions = 'vectors')
 
-            if label_func == None:
+            if label_func is None:
                 if task == "graded":
                     label_func = lambda e1, e2 : np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2))
                 elif task == "binary":
@@ -629,7 +707,7 @@ class WiCPipeline(Pipeline):
             if task == "graded":
                 class WiCGraded(BaseModel):
                     change : float = Field(description='How similar the two occurrences of the word are.',le=1, ge=0)#TODO: perhaps rename change to something else
-                self.usage_encoding.structure = WiCGraded #TODO: make sure that the structure is updated!
+                self.usage_encoding.set_structure(WiCGraded)
                 for pair in self.evaluation_set:
                     target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                          TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
@@ -637,16 +715,12 @@ class WiCPipeline(Pipeline):
             elif task == "binary":
                 class WiCBinary(BaseModel):
                     change : bool = Field(description='Whether the word has the same meaning or not.')
-                self.usage_encoding.structure = WiCBinary #TODO: make sure that the structure is updated!
+                self.usage_encoding.set_structure(WiCBinary)
                 for pair in self.evaluation_set:
                     target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                          TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
                     label = int(self.usage_encoding.get_response(target_usage_list, user_prompt_template = 'Please tell me if the meaning of the word \'{target}\' is the same in the following example sentences: \n1. {usage_1}\n2. {usage_2}'))
                     labels.append(label)
-
-        else:
-            logging.error('Model not supported.')
-            return None
         
         if task == 'binary':
             acc = self.dataset.evaluate_accuracy(labels, self.partition)
@@ -657,30 +731,27 @@ class WiCPipeline(Pipeline):
             spearman_r = self.dataset.evaluate_spearman(labels, self.partition)
             scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
-        if save:
-            if json_path == None and table_path == None:
-                logging.error("Tried to save results but no path was specified.")
+        if json_path is not None:
+            model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
+            if hasattr(self.dataset, 'name'):
+                scores_dict = {f'{task.title()} WiC': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
+                self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
+
+            elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
+                parameters = ['dataset', 'language', 'version', 'linguality', 'subset']
+                dataset_info = {}
+                d = dataset_info
+                for param in parameters:
+                    if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                        d[str(getattr(self.dataset, param))] = {}
+                        d = d[str(getattr(self.dataset, param))]
+                for metric, score in scores.items():
+                    d[metric] = {model_name: score}
+                scores_dict = {f'{task.title()} WiC': dataset_info}
+                self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
+
             else:
-                model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
-                if hasattr(self.dataset, 'name'):
-                    scores_dict = {f'{task.title()} WiC': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
-                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
-
-                elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
-                    parameters = ['dataset', 'language', 'version', 'linguality', 'subset']
-                    dataset_info = {}
-                    d = dataset_info
-                    for param in parameters:
-                        if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                            d[str(getattr(self.dataset, param))] = {}
-                            d = d[str(getattr(self.dataset, param))]
-                    for metric, score in scores.items():
-                        d[metric] = {model_name: score}
-                    scores_dict = {f'{task.title()} WiC': dataset_info}
-                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
-
-                else:
-                    logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
+                logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
         
         return scores
 
@@ -688,11 +759,23 @@ class WiCPipeline(Pipeline):
 class GCDPipeline(Pipeline):
     """
     A pipeline for evaluating the Graded Change Detection (GCD) task.
+
+    This pipeline:
+        1. loads a dataset that can be used for GCD and extracts the usages from two time periods
+        2. encodes usages (optionally sampling n usages) using either a ContextualizedModel or a DefinitionGenerator 
+        producing embeddings
+        3. computes the change scores for each word using one of the standard metrics (APD, PRT, PJSD, WiDiD).
+        4. evaluates the change scores using Spearman correlation
+
     Parameters:
-        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of sets of TargetUsage instances, describing .
-        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or PromptModel.
-        metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a GradedChange (including APD, PRT or PJSD) or WiDiD instance.
-        clustering: the clustering algorithm used in the case of PJSD or WiDiD. Needs to be provided for PJSD, defaults to APosterioriaffinityPropagation for WiDiD.
+        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of 
+            sets of TargetUsage instances, describing .
+        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
+            PromptModel.
+        metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a 
+            GradedChange (including APD, PRT or PJSD) or WiDiD instance.
+        clustering: the clustering algorithm used in the case of PJSD or WiDiD. Needs to be provided for PJSD, 
+            defaults to APosterioriaffinityPropagation for WiDiD.
         scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
         dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
@@ -713,108 +796,103 @@ class GCDPipeline(Pipeline):
         self.metric = metric
         self.clustering = clustering
 
-    def evaluate(self, n_sampled_usages = 0, random_seed = None, save = False, json_path = None, table_path = None, **kwargs):
+    def evaluate(self, n_sampled_usages = 0, random_seed = None, json_path = None, table_path = None, **kwargs):
         """
-            Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change scores.
+            Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change 
+            scores.
+
             Args:
-                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use all usages.
-                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed is used.
-                save (bool): Whether to save the results to json or LaTeX.
-                json_path (str): The path to save the results in JSON format. If None, the results are not saved.
-                table_path (str): The path to save the results in a table. If None, no table is generated.
+                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
+                    all usages.
+                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
+                    is used.
+                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
+                    results to this json file.
+                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
+                    json_path is also specified, add the results to a table in this file.
+
             Returns:
                 scores (dict): A dictionary containing the Spearman correlation score (rho).
         """
         change_scores = {}
 
-        if isinstance(self.usage_encoding, PromptModel):
-            return None # Is this possible?
-        
-        elif isinstance(self.usage_encoding, DefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
-            if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-                target_usages_t1_all_words = self.dataset.corpus1_lemma.search([target.target for target in self.dataset.graded_task.keys()])
-                target_usages_t2_all_words = self.dataset.corpus2_lemma.search([target.target for target in self.dataset.graded_task.keys()])
+        if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
+            target_usages_t1_all_words = self.dataset.corpus1_lemma.search([target.target for target in self.dataset.graded_task.keys()])
+            target_usages_t2_all_words = self.dataset.corpus2_lemma.search([target.target for target in self.dataset.graded_task.keys()])
 
-            for word in self.dataset.target_words:
+        for word in self.dataset.target_words:
 
-                if isinstance(self.dataset, DWUG) or (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"}):
-                    target_usages = self.dataset.get_word_usages(word)
-                    groupings = set(u.grouping for u in target_usages)
-                    try:
-                        sorted_groupings = sorted(list(groupings), key = lambda x: int(x.split('-')[0]))
-                    except ValueError:
-                        sorted_groupings = sorted(list(groupings))
-                    target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0] ]
-                    target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1] ]
+            if isinstance(self.dataset, DWUG) or (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"}):
+                target_usages = self.dataset.get_word_usages(word)
+                groupings = set(u.grouping for u in target_usages)
+                try:
+                    sorted_groupings = sorted(list(groupings), key = lambda x: int(x.split('-')[0]))
+                except ValueError:
+                    sorted_groupings = sorted(list(groupings))
+                target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0] ]
+                target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1] ]
 
-                elif isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-                    target_usages_t1 = target_usages_t1_all_words[word]
-                    target_usages_t2 = target_usages_t2_all_words[word]
+            elif isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
+                target_usages_t1 = target_usages_t1_all_words[word]
+                target_usages_t2 = target_usages_t2_all_words[word]
 
-                elif isinstance(self.dataset, SemanticChangeEvaluationDataset):
-                    target_usages_t1 = self.dataset.target_usages_t1[word]
-                    target_usages_t2 = self.dataset.target_usages_t2[word]
+            elif isinstance(self.dataset, SemanticChangeEvaluationDataset):
+                target_usages_t1 = self.dataset.target_usages_t1[word]
+                target_usages_t2 = self.dataset.target_usages_t2[word]
 
-                def get_sampled_usages(target_usages, generator, n_samples):
-                    if n_samples < len(target_usages):
-                        return generator.choice(target_usages, size=n_samples, replace=False).tolist()
-                    return target_usages
+            def get_sampled_usages(target_usages, generator, n_samples):
+                if n_samples < len(target_usages):
+                    return generator.choice(target_usages, size=n_samples, replace=False).tolist()
+                return target_usages
 
-                if n_sampled_usages > 0:
-                    rng = np.random.default_rng(seed=random_seed)
-                    target_usages_t1 = get_sampled_usages(target_usages_t1, rng, n_sampled_usages)
-                    target_usages_t2 = get_sampled_usages(target_usages_t2, rng, n_sampled_usages)
+            if n_sampled_usages > 0:
+                rng = np.random.default_rng(seed=random_seed)
+                target_usages_t1 = get_sampled_usages(target_usages_t1, rng, n_sampled_usages)
+                target_usages_t2 = get_sampled_usages(target_usages_t2, rng, n_sampled_usages)
 
-                if isinstance(self.usage_encoding, DefinitionGenerator):
-                    encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1, encode_definitions='vectors')
-                    encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2, encode_definitions='vectors')
+            if isinstance(self.usage_encoding, DefinitionGenerator):
+                encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1, encode_definitions='vectors')
+                encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2, encode_definitions='vectors')
 
-                elif isinstance(self.usage_encoding, ContextualizedModel):
-                    encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1)
-                    encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2)
+            elif isinstance(self.usage_encoding, ContextualizedModel):
+                encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1)
+                encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2)
 
-                # Measure the change using the metric
-                if type(self.metric) == PJSD and self.clustering != None:
-                    change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering)
-                elif type(self.metric) == WiDiD:
-                    if self.clustering != None:
-                        self.metric == WiDiD(algorithm=self.clustering)
-                    _, _, timeseries = self.metric.compute_scores([encoded_usages_t1, encoded_usages_t2])
-                    change = timeseries.series[0]
-                else:
-                    change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
-                change_scores[word] = change
-
-        else:
-            logging.error('Model not supported.')
-            return None
+            # Measure the change using the metric
+            if isinstance(self.metric, PJSD) and self.clustering is not None:
+                change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering)
+            elif isinstance(self.metric, WiDiD):
+                if self.clustering is not None:
+                    self.metric = WiDiD(algorithm=self.clustering)
+                _, _, timeseries = self.metric.compute_scores([encoded_usages_t1, encoded_usages_t2])
+                change = timeseries.series[0]
+            else:
+                change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
+            change_scores[word] = change
 
         spearman_r = self.dataset.evaluate_gcd(change_scores)
         scores = {'spearman_r': spearman_r.statistic} # Keep rho only
 
-        if save:
-            if json_path == None and table_path == None:
-                logging.error("Tried to save results but no path was specified.")
+        if json_path is not None:
+            model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
+            if hasattr(self.dataset, 'name'):
+                scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
+                self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
+
+            elif hasattr(self.dataset, 'dataset'):
+                parameters = ['dataset', 'language', 'version', 'subset']
+                dataset_info = {}
+                d = dataset_info
+                for param in parameters:
+                    if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                        d[str(getattr(self.dataset, param))] = {}
+                        d = d[str(getattr(self.dataset, param))]
+                for metric, score in scores.items():
+                    d[metric] = {type(self.metric).__name__: {model_name: score}}
+                scores_dict = {'GCD': dataset_info}
+                self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
+
             else:
-                model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
-                if hasattr(self.dataset, 'name'):
-                    scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
-                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
-
-                elif hasattr(self.dataset, 'dataset'):
-                    parameters = ['dataset', 'language', 'version', 'subset']
-                    dataset_info = {}
-                    d = dataset_info
-                    for param in parameters:
-                        if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
-                            d[str(getattr(self.dataset, param))] = {}
-                            d = d[str(getattr(self.dataset, param))]
-                    for metric, score in scores.items():
-                        d[metric] = {type(self.metric).__name__: {model_name: score}}
-                    scores_dict = {'GCD': dataset_info}
-                    self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
-
-                else:
-                    logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
+                logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
 
         return scores
