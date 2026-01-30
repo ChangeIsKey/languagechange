@@ -7,7 +7,7 @@ from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 from jsonschema import ValidationError
 import logging
-import trankit
+from trankit.pipeline import Pipeline
 
 
 class SCFloat(BaseModel):
@@ -15,11 +15,11 @@ class SCFloat(BaseModel):
 
 
 class CosSim(BaseModel):
-    change : float = Field(description='The semantic similarity on a scale from 0 to 1.',le=1, ge=0)
+    sim : float = Field(description='The semantic similarity on a scale from 0 to 1.',le=1, ge=0)
 
 
 class DURel(BaseModel):
-    change : int = Field(description='The semantic similary from 1 to 4, where 1 is unrelated, 2 is distantly related, 3 is closely related and 4 is identical.',le=4, ge=1)
+    durel : int = Field(description='The semantic similary from 1 to 4, where 1 is unrelated, 2 is distantly related, 3 is closely related and 4 is identical.',le=4, ge=1)
 
 
 class PromptModel:
@@ -169,6 +169,7 @@ class PromptModel:
         
         self.set_structure(structure)
 
+        self.language = language
         self.lemmatize = lemmatize
 
     def set_structure(self, structure):
@@ -176,19 +177,24 @@ class PromptModel:
             structure = {"float": SCFloat, "DURel": DURel, "cosine": CosSim}.get(structure, None)
         if structure is not None:
             self.model = self.llm.with_structured_output(structure)
+            self.name = self.model_name + "_" + structure.__name__
         else:
             self.model = self.llm
+            self.name = self.model_name
 
     def get_response(self, target_usages : List[TargetUsage], 
                      system_message = 'You are a lexicographer',
-                     user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}'):
+                     user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+                     response_attribute = None
+                     ):
         """
         Takes as input two target usages and returns the degree of semantic change between them, using a chat model with structured output.
         Args:
             target_usages (List[TargetUsage]): a list of target usages with the same target word.
             system_message (str): the system message to use in the prompt
             user_prompt_template (str): template to use for the user message in the prompt.
-            lemmatize (bool): whether the target word should be lemmatized in the prompt or not. Uses trankit to lemmatize.
+            response_attribute (Union[str, NoneType]): the name of the attribute of the response to return, for example
+                "change" for the SCFloat schema could be used.
         Returns:
             int or float or str: the degree of semantic change between the two instances of the target word, alternatively the whole message content if the output is not structured.
         """
@@ -210,7 +216,7 @@ class PromptModel:
             if self.language == None:
                 logging.error("Could not lemmatize using trankit because no language is set. Please pass a value to 'language' when initializing the model.")
                 raise Exception
-            p = trankit.Pipeline(self.language)
+            p = Pipeline(self.language)
             lemmatized = [p.lemmatize(sentence, is_sent = True) for sentence in sentences]
             lemmas = [get_lemma(lemmatized[i], target_usages[i]) for i in range(2)]
             
@@ -232,7 +238,6 @@ class PromptModel:
             logging.error("Could not run chat completion.")
             raise Exception
         
-        try:
-            return response.change
-        except:
-            return response
+        if response_attribute is not None:
+            return getattr(response, response_attribute) or response
+        return response
