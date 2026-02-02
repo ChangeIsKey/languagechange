@@ -40,7 +40,10 @@ dependencies = [
     "transformers==4.47.1",
     "trankit==1.1.2",
     "tqdm==4.67.1",
-    "platformdirs==3.8.0"
+    "platformdirs==3.8.0",
+    "mlrose_hiive==2.2.4",
+    "matplotlib==3.10.0",
+    "joblib==1.2.0"
 ]
 
 [project.urls]
