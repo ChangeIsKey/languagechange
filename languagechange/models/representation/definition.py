@@ -68,7 +68,7 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         tokenizer: The tokenizer that prepares text for the model.
         eos_tokens: Tokens that signal the end of a definition.
     """
-    def __init__(self, model_name: str, ft_model_name: str, hf_token: str, is_adapter = False,
+    def __init__(self, model_name: str, ft_model_name: str, hf_token: str = None, is_adapter = False,
                  max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
                  temperature: float = 1, sampling=False, language=None, embedding_model: str = "all-mpnet-base-v2", torch_dtype = torch.float16, low_cpu_mem_usage = True):
         """
@@ -92,7 +92,6 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         self.model_name = model_name
         self.ft_model_name = ft_model_name
         self.name = "LlamaDefinitionGenerator_" + self.model_name + "_" + self.ft_model_name
-        self.hf_token = hf_token
         self.max_length = max_length
         self.batch_size = batch_size
         self.max_time = max_time
@@ -101,8 +100,13 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         self.is_adapter = is_adapter
         self.language = language
 
+        if hf_token is None:
+            hf_token = os.environ.get("HF_TOKEN")
+            if hf_token is None:
+                hf_token = getpass.getpass("Enter HuggingFace token: ")
+
         # Log in to Hugging Face with token
-        login(self.hf_token)
+        login(hf_token)
 
         # Set up the tokenizer with Llama-specific settings
         self.tokenizer = AutoTokenizer.from_pretrained(

@@ -15,7 +15,7 @@ from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import TargetUsage, TargetUsageList
 from languagechange.models.change.metrics import GradedChange, PJSD
 from languagechange.models.change.widid import WiDiD
-from languagechange.benchmark import WiC, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
+from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -509,13 +509,17 @@ class WSIPipeline(Pipeline):
             use to cluster the encoded usages.
             partition (str, default="test"): Dataset split to evaluate on: commonly "train", "dev", 
             or "test".
+            split (bool, default=False): whether to split the dataset into train, dev and test.
+            train_prop (float, default=0.8): the train proportion, if splitting the dataset.
+            dev_prop (float, default=0.1): the development proportion, if splitting the dataset.
+            test_prop (float, default=0.1): the test proportion, if splitting the dataset.
             shuffle (bool, default=True): Whether to shuffle when splitting the dataset if it is 
             loaded from raw usages.
             labels (List): A list of labels to use for evaluation, in the case of loading from 
             TargetUsages.
             dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
-    def __init__(self, dataset, usage_encoding, clustering, partition = 'test', shuffle = True, labels=[], dataset_name = None):
+    def __init__(self, dataset, usage_encoding, clustering, partition = 'test', split=False, train_prop=0.8, dev_prop=0.1, test_prop=0.1, shuffle=True, seed=42, labels=[], dataset_name = None):
         super().__init__()
         if not (isinstance(usage_encoding, ContextualizedModel) or isinstance(usage_encoding, DefinitionGenerator)):
             logging.error("usage_encoding must be either a ContextualizedModel or a DefinitionGenerator.")
@@ -525,9 +529,14 @@ class WSIPipeline(Pipeline):
         if isinstance(dataset, WSI):
             self.dataset = dataset
         else:
-            self.dataset = WSI(name=dataset_name)
-            self.dataset.load_from_target_usages(dataset, labels)
-            self.dataset.split_train_dev_test(shuffle=shuffle)
+            if isinstance(dataset, DWUG) or isinstance(dataset, WSD):
+                self.dataset = dataset.cast_to_WSI()
+            else:
+                self.dataset = WSI(name=dataset_name)
+                self.dataset.load_from_target_usages(dataset, labels)
+            if split:
+                self.dataset.split_train_dev_test(shuffle=shuffle, seed=seed, train_prop=train_prop, dev_prop=dev_prop, test_prop=test_prop)
+                
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
         if len(self.evaluation_set) == 0:
@@ -599,30 +608,36 @@ class WSIPipeline(Pipeline):
         
 class WiCPipeline(Pipeline):
     """
-    A pipeline for evaluating the Word-in-Context (WiC) task.
+        A pipeline for evaluating the Word-in-Context (WiC) task.
 
-    This pipeline:
-        1. loads a dataset that can be used for the WiC task
-        2. either
-            a) encodes usages of the dataset using either a ContextualizedModel or a DefinitionGenerator producing 
-            embeddings, and then compute similarities within embedding pairs corresponding to the WiC examples, or
-            b) uses a PromptModel to directly make pairwise similarity judgments
-        3. evaluates the similarity judgments using accuracy and F1 or Spearman correlation, depending on the kind
-        of task.
+        This pipeline:
+            1. loads a dataset that can be used for the WiC task
+            2. either
+                a) encodes usages of the dataset using either a ContextualizedModel or a DefinitionGenerator producing 
+                embeddings, and then compute similarities within embedding pairs corresponding to the WiC examples, or
+                b) uses a PromptModel to directly make pairwise similarity judgments
+            3. evaluates the similarity judgments using accuracy and F1 or Spearman correlation, depending on the kind
+            of task.
 
-    Parameters:
-        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of 
-            sets of TargetUsage instances, describing .
-        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
-            PromptModel.
-        metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a 
-            GradedChange (including APD, PRT or PJSD) or WiDiD instance.
-        clustering: the clustering algorithm used in the case of PJSD or WiDiD. Needs to be provided for PJSD, 
-            defaults to APosterioriaffinityPropagation for WiDiD.
-        scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
-        dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
+        Parameters:
+            dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of 
+                sets of TargetUsage instances, describing .
+            usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
+                PromptModel.
+            partition (str, default="test"): Dataset split to evaluate on: commonly "train", "dev", 
+            or "test".
+            split (bool, default=False): whether to split the dataset into train, dev and test.
+            train_prop (float, default=0.8): the train proportion, if splitting the dataset.
+            dev_prop (float, default=0.1): the development proportion, if splitting the dataset.
+            test_prop (float, default=0.1): the test proportion, if splitting the dataset.
+            shuffle (bool, default=True): Whether to shuffle when splitting the dataset if it is 
+            loaded from raw usages.
+            labels (List): A list of labels to use for evaluation, in the case of loading from 
+            TargetUsages.
+            dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
-    def __init__(self, dataset, usage_encoding, partition = 'test', shuffle = True, labels=[], dataset_name = None):
+    def __init__(self, dataset, usage_encoding, partition='test', split=False, train_prop=0.8, dev_prop=0.1, 
+        test_prop=0.1, shuffle=True, seed=42, labels=[], dataset_name=None):
         super().__init__()
         if not (isinstance(usage_encoding, ContextualizedModel) or isinstance(usage_encoding, DefinitionGenerator) or isinstance(usage_encoding, PromptModel)):
             logging.error("usage_encoding must be either a ContextualizedModel, a DefinitionGenerator or a PromptModel.")
@@ -631,9 +646,13 @@ class WiCPipeline(Pipeline):
         if isinstance(dataset, WiC):
             self.dataset = dataset
         else:
-            self.dataset = WiC(name=dataset_name)
-            self.dataset.load_from_target_usages(dataset, labels)
-            self.dataset.split_train_dev_test(shuffle=shuffle)
+            if isinstance(dataset, DWUG):
+                self.dataset = dataset.cast_to_WiC()
+            else:
+                self.dataset = WiC(name=dataset_name)
+                self.dataset.load_from_target_usages(dataset, labels)
+            if split:
+                self.dataset.split_train_dev_test(shuffle=shuffle, seed=seed, train_prop=train_prop, dev_prop=dev_prop, test_prop=test_prop)
 
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
