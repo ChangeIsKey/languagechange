@@ -10,13 +10,13 @@ from math import comb
 import csv
 import logging
 import zipfile
+from typing import List, Dict, Union, Callable, Tuple
+import inspect
+from pathlib import Path
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
-from typing import List, Dict, Union, Callable, Tuple
-import inspect
-from pathlib import Path
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt

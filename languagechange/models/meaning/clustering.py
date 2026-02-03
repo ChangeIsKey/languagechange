@@ -1,21 +1,15 @@
+import sys
+import time
+from collections import defaultdict
+import multiprocessing as mp
 import numpy as np
 from sklearn.cluster import AffinityPropagation
 from sklearn.base import ClusterMixin, BaseEstimator
 from sklearn.metrics.pairwise import euclidean_distances, cosine_similarity
-import sys
-from itertools import combinations, product, chain
-from collections import defaultdict, Counter
-import random
 import networkx as nx
-import numpy as np
-from scipy.stats import spearmanr
-from networkx.algorithms.dag import transitive_closure
 import mlrose_hiive
 import six
 sys.modules['sklearn.externals.six'] = six
-import time
-from scipy.optimize import linear_sum_assignment
-import multiprocessing as mp
 
 
 class ClusteringResults():

@@ -43,7 +43,9 @@ dependencies = [
     "platformdirs==3.8.0",
     "mlrose_hiive==2.2.4",
     "matplotlib==3.10.0",
-    "joblib==1.2.0"
+    "joblib==1.2.0",
+    "jsonschema==4.26.0",
+    "networkx==3.4.2"
 ]
 
 [project.urls]
