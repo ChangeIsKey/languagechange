@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Hûn lexicographer in ku bi dayîna şîroveyên kurt ên maneya peyvên nasnamekî ne.",
+        "user_message": "Ji kerema xwe, daxuyaniya kurt ji bo maneya peyva \"{}\" di gotarê jêrîn de pêşkêş bikin: {}"
+    }
+}

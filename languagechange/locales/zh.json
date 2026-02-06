@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "你是一位熟悉提供简明单词含义定义的词典编纂者。",
+        "user_message": "请提供单词\"{}\"在以下句子中的简洁定义：{}"
+    }
+}

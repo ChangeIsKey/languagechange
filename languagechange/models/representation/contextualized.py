@@ -1,17 +1,17 @@
+import logging
+import os
+import pickle
+from collections import defaultdict
+from typing import Tuple, List, Union, Any
+import hashlib
+from abc import ABC, abstractmethod
 import torch
 import numpy as np
-from collections import defaultdict
-from abc import ABC, abstractmethod
-from typing import Tuple, List, Union, Any
-from languagechange.usages import TargetUsage
-from languagechange.cache import CacheManager
 import transformers
 from transformers import AutoTokenizer, AutoModel
 from WordTransformer import WordTransformer, InputExample
-import logging
-import hashlib
-import pickle
-import os
+from languagechange.usages import TargetUsage
+from languagechange.cache import CacheManager
 
 # Configure logging with a basic setup
 logging.basicConfig(

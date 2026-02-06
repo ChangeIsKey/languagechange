@@ -1,25 +1,25 @@
 import os
-import torch
+import csv
+from os import path
 import warnings
+import urllib.request
+from urllib.error import HTTPError
+import json
+from typing import Literal, Sequence, TypedDict, Tuple, List, Union, Any
+import getpass
+import logging
 from peft import PeftModel
 from datasets import Dataset
 from huggingface_hub import login
-from typing import Literal, Sequence, TypedDict
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM, pipeline
 from langchain.chat_models import init_chat_model
 from langchain_core.prompts import ChatPromptTemplate
-from languagechange.usages import TargetUsage
 from pydantic import BaseModel, Field
-import logging
-from typing import Tuple, List, Union, Any
-import csv
-from os import path
 import pandas as pd
 import torch
 import tqdm
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from sentence_transformers import SentenceTransformer
-import getpass
+from languagechange.usages import TargetUsage
 
 # Define types for chat dialog outside the class for clarity
 Role = Literal["system", "user"]
@@ -68,10 +68,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         tokenizer: The tokenizer that prepares text for the model.
         eos_tokens: Tokens that signal the end of a definition.
     """
-    def __init__(self, model_name: str, ft_model_name: str, hf_token: str, 
+    def __init__(self, model_name: str, ft_model_name: str, hf_token: str = None, is_adapter = False,
                  max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
-                 temperature: float = 0.00001, embedding_model: str = "all-mpnet-base-v2", 
-                 torch_dtype = torch.float16, low_cpu_mem_usage = False):
+                 temperature: float = 1, sampling=False, language=None, embedding_model: str = "all-mpnet-base-v2", torch_dtype = torch.float16, low_cpu_mem_usage = True):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
@@ -79,23 +78,35 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             model_name (str): The base model name from Hugging Face (e.g., "meta-llama/Llama-2-7b-chat-hf").
             ft_model_name (str): The fine-tuned model name (e.g., "FrancescoPeriti/Llama2Dictionary").
             hf_token (str): Hugging Face token to access models.
-            max_length (int): Maximum token length for prompt (default is 512).
+            max_length (int): Maximum token length for prompt and definitions (default is 512).
             batch_size (int): Number of examples to process in one go (default is 32).
-            max_time (float): Maximum time in seconds per batch (default is 4.5).
-            temperature (float): Generation temperature (default is 0.00001).
+            max_time (float): Maximum time in seconds per example (default is 4.5).
+            temperature (float): Generation temperature if sampling (default is 1).
+            sampling (bool): if True, do sampling when generating.
+            language (str): a two letter language code to use for the prompts. If None, the English prompt will be used.
+            embedding_model (str): the sentence embedding model to use, if encoding definitions.
+            torch_dtype: the torch float type, applicable for the pre-trained models.
+            low_cpu_mem_usage (bool): if True, set low_cpu_mem_usage=True for the pre-trained model.
         """
         super().__init__(embedding_model = embedding_model)
         self.model_name = model_name
         self.ft_model_name = ft_model_name
         self.name = "LlamaDefinitionGenerator_" + self.model_name + "_" + self.ft_model_name
-        self.hf_token = hf_token
         self.max_length = max_length
         self.batch_size = batch_size
         self.max_time = max_time
         self.temperature = temperature
+        self.sampling = sampling
+        self.is_adapter = is_adapter
+        self.language = language
+
+        if hf_token is None:
+            hf_token = os.environ.get("HF_TOKEN")
+            if hf_token is None:
+                hf_token = getpass.getpass("Enter HuggingFace token: ")
 
         # Log in to Hugging Face with token
-        login(self.hf_token)
+        login(hf_token)
 
         # Set up the tokenizer with Llama-specific settings
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -105,12 +116,8 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             add_bos_token=True,
         )
         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        self.eos_tokens = [self.tokenizer.encode(token, add_special_tokens=False)[0] 
-                        for token in [';', ' ;', '.', ' .']]
-        self.eos_tokens.append(self.tokenizer.eos_token_id)
         
-        if "Llama-2" in self.model_name:
+        if "Llama-2" in self.model_name or ("Llama-3" in self.model_name and self.is_adapter):
             # Load the base model with explicit settings
             chat_model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
@@ -118,14 +125,38 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
                 torch_dtype=torch_dtype,  # Use FP16 for memory efficiency
                 low_cpu_mem_usage=low_cpu_mem_usage
             )
-            self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
-            self.model.eval()
+            chat_model.eval()
+            # Load the fine-tuned model
+            ft_model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
+            ft_model.eval()
+            if "Llama-2" in self.model_name:
+                # For the Llama2 definition generator, the model is just the finetuned model
+                self.model = ft_model
+            else:
+                # If using an adapter, merge and unload the finetuned model
+                ft_model = ft_model.merge_and_unload()
 
-        elif "Llama-3" in self.model_name:
-            self.model = pipeline("text-generation", model=self.ft_model_name, tokenizer=self.tokenizer, device_map="auto")
+        elif "Llama-3" in self.model_name and not self.is_adapter:
+            ft_model = self.ft_model_name
+        
+        if "Llama-3" in self.model_name:
+            # For the Llama3 definition generators, use a pipeline containing the model and the tokenizer
+            self.model = pipeline("text-generation", model=ft_model, tokenizer=self.tokenizer, device_map="auto")
 
-    # apply template
-    def apply_chat_template(self, dataset, system_message, template):
+        if "Llama-3" in self.model_name and self.is_adapter:
+            self.eos_tokens = [self.model.tokenizer.eos_token_id] + [self.model.tokenizer.encode(token, add_special_tokens=False)[0] for token in ['.', ' .']] #TODO: look into this
+        else:
+            self.eos_tokens = [self.tokenizer.encode(token, add_special_tokens=False)[0] 
+                        for token in [';', ' ;', '.', ' .']]
+            self.eos_tokens.append(self.tokenizer.eos_token_id)
+        if "Llama-3" in self.model_name and not self.is_adapter:
+            self.model.tokenizer.padding_side='left'
+            self.model.tokenizer.add_special_tokens = True
+            self.model.tokenizer.add_eos_token = True
+            self.model.tokenizer.add_bos_token = True
+
+    # apply template for Llama 2
+    def apply_chat_template_llama2(self, dataset, system_message, template):
         def apply_chat_template_func(record):
             dialog: Dialog = (Message(role='system', content=system_message),
                             Message(role='user', content=template.format(record['target'], record['example'])))
@@ -133,6 +164,15 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             return {'text': prompt}
         
         return dataset.map(apply_chat_template_func)
+    
+    # apply template for Llama 3
+    def apply_chat_template_llama3(self, dataset, system_message, template):
+        def apply_chat_template_func(record):
+            dialog: Dialog = (Message(role='system', content=system_message),
+                            Message(role='user', content=template.format(record['target'], record['example'])))
+            return self.tokenizer.apply_chat_template(dialog, add_generation_prompt=True, tokenize=False)
+        
+        return [apply_chat_template_func(row) for row in dataset]
     
     def tokenize(self, dataset):
         def formatting_func(record):
@@ -179,8 +219,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         return definition.replace('\n', ' ') + '\n'
 
     def generate_definitions(self, target_usages: List[TargetUsage],
-                             system_message: str = "You are a lexicographer familiar with providing concise definitions of word meanings.",
-                             template: str = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}',
+                             language = None,
+                             system_message: str = None,
+                             user_message_template: str = None,
                              encode_definitions : str = None
                              ) -> List[str]:
         """
@@ -188,49 +229,59 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
 
         Args:
             target_usages (List[TargetUsage]): A list of TargetUsage objects.
-            system_message (str): The system prompt message.
-            template (str): The template for the user prompt with placeholders {target} and {example}.
+            language (str): a two digit language code. If not None, it overrides self.language. Falls back to English.
+            system_message (str): The system prompt message. If not None, it overrides the default message for the 
+                chosen language.
+            user_message_template (str): The template for the user prompt with placeholders {target} and {example}. 
+                If not None, it overrides the default message template for the chosen language.
+            encode_definitions (str): if not None, use self.embedding_model to encode the definitions. If 'vectors', 
+                return only the sentence embeddings. If 'both', return both definitions and embeddings.
 
         Returns:
             Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
         """
-        if "Llama-2" in self.model_name:
-            examples = []
-            for usage in target_usages:
-                target = usage.text()[usage.offsets[0]:usage.offsets[1]]
-                example = usage.text()
-                examples.append({'target': target, 'example': example})
+        # Choose the system and user messages for the specific language, fall back to English if the language is not available
+        if language is None:
+            if self.language is None:
+                language = "EN"
+            else:
+                language = self.language
 
-            dataset = Dataset.from_list(examples)
-            dataset = self.apply_chat_template(dataset, system_message, template)
-            tokenized = self.tokenize(dataset)
+        if not system_message or not user_message_template:
+            try:
+                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/{language.lower()}.json') as url:
+                    messages = json.load(url)
+            except HTTPError:
+                logging.info(f"Could not load system and user messages for {language}. Falling back to English.")
+                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/en.json') as url:
+                    messages = json.load(url)
+                    
+            if not system_message:
+                system_message = messages["llama_definition_messages"]["system_message"]
+            if not user_message_template:
+                user_message_template = messages["llama_definition_messages"]["user_message"]
+
+        examples = []
+        for usage in target_usages:
+            target = usage.text()[usage.offsets[0]:usage.offsets[1]]
+            example = usage.text()
+            examples.append({'target': target, 'example': example})
+
+        dataset = Dataset.from_list(examples)
+
+        if "Llama-2" in self.model_name:
+            dataset = self.apply_chat_template_llama2(dataset, system_message, user_message_template)
+            dataset = self.tokenize(dataset)
             device = next(self.model.parameters()).device
 
         elif "Llama-3" in self.model_name:
-            tokenized = []
-            
-            # Create prompt for each target usage using the provided system_message and template
-            for usage in target_usages:
-                target = usage.text()[usage.offsets[0]:usage.offsets[1]]
-                example = usage.text()
-                user_message = template.format(target, example)
-                dialog: Dialog = [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_message}
-                ]
-                # Construct the prompt string
-                prompt = self.model.tokenizer.apply_chat_template(dialog, tokenize=False, add_generation_prompt=True)
-                tokenized.append(prompt)
-
-            self.model.tokenizer.padding_side='left'
-            self.model.tokenizer.add_special_tokens = True
-            self.model.tokenizer.add_eos_token = True
-            self.model.tokenizer.add_bos_token = True
+            dataset = self.apply_chat_template_llama3(dataset, system_message, user_message_template)
                     
         definitions = []
-        total = len(tokenized)
-        for i in range(0, len(tokenized), self.batch_size):
-            batch = tokenized[i:i + self.batch_size]
+        total = len(dataset)
+        for i in range(0, total, self.batch_size):
+            logging.info(f"{i} out of {total} examples")
+            batch = dataset[i:i + self.batch_size]
 
             if "Llama-2" in self.model_name:
                 model_input = dict()
@@ -245,20 +296,37 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
                         max_time=self.max_time * self.batch_size,
                         eos_token_id=self.eos_tokens,
                         temperature=self.temperature,
+                        do_sample = self.sampling,
                         pad_token_id=self.tokenizer.eos_token_id
                     )
                     answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
                     definitions.extend([self.extract_definition(answer) for answer in answers])
                 elif "Llama-3" in self.model_name:
-                    answers = self.model(
-                        batch, 
-                        max_length = self.max_length, 
-                        forced_eos_token_id = self.eos_tokens,
-                        max_time = self.max_time * self.batch_size, 
-                        eos_token_id = self.eos_tokens, 
-                        temperature = self.temperature,
-                        pad_token_id = self.model.tokenizer.eos_token_id
-                    )
+                    if not self.is_adapter:
+                        answers = self.model(
+                            batch, 
+                            max_new_tokens = self.max_length, 
+                            forced_eos_token_id = self.eos_tokens,
+                            max_time = self.max_time * self.batch_size, 
+                            eos_token_id = self.eos_tokens, 
+                            temperature = self.temperature,
+                            do_sample = self.sampling,
+                            pad_token_id = self.model.tokenizer.eos_token_id
+                        )
+                    else:                      
+                        answers = self.model(
+                            batch, 
+                            max_new_tokens = self.max_length, 
+                            forced_eos_token_id = self.eos_tokens,
+                            max_time = self.max_time * self.batch_size, 
+                            eos_token_id = self.eos_tokens, 
+                            temperature = self.temperature,
+                            do_sample = self.sampling,
+                            pad_token_id = self.model.tokenizer.eos_token_id,
+                            truncation = True,
+                            batch_size = self.batch_size
+                        )
+
                     definitions.extend([self.extract_definition(answer[0]['generated_text']) for answer in answers])
             except Exception as e:
                 warnings.warn(f"Failed generation for batch starting at index {i}: {e}")
@@ -359,7 +427,7 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
                 "fireworks": "FIREWORKS_API_KEY",
                 "mistralai": "MISTRAL_API_KEY",
                 "together": "TOGETHER_API_KEY",
-                "xai": "XAI_API_KEY"
+                "xai": "XAI_API_KEY",
             }
             if model_provider in provider_key_names.keys():
                 provider_key_name = provider_key_names[model_provider]

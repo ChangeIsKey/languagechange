@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Es lexicographus peritus, qui breves definitiones significatuum verborum praebet.",
+        "user_message": "Quaeso, praebe brevem definitionem significatuum verbi \"{}\" in sequenti sententia: {}"
+    }
+}

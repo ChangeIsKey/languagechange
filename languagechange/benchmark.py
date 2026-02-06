@@ -10,13 +10,13 @@ from math import comb
 import csv
 import logging
 import zipfile
+from typing import List, Dict, Union, Callable, Tuple
+import inspect
+from pathlib import Path
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
-from typing import List, Dict, Union, Callable, Tuple
-import inspect
-from pathlib import Path
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -87,7 +87,7 @@ class Benchmark():
                 all_data += self.data[k]
             return all_data
         
-    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True, epsilon = 1e-6):
+    def split_train_dev_test(self, train_prop=0.8, dev_prop=0.1, test_prop=0.1, shuffle=True, seed=42, epsilon=1e-6):
         for s in ['train','dev','test']:
             if s in self.data.keys():
                 logging.info(f'Dataset already contains a {s} set.')
@@ -105,7 +105,8 @@ class Benchmark():
             return None
 
         if shuffle:
-            data = random.sample(data, len(data))
+            generator = np.random.default_rng(seed=seed)
+            data = generator.choice(data, size=len(data), replace=False).tolist()
             
         train_offset = int(len(data) * train_prop)
         dev_offset = int(len(data) * (train_prop + dev_prop))
@@ -1176,12 +1177,15 @@ class WiC(Benchmark):
             self.load_from_resource_hub()
 
         # Loads from a dictionary or list
-        elif wic_data != None:
+        elif wic_data is not None:
             try:
                 self.load_from_data(wic_data)
             except Exception as e:
                 logging.error('Could not load from dataset.')
                 raise e
+
+        else:
+            logging.info("No data examples have been loaded.")
     
     # Loads from a list or a dict containing a WiC dataset, with each example as in self.load_from_resource_hub()
     def load_from_data(self, data):
@@ -1575,6 +1579,9 @@ class WSD(Benchmark):
                 logging.error('Could not load from dataset.')
                 raise e
 
+        else:
+            logging.info("No data examples have been loaded.")
+
     # Loads from a dict or list containing a WSD dataset, with each example as in self.load()
     def load_from_data(self, data):
         if type(data) == list:
@@ -1791,10 +1798,13 @@ class WSI(Benchmark):
         if name is not None:
             self.name = name
         if wsi_data is not None:
-            self.load_from_data(wsi_data)
+            try:
+                self.load_from_data(wsi_data)
+            except Exception as e:
+                logging.error('Could not load from dataset.')
+                raise e
         else:
-            logging.error('No data was specified.')
-            raise ValueError
+            logging.info("No data examples have been loaded.")
 
     # Loads from a list or dict containing a WSI dataset
     def load_from_data(self, data):

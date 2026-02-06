@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Du er en leksikograf som er kjent med å gi presise definisjoner av ords betydning.",
+        "user_message": "Vennligst gi en kortfattet definisjon av betydningen av ordet \"{}\" i den følgende setningen: {}"
+    }
+}

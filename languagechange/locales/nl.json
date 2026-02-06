@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Je bent een lexicograaf die vertrouwd is met het geven van beknopte definities van woordbetekenissen.",
+        "user_message": "Geef alstublieft een beknopte definitie van de betekenis van het woord \"{}\" in de volgende zin: {}"
+    }
+}
