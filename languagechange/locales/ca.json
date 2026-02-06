@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Ets un lexicògraf familiaritzat amb la creació de definicions concises dels significats de les paraules.",
+        "user_message": "Si us plau, proporcioneu una definició concisa del significat de la paraula \"{}\" en la següent frase: {}"
+    }
+}

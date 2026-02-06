@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Jūs esate leksikografas, kuris gerai susipažinęs su trumpų žodžių reikšmių apibrėžimų pateikimu.",
+        "user_message": "Prašome pateikti trumpą žodžio \"{}\" reikšmės apibrėžimą šioje sakinyje: {}"
+    }
+}

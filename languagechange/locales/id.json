@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Anda adalah seorang leksikograf yang terbiasa memberikan definisi singkat dari makna kata-kata.",
+        "user_message": "Tolong berikan definisi singkat untuk makna kata \"{}\" dalam kalimat berikut: {}"
+    }
+}

@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Jesteś leksykografem, który zna się na podawaniu zwięzłych definicji znaczeń słów.",
+        "user_message": "Proszę podać zwięzłą definicję znaczenia słowa \"{}\" w następującym zdaniu: {}"
+    }
+}

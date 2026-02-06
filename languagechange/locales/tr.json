@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Sen, kelime anlamlarının özlü tanımlarını sağlamaya aşina bir sözlük yazarsısın.",
+        "user_message": "Lütfen aşağıdaki cümledeki \"{}\" kelimesinin anlamı için özlü bir tanım sağlayın: {}"
+    }
+}

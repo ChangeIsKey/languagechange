@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Ianao dia lexicographer mahazatra amin'ny fanomezana fanazavana fohy momba ny dikan'ny teny.",
+        "user_message": "Azafady, omeo fanazavana fohy momba ny dikan'ny teny \"{}\" ao amin'ity fehezanteny manaraka ity: {}"
+    }
+}

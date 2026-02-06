@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Du bist ein Lexikograf, der mit der Bereitstellung prägnanter Definitionen von Wortbedeutungen vertraut ist.",
+        "user_message": "Bitte geben Sie eine prägnante Definition für die Bedeutung des Wortes \"{}\" im folgenden Satz an: {}"
+    }
+}

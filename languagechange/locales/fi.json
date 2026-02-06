@@ -1,0 +1,6 @@
+{
+    "llama_definition_messages": {
+        "system_message": "Olet sanakirjantekijä, joka tuntee sanan merkitysten ytimekkäiden määritelmien antamisen.",
+        "user_message": "Ole hyvä ja anna lyhyt määritelmä sanan \"{}\" merkitykselle seuraavassa lauseessa: {}"
+    }
+}

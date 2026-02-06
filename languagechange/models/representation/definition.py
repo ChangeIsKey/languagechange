@@ -2,6 +2,9 @@ import os
 import csv
 from os import path
 import warnings
+import urllib.request
+from urllib.error import HTTPError
+import json
 from typing import Literal, Sequence, TypedDict, Tuple, List, Union, Any
 import getpass
 import logging
@@ -152,57 +155,6 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             self.model.tokenizer.add_eos_token = True
             self.model.tokenizer.add_bos_token = True
 
-        self.system_message = {
-            'nl': "Je bent een lexicograaf die vertrouwd is met het geven van beknopte definities van woordbetekenissen.",
-            'it': "Sei un lessicografo esperto nel fornire definizioni concise dei significati delle parole.",
-            'sv': "Du är en lexikograf som är van vid att ge kortfattade definitioner av ordens betydelser.",
-            'no': "Du er en leksikograf som er kjent med å gi presise definisjoner av ords betydning.",
-            'es': "Eres un lexicógrafo familiarizado con proporcionar definiciones concisas de los significados de las palabras.",
-            'ja': "あなたは、単語の意味の簡潔な定義を提供することに熟練した辞書編纂者です。",
-            'de': "Du bist ein Lexikograf, der mit der Bereitstellung prägnanter Definitionen von Wortbedeutungen vertraut ist.",
-            'pt': "Você é um lexicógrafo familiarizado com a fornecimento de definições concisas dos significados das palavras.",
-            'en': "You are a lexicographer familiar with providing concise definitions of word meanings.",
-            'tr': "Sen, kelime anlamlarının özlü tanımlarını sağlamaya aşina bir sözlük yazarsısın.",
-            'mg': "Ianao dia lexicographer mahazatra amin'ny fanomezana fanazavana fohy momba ny dikan'ny teny.",
-            'da': "Du er en leksikograf, der er vant til at give præcise definitioner af ords betydninger.",
-            'ca': "Ets un lexicògraf familiaritzat amb la creació de definicions concises dels significats de les paraules.",
-            'fr': "Vous êtes un lexicographe habitué à fournir des définitions concises des significations des mots.",
-            'lt': "Jūs esate leksikografas, kuris gerai susipažinęs su trumpų žodžių reikšmių apibrėžimų pateikimu.",
-            'la': "Es lexicographus peritus, qui breves definitiones significatuum verborum praebet.",
-            'id': "Anda adalah seorang leksikograf yang terbiasa memberikan definisi singkat dari makna kata-kata.",
-            'pl': "Jesteś leksykografem, który zna się na podawaniu zwięzłych definicji znaczeń słów.",
-            'ku': "Hûn lexicographer in ku bi dayîna şîroveyên kurt ên maneya peyvên nasnamekî ne.",
-            'el': "Είστε ένας λεξικογράφος εξοικειωμένος με την παροχή συνοπτικών ορισμών των εννοιών των λέξεων.",
-            'zh': "你是一位熟悉提供简明单词含义定义的词典编纂者。",
-            'fi': "Olet sanakirjantekijä, joka tuntee sanan merkitysten ytimekkäiden määritelmien antamisen.",
-            'ru': "Вы — лексикограф, знакомый с составлением кратких определений значений слов."
-        }
-        self.user_message = {
-            'nl': 'Geef alstublieft een beknopte definitie van de betekenis van het woord "{}" in de volgende zin: {}',
-            'it': 'Si prega di fornire una definizione concisa per il significato della parola "{}" nella seguente frase: {}',
-            'sv': 'Vänligen ge en kortfattad definition av betydelsen av ordet "{}" i följande mening: {}',
-            'es': 'Por favor, proporcione una definición concisa para el significado della parola "{}" nella seguente frase: {}',
-            'no': 'Vennligst gi en kortfattet definisjon av betydningen av ordet "{}" i den følgende setningen: {}',
-            'ja': '次の文での「{}」という単語の意味に対する簡潔な定義を提供してください: {}',
-            'de': 'Bitte geben Sie eine prägnante Definition für die Bedeutung des Wortes "{}" im folgenden Satz an: {}',
-            'pt': 'Por favor, forneça uma definição concisa para o significado da palavra "{}" na seguinte frase: {}',
-            'en': 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}',
-            'tr': 'Lütfen aşağıdaki cümledeki "{}" kelimesinin anlamı için özlü bir tanım sağlayın: {}',
-            'mg': 'Azafady, omeo fanazavana fohy momba ny dikan\'ny teny "{}" ao amin\'ity fehezanteny manaraka ity: {}',
-            'da': 'Venligst giv en kortfattet definition af betydningen af ordet "{}" i den følgende sætning: {}',
-            'ca': 'Si us plau, proporcioneu una definició concisa del significat de la paraula "{}" en la següent frase: {}',
-            'fr': 'Veuillez fournir une définition concise du sens du mot "{}" dans la phrase suivante : {}',
-            'lt': 'Prašome pateikti trumpą žodžio "{}" reikšmės apibrėžimą šioje sakinyje: {}',
-            'la': 'Quaeso, praebe brevem definitionem significatuum verbi "{}" in sequenti sententia: {}',
-            'id': 'Tolong berikan definisi singkat untuk makna kata "{}" dalam kalimat berikut: {}',
-            'pl': 'Proszę podać zwięzłą definicję znaczenia słowa "{}" w następującym zdaniu: {}',
-            'ku': 'Ji kerema xwe, daxuyaniya kurt ji bo maneya peyva "{}" di gotarê jêrîn de pêşkêş bikin: {}',
-            'el': 'Παρακαλώ παρέχετε έναν συνοπτικό ορισμό για τη σημασία της λέξης "{}" στην παρακάτω πρόταση: {}',
-            'zh': '请提供单词"{}"在以下句子中的简洁定义：{}',
-            'fi': 'Ole hyvä ja anna lyhyt määritelmä sanan "{}" merkitykselle seuraavassa lauseessa: {}',
-            'ru': 'Пожалуйста, предоставьте краткое определение значения слова "{}" в следующем предложении: {}'
-        }
-
     # apply template for Llama 2
     def apply_chat_template_llama2(self, dataset, system_message, template):
         def apply_chat_template_func(record):
@@ -269,7 +221,7 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
     def generate_definitions(self, target_usages: List[TargetUsage],
                              language = None,
                              system_message: str = None,
-                             template: str = None,
+                             user_message_template: str = None,
                              encode_definitions : str = None
                              ) -> List[str]:
         """
@@ -278,9 +230,12 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         Args:
             target_usages (List[TargetUsage]): A list of TargetUsage objects.
             language (str): a two digit language code. If not None, it overrides self.language. Falls back to English.
-            system_message (str): The system prompt message.
-            template (str): The template for the user prompt with placeholders {target} and {example}.
-            encode_definitions (str): if not None, use self.embedding_model to encode the definitions. If 'vectors', return only the sentence embeddings. If 'both', return both definitions and embeddings.
+            system_message (str): The system prompt message. If not None, it overrides the default message for the 
+                chosen language.
+            user_message_template (str): The template for the user prompt with placeholders {target} and {example}. 
+                If not None, it overrides the default message template for the chosen language.
+            encode_definitions (str): if not None, use self.embedding_model to encode the definitions. If 'vectors', 
+                return only the sentence embeddings. If 'both', return both definitions and embeddings.
 
         Returns:
             Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
@@ -291,8 +246,20 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
                 language = "EN"
             else:
                 language = self.language
-        system_message = self.system_message.get(language.lower(), self.system_message['en']) if system_message is None else system_message
-        user_message_template = self.user_message.get(language.lower(), self.user_message['en']) if template is None else template
+
+        if not system_message or not user_message_template:
+            try:
+                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/{language.lower()}.json') as url:
+                    messages = json.load(url)
+            except HTTPError:
+                logging.info(f"Could not load system and user messages for {language}. Falling back to English.")
+                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/en.json') as url:
+                    messages = json.load(url)
+                    
+            if not system_message:
+                system_message = messages["llama_definition_messages"]["system_message"]
+            if not user_message_template:
+                user_message_template = messages["llama_definition_messages"]["user_message"]
 
         examples = []
         for usage in target_usages:
