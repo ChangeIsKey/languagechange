@@ -1,5 +1,10 @@
-LanguageChange documentation
-============================
+.. raw:: html
+
+   <h1 style="text-align: center; font-size: 2.625rem;">LanguageChange documentation</h1>
+
+.. image:: cluster-viz-altered.png
+   :align: center
+   :alt: alternate text
 
 LanguageChange is a Python toolkit for exploring lexical semantic change across corpora and time. 
 It bundles data loaders, embedding pipelines, alignment strategies, and evaluation utilities so you can 
@@ -29,3 +34,20 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
+
+Source code
+==================
+
+The source code for this project is available on GitHub: https://github.com/ChangeIsKey/languagechange/.
+
+Credits
+==================
+
+This project is maintained by the ChangeIsKey team with support from Riksbankens Jubileumsfond (grant M21-0021). 
+The library is under active development, but íf it supports your research, please cite it as:
+
+@misc{languagechange,
+  title = {LanguageChange: A Python library for studying semantic change},
+  author = {{Change is Key!}},
+  year = {n.d.}
+}
