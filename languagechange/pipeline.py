@@ -13,7 +13,7 @@ from languagechange.models.representation.contextualized import ContextualizedMo
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import TargetUsage, TargetUsageList
-from languagechange.models.change.metrics import GradedChange, PJSD
+from languagechange.models.change.metrics import GradedChange, JSD
 from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 
@@ -790,7 +790,7 @@ class GCDPipeline(Pipeline):
         1. loads a dataset that can be used for GCD and extracts the usages from two time periods
         2. encodes usages (optionally sampling n usages) using either a ContextualizedModel or a DefinitionGenerator 
         producing embeddings
-        3. computes the change scores for each word using one of the standard metrics (APD, PRT, PJSD, WiDiD).
+        3. computes the change scores for each word using one of the standard metrics (APD, PRT, JSD, WiDiD).
         4. evaluates the change scores using Spearman correlation
 
     Parameters:
@@ -799,8 +799,8 @@ class GCDPipeline(Pipeline):
         usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
             PromptModel.
         metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a 
-            GradedChange (including APD, PRT or PJSD) or WiDiD instance.
-        clustering: the clustering algorithm used in the case of PJSD or WiDiD. Needs to be provided for PJSD, 
+            GradedChange (including APD, PRT or JSD) or WiDiD instance.
+        clustering: the clustering algorithm used in the case of JSD or WiDiD. Needs to be provided for JSD, 
             defaults to APosterioriaffinityPropagation for WiDiD.
         scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
         dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
@@ -885,7 +885,7 @@ class GCDPipeline(Pipeline):
                 encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2)
 
             # Measure the change using the metric
-            if isinstance(self.metric, PJSD) and self.clustering is not None:
+            if isinstance(self.metric, JSD) and self.clustering is not None:
                 change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering)
             elif isinstance(self.metric, WiDiD):
                 if self.clustering is not None:

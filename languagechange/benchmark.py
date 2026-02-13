@@ -49,6 +49,17 @@ def purity(labels_true, cluster_labels):
     return sum(majority_counts) / N
 
 
+def generate_index_pairs(total, n, random_seed=None):
+    """
+        Utility function to generate n pairs of indices from a range of indices
+    """
+    all_index_pairs = [(i, j) for i in range(total) for j in range(i+1,total)]
+    if n >= len(all_index_pairs):
+        return all_index_pairs
+    rng = np.random.default_rng(seed=random_seed)
+    return rng.choice(all_index_pairs, n, replace=False)
+
+
 class Benchmark():
 
     def __init__(self):
@@ -839,13 +850,6 @@ class DWUG(SemanticChangeEvaluationDataset):
         if isinstance(n_usages, int) and n_usages < len(usages):
             rng = np.random.default_rng(seed=random_seed)
             usages = TargetUsageList(rng.choice(usages, n_usages, replace=False))
-        
-        def generate_index_pairs(total, n):
-            all_index_pairs = [(i, j) for i in range(total) for j in range(i+1,total)]
-            if n == len(all_index_pairs):
-                return all_index_pairs
-            rng = np.random.default_rng(seed=random_seed)
-            return rng.choice(all_index_pairs, n, replace=False)
 
         similarity_scores = {}
 
@@ -871,7 +875,7 @@ class DWUG(SemanticChangeEvaluationDataset):
                     return None
                 similarity_func = metric
 
-            index_pairs = generate_index_pairs(len(embeddings), n_judgments)
+            index_pairs = generate_index_pairs(len(embeddings), n_judgments, random_seed)
                 
             for i, j in index_pairs:
                 id1, id2 = usages[i].identifier, usages[j].identifier
@@ -879,7 +883,7 @@ class DWUG(SemanticChangeEvaluationDataset):
 
         elif isinstance(model, PromptModel):
             model.set_structure(structure)
-            index_pairs = generate_index_pairs(len(usages), n = n_judgments)
+            index_pairs = generate_index_pairs(len(usages), n_judgments, random_seed)
 
             for i, j in index_pairs:
                 u1, u2 = usages[i], usages[j]
@@ -1124,12 +1128,12 @@ class WiC(Benchmark):
             linguality (str) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
             name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
     """
-    def __init__(self, 
-                 path : str = None, 
+    def __init__(self,
+                 path : str = None,
                  wic_data : dict | list = None,
-                 dataset : str = None, 
-                 version : str = None, 
-                 language : str = None, 
+                 dataset : str = None,
+                 version : str = None,
+                 language : str = None,
                  linguality : str = None,
                  subset : str = None,
                  name : str = None):
@@ -1727,6 +1731,53 @@ class WSD(Benchmark):
         if hasattr(self, 'name'):
             wsi.name = self.name
         return wsi
+
+    def cast_to_WiC(self, max_per_word=0, random_seed=None):
+        """
+            Casts to a binary WiC dataset. Selects pairs of usages for the same word and turns them into a positive WiC 
+            example if they have the sense label, and a negative example otherwise. By default, all combinations are
+            included in the WiC dataset. If max_per_word > 0, this determines the maximum amount of combinations per
+            word and dataset split.
+
+            Args:
+                max_per_word (int, default=0): the amount of wic examples to generate per word and dataset split
+                    (train, dev, test). If 0, all possible combinations of usages are used.
+                random_seed (int, default=None): the random seed to use when randomly selecting usage pairs, if 
+                    max_per_word > 0.
+
+            Returns:
+                wic (languagechange.benchmark.WiC): a binary Word-in-Context (WiC) dataset
+        """
+        wic_data = {subset: [] for subset in self.data.keys()}
+        for subset in self.data.keys():
+            examples = self.data[subset]
+            # Sort the data by word
+            examples_by_word = {w: [] for w in self.target_words}
+            for ex in examples:
+                word = ex["word"]
+                examples_by_word[word].append(ex)
+            for word, exs in examples_by_word.items():
+                if max_per_word == 0:
+                    n_index_pairs = math.comb(len(exs), 2)
+                else:
+                    n_index_pairs = max_per_word
+                index_pairs = generate_index_pairs(len(exs), n_index_pairs, random_seed=random_seed)
+                for i, j in index_pairs:
+                    ex1, ex2 = exs[i], exs[j]
+                    if not (ex1["text"] == ex2["text"] and ex1["start"] == ex2["start"] and ex1["end"] == ex2["end"]):
+                        wic_ex = {
+                            "word": ex1["word"],
+                            "text1": ex1["text"],
+                            "text2": ex2["text"],
+                            "start1": ex1["start"],
+                            "end1": ex1["end"],
+                            "start2": ex2["start"],
+                            "end2": ex2["end"],
+                            "label": int(ex1["label"] == ex2["label"])
+                        }
+                        wic_data[subset].append(wic_ex)
+        wic = WiC(wic_data=wic_data)
+        return wic
 
     def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric, word = None):
         """

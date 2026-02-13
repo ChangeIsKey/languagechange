@@ -86,7 +86,7 @@ class PRT(GradedChange):
         return cosine(embeddings1.mean(axis=0), embeddings2.mean(axis=0))
 
 
-class PJSD(GradedChange):
+class JSD(GradedChange):
 
     def __init__(self):
         pass
