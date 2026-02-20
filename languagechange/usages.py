@@ -10,6 +10,15 @@ from pathlib import Path
 
 from languagechange.utils import Time
 
+from IPython.display import Markdown, display
+
+import numpy as np
+
+def text_formatting(usage,time_label):
+      start, end = usage.offsets
+      formatted_text = f'{time_label}:\t' + usage[:start] + '**' + usage[start:end] + '**' + usage[end:]
+      return formatted_text
+
 
 class POS(enum.Enum):
    NOUN = 1
@@ -94,6 +103,32 @@ class TargetUsageList(list):
     def to_dict(self):
         return [tu.to_dict() for tu in self]
 
+    def display_usages(self, cluster_labels=None, sort=False, max_per_cluster = None, randomize = False):
+        if cluster_labels:
+            label_usage_dict = {}
+            for i, label in enumerate(cluster_labels):
+                if label not in label_usage_dict:
+                    label_usage_dict[label] = []
+                label_usage_dict[label].append(i)
+            for c in sorted(label_usage_dict):
+                print(f'Cluster {int(c)}:')
+                if max_per_cluster is None:
+                    for i in label_usage_dict[c]:
+                        display(Markdown(text_formatting(self[i], self[i].time)))
+                else:
+                    if randomize:
+                        cluster_usages = list(np.random.choice(label_usage_dict[c], min(max_per_cluster, len(label_usage_dict[c])), replace=False))
+                    else:
+                        cluster_usages = label_usage_dict[c][:max_per_cluster]
+                    if sort:
+                        cluster_usages = sorted(cluster_usages, key = lambda u : u.time)
+                    for i in cluster_usages:
+                        display(Markdown(text_formatting(self[i], self[i].time)))
+                print('----------------------------')
+        else:
+            if sort:
+                pass #TODO: implement showing usages when there are no cluster labels
+                
 
 class UsageDictionary(dict):
 

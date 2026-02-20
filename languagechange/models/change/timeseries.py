@@ -140,3 +140,6 @@ class TimeSeries:
         self.series = series
         self.ts = ts
         return series, ts
+
+    def plot(self): #TODO: implement plotting of time series
+        pass
