@@ -28,7 +28,7 @@ from languagechange.models.representation.contextualized import ContextualizedMo
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
-from languagechange.utils import NumericalTime, LiteralTime
+from languagechange.utils import NumericalTime, LiteralTime, generate_colormap
 from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
 
 
@@ -473,19 +473,36 @@ class DWUG(SemanticChangeEvaluationDataset):
         
         return judgments_graph, classes
 
-    def plot_graph(self, judgments_graph, classes, threshold=2.5, save_to_file=False, outfile : str=None, plot_id_labels=False, plot_cluster_labels=False):
+    def plot_graph(self,
+                   word_or_graph, 
+                   classes=None, 
+                   threshold=2.5, 
+                   save_to_file=False, 
+                   outfile : str=None, 
+                   plot_id_labels=False, 
+                   plot_cluster_labels=False,
+                   **kwargs):
         """
             Plots the nodes corresponding to usages and edges corresponding to judgments.
             If classes are provided, nodes are colored according to their respective class.
             Args:
-                judgments_graph (networkx.classes.graph.Graph): a networkx graph containing usage ids and similarity scores between them
+                word_or_graph (Union[str, networkx.classes.graph.Graph]): the target word to plot for, alternatively a 
+                    networkx graph containing usage ids for a word and similarity scores between them
                 classes (List[int]): a list of classes (labels), each entry corresponding to the id in G.nodes
                 threshold (int, default=2.5): the threshold for distinguishing between positive and negative edges
                 save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
-                outfile (Union[str, NoneType], default=None): if not None and save_to_file=True, saves the file to the string specified
+                outfile (Union[str, NoneType], default=None): if not None and save_to_file=True, saves the file to the 
+                    string specified
                 plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
                 plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster classes
         """
+        if isinstance(word_or_graph, str):
+            judgments_graph, classes = self.load_graph_from_csv(word_or_graph, **kwargs)
+        elif isinstance(word_or_graph, nx.Graph):
+            judgments_graph = word_or_graph
+        else:
+            logging.error("'word_or_graph' has to be either a string or a networkx Graph object.")
+            raise TypeError
         # Binarize similarities based on threshold for networkx to be able to plot the graph nicely
         judgments_graph = judgments_graph.copy()
         for u, v in judgments_graph.edges():
@@ -511,25 +528,23 @@ class DWUG(SemanticChangeEvaluationDataset):
             n_classes = len(unique_classes)
 
             # Generate a colormap with colors that are distinguishable from each other
-            hues = np.linspace(0, 1, n_classes, endpoint=False)
-            saturations = np.full(n_classes, 0.5)
-            values = np.tile(np.linspace(0.5,1,3),n_classes//3+1)[:n_classes]
-            hsv = np.stack([hues, saturations, values], axis=1)
-            including_grey = np.vstack(([(0.7,0.7,0.7)], matplotlib.colors.hsv_to_rgb(hsv)))
-            cmap = matplotlib.colors.ListedColormap(including_grey)
+            cmap = generate_colormap(n_classes)
 
-            norm = matplotlib.colors.BoundaryNorm(boundaries=np.arange(-1.5, n_classes + 0.5, 1), ncolors=n_classes + 1, clip=True)
-            
-            discrete_cmap = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap).get_cmap()
-
-            nx.draw_networkx_nodes(judgments_graph, pos, node_size=node_size, node_color=classes, cmap=discrete_cmap, vmin=-1, vmax=n_classes)
+            nx.draw_networkx_nodes(
+                judgments_graph, 
+                pos, 
+                node_size=node_size, 
+                node_color=classes, 
+                cmap=cmap, 
+                vmin=-1, 
+                vmax=n_classes)
 
             if plot_cluster_labels:
                 for v in unique_classes:
-                    plt.scatter([],[], c=discrete_cmap(v+1), label=str(rev_mapping[v]))
+                    plt.scatter([],[], c=cmap(v+1), label=str(rev_mapping[v]))
                 if -1 in classes:
-                    plt.scatter([],[], c=discrete_cmap(0), label='No cluster')
-                plt.legend()
+                    plt.scatter([],[], c=cmap(0), label='No cluster')
+                plt.legend(title="Clusters")
         else:
             nx.draw_networkx_nodes(judgments_graph, pos, node_color="blue", node_size=node_size)
 
@@ -616,15 +631,22 @@ class DWUG(SemanticChangeEvaluationDataset):
             transform_labels : Callable | str=None, 
             return_list=False):
         """
-            Gathers the pairs of usages (including the id, target and context) and judgments between them for a given word in the DWUG.
+            Gathers the pairs of usages (including the id, target and context) and judgments between them for a given 
+                word in the DWUG.
             Args:
-                only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
-                remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
-                exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
-                transform_labels (Callable): a function which takes a list of labels and returns a label. By default, all labels are kept. As a string, only 'mean' is supported.
+                only_between_groups (bool) : if true, select only examples where the two usages belong to different 
+                    groupings.
+                remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster 
+                    (cluster label = -1).
+                exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment 
+                    (label = 0).
+                transform_labels (Callable): a function which takes a list of labels and returns a label. By default, 
+                    all labels are kept. As a string, only 'mean' is supported.
                 return_list (bool): if true, return the judgments as a list.
             Returns:
-                (Dict[frozenset, Dict] or List[Dict]) a dictionary {frozenset([id1, id2]) : {'word': word, 'id1': id1, 'text1': text1, 'start1': start1, 'end1': end1, 'id2': id2, 'text2': text2, 'start2': start2, 'end2': end2, 'label': label}} or a list of such dictionaries if return_list is true.
+                (Dict[frozenset, Dict] or List[Dict]) a dictionary {frozenset([id1, id2]) : {'word': word, 'id1': id1, 
+                    'text1': text1, 'start1': start1, 'end1': end1, 'id2': id2, 'text2': text2, 'start2': start2, 
+                    'end2': end2, 'label': label}} or a list of such dictionaries if return_list is true.
         """
         
         judgments = {}
@@ -762,14 +784,14 @@ class DWUG(SemanticChangeEvaluationDataset):
                             context = row["context_tokenized"]
                             word_index = int(row["indexes_target_token_tokenized"])
                             start, end = self.word_index_to_char_indices(context, word_index, split_text=True)
-                            usages_by_id[identifier].update({"word": row["lemma"], "text":context, "start":start, "end":end})#, 'label': row["lemma"] + ":" + usages_by_id[identifier]['label']}
+                            usages_by_id[identifier].update({"word": row["lemma"], "text":context, "start":start, "end":end})
                 else:
                     for _, row in df.iterrows():
                         identifier = row["identifier"]
                         if identifier in usages_by_id:
                             context = row["context"]
                             start, end = list(map(int, row["indexes_target_token"].split(":")))
-                            usages_by_id[identifier].update({"word": row["lemma"], "text":context, "start":start, "end":end})#, 'label': row["lemma"] + ":" + usages_by_id[identifier]['label']}
+                            usages_by_id[identifier].update({"word": row["lemma"], "text":context, "start":start, "end":end})
 
             except Exception as e:
                 logging.error(f"Could not load usages for '{word}' due to the following error: {e}")
