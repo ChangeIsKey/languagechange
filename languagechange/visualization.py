@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from IPython.display import Markdown, display
 from languagechange.cache import CacheManager
+from languagechange.utils import generate_colormap
 
 def generate_cache_key(embeddings):
     """
@@ -135,7 +136,7 @@ class Visualizer():
                               time_labels=None,
                               target=None,
                               ncols=3,
-                              plot_w=30,
+                              plot_w=15,
                               plot_cluster_labels=True,
                               plot=True,
                               save_f=None,
@@ -165,7 +166,7 @@ class Visualizer():
                     Optional target word, added to the title of the subplot(s).
                 ncols (int, default=3):
                     Number of subplot columns when plotting multiple time periods. Ignored if 'one_plot=True'.
-                plot_w (float, default=30):
+                plot_w (float, default=15):
                     Figure width (in inches). Height is derived automatically.
                 plot_cluster_labels (bool, default=True):
                     Whether to display a legend showing cluster labels.
@@ -223,19 +224,14 @@ class Visualizer():
     
         fig.set_figwidth(plot_w)
         fig.set_figheight(plot_h)
-        marker_size = plot_w / ncols
+        marker_size = 1.5 * plot_w / ncols
     
         if self.cluster_labels is not None:
             unique_clusters = sorted(set(self.cluster_labels).difference({-1,"-1"}))
             label_index = {-1: -1, "-1": -1} | {l: i for i, l in enumerate(unique_clusters)}
             n_classes = len(unique_clusters)
             # Generate a colormap with colors that are distinguishable from each other
-            hues = np.linspace(0, 1, n_classes, endpoint=False)
-            saturations = np.full(n_classes, 0.5)
-            values = np.tile(np.linspace(0.5, 1, 3), n_classes // 3 + 1)[:n_classes]
-            hsv = np.stack([hues, saturations, values], axis=1)
-            including_grey = np.vstack(([(0.7, 0.7, 0.7)], mpl.colors.hsv_to_rgb(hsv)))
-            cmap = mpl.colors.ListedColormap(including_grey)
+            cmap = generate_colormap(n_classes)
         
         for t in range(n_time_periods):
             if ncols == 1 and nrows == 1:
@@ -254,11 +250,17 @@ class Visualizer():
                     cluster_embs = period_reduced_embs[np.where(period_cluster_labels == label)]
                     x = cluster_embs[:,0]
                     y = cluster_embs[:,1]
-                    legend_label = "No cluster" if label == -1 or label == "-1" else f"Cluster {int(label)}"
+                    if label == -1 or label == "-1":
+                        legend_label = "No cluster"
+                    else:
+                        try:
+                            legend_label = str(int(label))
+                        except ValueError:
+                            legend_label = str(label)
                     ax.scatter(x,y, c=cmap(label_index[label]+1), s=marker_size, label=legend_label)
     
                 if plot_cluster_labels:
-                    ax.legend()
+                    ax.legend(title="Clusters")
             else:
                 x = period_reduced_embs[:,0]
                 y = period_reduced_embs[:,1]
