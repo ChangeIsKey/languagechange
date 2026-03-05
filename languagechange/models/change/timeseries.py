@@ -60,7 +60,16 @@ class TimeSeries:
         else:
             self.series = np.array([])
 
-    def compute(self, embs : List[np.array] = None, cluster_labels = None, change_metric : Union[str, object] = None, timeseries_type : str = None, k=1, time_labels : Union[np.array, List] = None, clustering_algorithm = None, distance_metric : str = 'cosine'):
+    def compute(self, 
+                embs: List[np.array]=None, 
+                cluster_labels=None, 
+                change_metric: Union[str, object]=None, 
+                timeseries_type: str=None, 
+                k=1, 
+                time_labels: Union[np.array, List]=None, 
+                clustering_algorithm=None, 
+                distance_metric: str='cosine',
+                return_labels=False):
         """
             Computes the change scores for each point in the time series, using either embeddings or cluster labels
             depending on the change metric (JSD can start from embeddings or cluster labels while APD and PRT involve
@@ -80,9 +89,11 @@ class TimeSeries:
                 clustering_algorithm: the clustering algorithm if using JSD as the change metric. E.g. one of the 
                     algorithms in scikit-learn, or languagechange.
                 distance_metric (str, default="cosine"): the distance metric to use when computing change scores.
+                return_labels (bool, default=False): whether to return cluster labels (only applicable for JSD).
             Returns:
                 series (np.array): the final timeseries.
                 ts (np.array): the time values/labels for each value in the final timeseries.
+                labels (list[tuple[np.ndarray]], optional): cluster labels, sorted by time.
         """
         if timeseries_type not in {"compare_to_first", "compare_to_last", "consecutive", "moving_average"}:
             logging.error("'time_series' must be one of 'compare_to_first', 'compare_to_last', 'consecutive', and 'moving_average'")
@@ -101,7 +112,12 @@ class TimeSeries:
         
         if isinstance(change_metric, JSD):
             if embs is not None:
-                compute_scores = lambda e1, e2 : change_metric.compute_scores(e1, e2, clustering_algorithm, distance_metric)
+                def compute_scores(e1, e2): 
+                    return change_metric.compute_scores(e1, 
+                                                        e2, 
+                                                        clustering_algorithm, 
+                                                        distance_metric, 
+                                                        return_labels=return_labels)
             elif cluster_labels is not None:
                 compute_scores = change_metric.compute_scores_from_labels
             else:
@@ -114,23 +130,32 @@ class TimeSeries:
         
         # Compare every time period with the first one
         if timeseries_type == "compare_to_first":
-            series = np.array([compute_scores(data[0],d) for d in data[1:]])
+            scores = [compute_scores(data[0],d) for d in data[1:]]
             t_idx = np.array(range(1,len(data)))
 
         # Compare every time period with the last one
         elif timeseries_type == "compare_to_last":
-            series = np.array([compute_scores(d,data[-1]) for d in data[:-1]])
+            scores = [compute_scores(d,data[-1]) for d in data[:-1]]
             t_idx = np.array(range(len(data)-1))
 
         # Compare consecutive time periods
         elif timeseries_type == "consecutive":
-            series = np.array([compute_scores(data[i],data[i+1]) for i in range(len(data)-1)])
+            scores = [compute_scores(data[i],data[i+1]) for i in range(len(data)-1)]
             t_idx = np.array(range(1, len(data)))
 
         # Moving average
         else:
-            series = ma(np.array([compute_scores(data[i],data[i+1]) for i in range(len(data)-1)]), k)
+            scores = [compute_scores(data[i],data[i+1]) for i in range(len(data)-1)]
             t_idx = np.array(range(k+1,len(data)-k))
+
+        if return_labels:
+            series, labels = zip(*scores)
+            series = np.array(series)
+        else:
+            series = np.array(scores)
+
+        if timeseries_type == "moving_average":
+            series = ma(series, k)
 
         if time_labels is not None:
             ts = np.array(time_labels)[t_idx]
@@ -139,4 +164,6 @@ class TimeSeries:
 
         self.series = series
         self.ts = ts
+        if return_labels:
+            return series, ts, list(labels)
         return series, ts

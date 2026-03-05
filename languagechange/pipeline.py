@@ -545,12 +545,12 @@ class WSIPipeline(Pipeline):
         
         self.clustering = clustering
 
-    def evaluate(self, return_labels = False, average = True, json_path = None, table_path = None, **kwargs):
+    def evaluate(self, average = True, min_word_frequency=30, json_path = None, table_path = None, return_predictions = False, **kwargs):
         """
             Evaluate on the WSI task.
 
             Args:
-                return_labels (bool, default=False): if True, return not only the scores but also the cluster labels.
+                return_predictions (bool, default=False): if True, return not only the scores but also the cluster labels.
                 average (bool, default=True): whether to average across words for ARI and purity.
                 json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
                     results to this json file.
@@ -559,26 +559,43 @@ class WSIPipeline(Pipeline):
 
             Returns:
                 scores (dict): a dictionary containing the ARI and putiry scores.
+                labels (dict, optional): a dictionary {id: label} containing the predicted labels for every example.
         """
-        target_usages = TargetUsageList()
+        cluster_labels = dict()
+        data = self.dataset.filter_by_word_frequency(self.partition, min_word_frequency)
 
-        for example in self.evaluation_set:
-            if 'id' in example:
-                target_usages.append(TargetUsage(example['text'], [example['start'],example['end']], id=example['id']))
-            else:
-                target_usages.append(TargetUsage(example['text'], [example['start'],example['end']]))
+        data_by_word = dict()
+        for ex in data:
+            w = ex["word"]
+            if w not in data_by_word:
+                data_by_word[w] = []
+            data_by_word[w].append(ex)
+        target_words = data_by_word.keys()
 
-        if isinstance(self.usage_encoding, DefinitionGenerator):
-            encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
-        
-        elif isinstance(self.usage_encoding, ContextualizedModel):
-            encoded_usages = self.usage_encoding.encode(target_usages)
+        for word in target_words:
+            target_usage_dict = dict()
+            target_usages = TargetUsageList()
+            ids = []
 
-        # Cluster the encoded usages
-        clustering_results = self.clustering.get_cluster_results(encoded_usages)
+            for example in data_by_word[word]:
+                u = TargetUsage(example['text'], [example['start'],example['end']])
+                target_usage_dict[example['id']] = u
+                target_usages.append(u)
+                ids.append(example['id'])
+
+            if isinstance(self.usage_encoding, DefinitionGenerator):
+                encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
+            
+            elif isinstance(self.usage_encoding, ContextualizedModel):
+                encoded_usages = self.usage_encoding.encode(target_usages)
+
+            # Cluster the encoded usages
+            clustering_results = self.clustering.get_cluster_results(encoded_usages)
+            for i, l in enumerate(clustering_results.labels):
+                cluster_labels[ids[i]] = l
 
         # Compute ARI and purity scores
-        scores = self.dataset.evaluate(clustering_results.labels, dataset=self.partition, average=average)
+        scores = self.dataset.evaluate(cluster_labels, dataset=self.partition, average=average, min_word_frequency=min_word_frequency)
 
         if json_path is not None:
             model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
@@ -601,8 +618,8 @@ class WSIPipeline(Pipeline):
             else:
                 logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
 
-        if return_labels:
-            return scores, clustering_results.labels
+        if return_predictions:
+            return scores, cluster_labels
         return scores
 
         
@@ -660,7 +677,7 @@ class WiCPipeline(Pipeline):
             logging.error('Dataset used for evaluating does not contain any examples.')
             raise ValueError
 
-    def evaluate(self, task, label_func = None, json_path = None, table_path = None, **kwargs):
+    def evaluate(self, task, label_func=None, json_path=None, table_path=None, return_predictions=False, **kwargs):
         """
             Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if 
             task='graded'.
@@ -677,6 +694,8 @@ class WiCPipeline(Pipeline):
 
             Returns:
                 scores (dict): a dictionary of scores (accuracy and f1 or Spearman correlation)
+                labels (list[Union[int, float]], optional): the predicted similarity labels, in the order of the
+                    examples in the dataset.
         """
         if task not in {'binary','graded'}:
             logging.error(f"Invalid argument for 'task', should be one of ['binary', 'graded']")
@@ -779,15 +798,17 @@ class WiCPipeline(Pipeline):
             else:
                 logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
         
+        if return_predictions:
+            return scores, labels
         return scores
 
 
-class GCDPipeline(Pipeline):
+class CDPipeline(Pipeline):
     """
-    A pipeline for evaluating the Graded Change Detection (GCD) task.
+    A pipeline for evaluating the graded/binary Change Detection (CD) task.
 
     This pipeline:
-        1. loads a dataset that can be used for GCD and extracts the usages from two time periods
+        1. loads a dataset that can be used for change detection and extracts the usages from two time periods
         2. encodes usages (optionally sampling n usages) using either a ContextualizedModel or a DefinitionGenerator 
         producing embeddings
         3. computes the change scores for each word using one of the standard metrics (APD, PRT, JSD, WiDiD).
@@ -822,12 +843,27 @@ class GCDPipeline(Pipeline):
         self.metric = metric
         self.clustering = clustering
 
-    def evaluate(self, n_sampled_usages = 0, random_seed = None, json_path = None, table_path = None, **kwargs):
+    def evaluate(self,
+                task, 
+                not_exist_max_count=2, 
+                exist_min_count=5, 
+                n_sampled_usages=0, 
+                random_seed=None, 
+                json_path=None, 
+                table_path=None, 
+                return_predictions=False, 
+                **kwargs):
         """
-            Evaluates on the GCD task. Returns the Spearman correlation between the predicted and ground truth change 
-            scores.
+            Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the 
+            predicted and ground truth change scores, and optionally.
 
             Args:
+                task (str): the task to evaluate on, 'graded' or 'binary'.
+                not_exist_max_count (int, default=2): the maximum amount of examples allowed in a cluster (for one time period) in 
+                    order for it to count as a non-existent/vanished sense of the word, if computing binary change 
+                    scores.
+                exist_min_count (int, default=5): the minimum amount of examples needed in a cluster (for one time period) in 
+                    order for it to count as an existing/emerged sense of the word, if computnig binary change scores.
                 n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
                     all usages.
                 random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
@@ -839,8 +875,16 @@ class GCDPipeline(Pipeline):
 
             Returns:
                 scores (dict): A dictionary containing the Spearman correlation score (rho).
+                cluster_labels (dict, optional): the predicted cluster labels for every word, divided into the two time
+                    periods.
+                change_scores (dict, optional): the predicted change score between t1 and t2 for every word.
         """
-        change_scores = {}
+        if task.lower() not in {"graded", "binary"}:
+            logging.error("'task' has to be one of 'graded' and 'binary'.")
+            raise ValueError
+
+        change_scores = dict()
+        cluster_labels = dict()
 
         if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
             target_usages_t1_all_words = self.dataset.corpus1_lemma.search([target.target for target in self.dataset.graded_task.keys()])
@@ -853,7 +897,7 @@ class GCDPipeline(Pipeline):
                 groupings = set(u.grouping for u in target_usages)
                 try:
                     sorted_groupings = sorted(list(groupings), key = lambda x: int(x.split('-')[0]))
-                except ValueError:
+                except (ValueError, AttributeError):
                     sorted_groupings = sorted(list(groupings))
                 target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0] ]
                 target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1] ]
@@ -886,20 +930,47 @@ class GCDPipeline(Pipeline):
 
             # Measure the change using the metric
             if isinstance(self.metric, JSD) and self.clustering is not None:
-                change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering)
+                r = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering, return_labels=return_predictions)
+                if return_predictions:
+                    change, labels = r
+                    cluster_labels[word] = labels
+                else:
+                    change = r
             elif isinstance(self.metric, WiDiD):
                 if self.clustering is not None:
                     self.metric = WiDiD(algorithm=self.clustering)
-                _, _, timeseries = self.metric.compute_scores([encoded_usages_t1, encoded_usages_t2])
+                labels, _, timeseries = self.metric.compute_scores([encoded_usages_t1, encoded_usages_t2])
                 change = timeseries.series[0]
+                if return_predictions:
+                    cluster_labels[word] = labels
             else:
+                if task != "graded":
+                    logging.error("Form-based metrics (APD, PRT) can only be used with task='graded'.")
                 change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
-            change_scores[word] = change
+            
+            if task == "binary":
+                change = False
+                label_counts_t1 = Counter(cluster_labels[word][0])
+                label_counts_t2 = Counter(cluster_labels[word][1])
+                for c in label_counts_t1.keys() | label_counts_t2.keys():
+                    c1, c2 = label_counts_t1[c], label_counts_t2[c]
+                    if (c1 < not_exist_max_count and c2 > exist_min_count) or (c2 < not_exist_max_count and c1 > exist_min_count):
+                        change = True
+                        break
+                change_scores[word] = int(change)
 
-        spearman_r = self.dataset.evaluate_gcd(change_scores)
-        scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic} # Keep rho only
+            else:
+                change_scores[word] = change
+
+        if task == "graded":
+            spearman_r = self.dataset.evaluate_gcd(change_scores)
+            scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic} # Keep rho only
+        elif task == "binary":
+            acc = self.dataset.evaluate_cd(change_scores)
+            scores = {'accuracy': acc}
 
         if json_path is not None:
+            task_type = "GCD" if task == "graded" else "CD"
             model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
             if hasattr(self.dataset, 'name'):
                 scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
@@ -921,4 +992,6 @@ class GCDPipeline(Pipeline):
             else:
                 logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
 
+        if return_predictions:
+            return scores, cluster_labels, change_scores
         return scores

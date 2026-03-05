@@ -13,6 +13,7 @@ import zipfile
 from typing import List, Dict, Union, Callable, Tuple
 import inspect
 from pathlib import Path
+from collections import Counter
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
@@ -97,6 +98,11 @@ class Benchmark():
             for k in set(self.data.keys()).difference({'all'}):
                 all_data += self.data[k]
             return all_data
+
+    def filter_by_word_frequency(self, dataset, threshold):
+        data = self.get_dataset(dataset)
+        wc = Counter(ex["word"] for ex in data)
+        return list(filter(lambda ex: wc[ex["word"]] >= threshold, data))
         
     def split_train_dev_test(self, train_prop=0.8, dev_prop=0.1, test_prop=0.1, shuffle=True, seed=42, epsilon=1e-6):
         for s in ['train','dev','test']:
@@ -1692,7 +1698,7 @@ class WSD(Benchmark):
                             if len(labels) > 1:
                                 # If there are multiple lables, create new examples for each.
                                 for i, label in enumerate(labels):
-                                    data_by_id[f'{identifier}:{i}'] = data_by_id[identifier]
+                                    data_by_id[f'{identifier}:{i}'] = data_by_id[identifier].copy()
                                     data_by_id[f'{identifier}:{i}']['label'] = label
                                     data_by_id[f'{identifier}:{i}']['id'] = f'{identifier}:{i}'
                                 del data_by_id[identifier]
@@ -1887,28 +1893,35 @@ class WSI(Benchmark):
             data.append(example)
         self.load_from_data(data)
 
-    def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all', average = False):
+    def evaluate(self, predictions, metrics={'ari','purity'}, dataset='all', average=False, min_word_frequency=0):
         """
             Evaluates a clustering with respect to the true labels as given in self.data.
 
             Args:
-                predictions ({str: str|int}|[str|int]): a clustering as either a dictionary {id: cluster} or list .[cluster] of usage assignments. If it is a list, it is expected to be in the same order as the dataset evaluated on.
+                predictions ({str: str|int}|[str|int]): a clustering as either a dictionary {id: cluster} or 
+                    list[cluster] of usage assignments. If it is a list, it is expected to be in the same order as the 
+                    dataset evaluated on.
                 metric (function|str): the metric to use for evaluation, such as RI, ARI or purity.
                 dataset (str): the sub-dataset to use, e.g. 'test' or 'all'.
 
             Returns:
                 scores ({str: float}): the score for each word.
         """
+        if min_word_frequency > 0:
+            data = self.filter_by_word_frequency(dataset, min_word_frequency)
+        else:
+            data = self.get_dataset(dataset)
+
         labels_per_word = {}
         if type(predictions) == dict:
-            for d in self.get_dataset(dataset):
+            for d in data:
                 if not d['word'] in labels_per_word:
                     labels_per_word[d['word']] = [[],[]]
                 labels_per_word[d['word']][0].append(d['label'])
                 labels_per_word[d['word']][1].append(predictions[d['id']])
 
         elif type(predictions) == list or type(predictions) == np.ndarray:
-            for i, d in enumerate(self.get_dataset(dataset)):
+            for i, d in enumerate(data):
                 if not d['word'] in labels_per_word:
                     labels_per_word[d['word']] = [[],[]]
                 labels_per_word[d['word']][0].append(d['label'])
@@ -1929,14 +1942,13 @@ class WSI(Benchmark):
         scores = {}
         for metric in metric_functions:
             if metric in reverse_metric_names:
-                scores[reverse_metric_names[metric]] = {}
-            if metric in reverse_metric_names:
-                if not average:
-                    for word, labels in labels_per_word.items():
-                        gold_labels, pred_labels = labels
-                        scores[reverse_metric_names[metric]][word] = metric(gold_labels, pred_labels)
-                else:
-                    scores[reverse_metric_names[metric]] = np.mean(list(metric(gold_labels, pred_labels) for gold_labels, pred_labels in labels_per_word.values()))
+                metric_name = reverse_metric_names[metric]
+                scores[metric_name] = dict()
+                for word, labels in labels_per_word.items():
+                    gold_labels, pred_labels = labels
+                    scores[metric_name][word] = metric(gold_labels, pred_labels)
+                if average:
+                    scores[metric_name] = np.mean([s for s in scores[metric_name].values()])
 
         return scores
 
