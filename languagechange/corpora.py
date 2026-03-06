@@ -3,6 +3,7 @@ import gzip
 import logging
 import os
 import re
+import csv
 from typing import List, Pattern, Self, Union
 import lxml.etree as ET
 from sortedcontainers import SortedKeyList
@@ -662,6 +663,16 @@ class VerticalCorpus(Corpus):
             if 'pos_tag' in self.field_map:
                 pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]   
                 data['pos_tags'] = pos_text
+            if 'id' in self.field_map:
+                for i in range(1, len(splitted_line)):
+                    assert splitted_line[i][self.field_map['id']] == splitted_line[0][self.field_map['id']]
+                id_text = splitted_line[0][self.field_map['id']]  
+                data['id'] = id_text
+            if 'date' in self.field_map:
+                for i in range(1, len(splitted_line)):
+                    assert splitted_line[i][self.field_map['date']] == splitted_line[0][self.field_map['date']]
+                date_text = splitted_line[0][self.field_map['date']]  
+                data['date'] = date_text  
             return data
 
         for fname in fnames:
@@ -671,7 +682,7 @@ class VerticalCorpus(Corpus):
                     line = []
                     for i, vertical_line in enumerate(f):
                         if i >= self.skip_lines:
-                            if vertical_line == self.sentence_separator:
+                            if vertical_line.strip(self.field_separator) == self.sentence_separator:
                                 data = get_data(line)
                                 yield Line(fname=fname, **data)
                                 line = []
@@ -682,7 +693,7 @@ class VerticalCorpus(Corpus):
                 with gzip.open(fname, mode="rt") as f:
                     for i, vertical_line in enumerate(f):
                         if i >= self.skip_lines:
-                            if vertical_line == self.sentence_separator:
+                            if vertical_line.strip(self.field_separator) == self.sentence_separator:
                                 data = get_data(line)
                                 yield Line(fname=fname, **data)
                                 line = []
@@ -691,6 +702,14 @@ class VerticalCorpus(Corpus):
 
             else:
                 raise Exception('Format not recognized')
+
+
+class ParquetCorpus(Corpus):
+    def __init__(self, path, **args):
+        super().__init__(name=path,**args)
+
+    def line_iterator(self):
+        pass
             
 
 # Should be able to load and parse a corpus in XML format.
@@ -762,7 +781,6 @@ class XMLCorpus(Corpus):
             tokens = []
             lemmas = []
             parser = ET.iterparse(source, events=('start','end'))
-            sentence_counter = 0
             for event, elem in parser:
                 if elem.sourceline >= self.skip_lines:
                     if elem.tag == self.text_tag:
@@ -772,16 +790,16 @@ class XMLCorpus(Corpus):
                             tokens = []
                             lemmas = []
                             pos_tags = []
+                            sentence_id = elem.get('id', None)
                         # If the sentence has ended, create a new Line object with its content
                         elif event == 'end':
                             if tokens != []:
                                 data = get_data(tokens, lemmas, pos_tags)
                                 data['date'] = date
-                                line_id = elem.get('id', sentence_counter)
+                                line_id = sentence_id
                                 data['id'] = line_id
                                 yield Line(fname=fname, **data)
                                 elem.clear()
-                        sentence_counter += 1
                     elif elem.tag == self.token_tag:
                         if event == 'end':
                             if self.is_lemmatized:
@@ -838,16 +856,30 @@ class XMLCorpus(Corpus):
         sentence_separator = vertical_corpus.sentence_separator
         # We need to make sure that the line features (token, lemma, pos, etc.) come in the same order as in the field_map in the vertical_corpus
         sorted_field_names = [key for (key, _) in sorted(vertical_corpus.field_map.items(), key = lambda x : x[1])]
+        # id and date are the same across tokens in a sentence
+        constant_line_fields = set(sorted_field_names).intersection({'id','date'})
+        variable_line_fields = list(set(sorted_field_names).difference({'id', 'date'}))
         
         def get_line_feature(line, key):
-            field_name_to_line_feature = {'token': line.tokens, 'lemma': line.lemmas, 'pos_tag': line.pos_tags}
-            return field_name_to_line_feature[key]()
+            field_name_to_line_feature = {
+                'token': line.tokens(), 
+                'lemma': line.lemmas(), 
+                'pos_tag': line.pos_tags(),
+                'id': line.id,
+                'date': line.date}
+            return field_name_to_line_feature[key]
         
-        with open(savepath,'w+') as f:
+        with open(savepath, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, delimiter='\t', fieldnames=sorted_field_names)
+            writer.writeheader()
             for line in self.line_iterator():
-                for t in zip(*(get_line_feature(line, key) for key in sorted_field_names)):
-                    f.write(field_separator.join(list(t))+'\n') # cache needed here
-                f.write(sentence_separator) # cache needed here
+                common_row_content = dict()
+                for k in constant_line_fields:
+                    common_row_content[k] = get_line_feature(line, k)
+                for values in zip(*(get_line_feature(line, k) for k in variable_line_fields)):
+                    vertical_row_content = {f : v for f, v in zip(variable_line_fields, values)}
+                    writer.writerow(vertical_row_content | common_row_content)
+                writer.writerow({})
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
