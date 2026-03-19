@@ -5,9 +5,16 @@ import os
 import re
 import csv
 from typing import List, Pattern, Self, Union
+from itertools import islice, groupby
+from collections import defaultdict
+from pathlib import Path
 import lxml.etree as ET
 from sortedcontainers import SortedKeyList
 import trankit
+import pandas as pd
+import pyarrow as pa
+import pyarrow.csv as pv
+import pyarrow.parquet as pq
 from languagechange.resource_manager import LanguageChange
 from languagechange.search import SearchTerm
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
@@ -25,9 +32,9 @@ class Line:
                  pos_tags=None,
                  fname=None,
                  raw_lemma_text=None,
-                 raw_pos_text = None,
+                 raw_pos_text=None,
                  **kwargs,
-        ):
+                 ):
         self._raw_text = raw_text
         self._raw_lemma_text = raw_lemma_text
         self._raw_pos_text = raw_pos_text
@@ -49,7 +56,7 @@ class Line:
     def pos_tags(self):
         return self._pos_tags
 
-    def tokens_by_feature(self, feat = str):
+    def tokens_by_feature(self, feat=str):
         if feat == 'token':
             return self.tokens()
         elif feat == 'lemma':
@@ -80,7 +87,7 @@ class Line:
             return self._raw_pos_text
         return ' '.join(self._raw_pos_text)
 
-    def raw_text_by_feature(self, feat = 'token'):
+    def raw_text_by_feature(self, feat='token'):
         if feat == 'token':
             return self.raw_text()
         elif feat == 'lemma':
@@ -90,7 +97,7 @@ class Line:
         else:
             raise ValueError(f"'{feat}' is not a valid word feature")
 
-    def search(self, search_term : SearchTerm, time = None) -> TargetUsageList:
+    def search(self, search_term: SearchTerm, time=None) -> TargetUsageList:
         """
             Searches the line given a search_term.
 
@@ -98,14 +105,14 @@ class Line:
                 search_term : SearchTerm
             Returns: A TargetUsageList of all matches.
         """
-        time  = getattr(self, 'date', time)
+        time = getattr(self, 'date', time)
         tul = TargetUsageList()
         for feat in search_term.word_feature:
             if search_term.regex:
                 if search_term.search_func:
                     def search_func(word, line):
                         offsets = []
-                        rex = re.compile(f'( |^)+{word}( |$)+',re.MULTILINE)
+                        rex = re.compile(f'( |^)+{word}( |$)+', re.MULTILINE)
                         for fi in re.finditer(rex, line):
                             s = line[fi.start():fi.end()].find(word)
                             offsets.append([fi.start()+s, fi.start()+s+len(word)])
@@ -118,7 +125,7 @@ class Line:
                 token_features = self.tokens_by_feature(feat)
                 for idx, token in enumerate(token_features):
                     if search_term.term == token:
-                        offsets = [0,0]
+                        offsets = [0, 0]
                         if not idx == 0:
                             offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
                         offsets[1] = offsets[0] + len(self.tokens()[idx])
@@ -132,12 +139,13 @@ class Line:
 
 class Corpus:
 
-    def __init__(self, name, language=None, time=LiteralTime('no time specification'), time_function = None, skip_lines=0, **args):
+    def __init__(self, name, language=None, time=LiteralTime('no time specification'),
+                 time_function=None, skip_lines=0, **args):
         self.name = name
         self.language = language
         if time_function is not None and callable(time_function):
             self.time = time_function(self)
-        elif hasattr(self,'extract_dates') and callable(self.extract_dates):
+        elif hasattr(self, 'extract_dates') and callable(self.extract_dates):
             self.time = self.extract_dates()
         else:
             self.time = time
@@ -147,7 +155,7 @@ class Corpus:
         self.sentences_iterator = sentences
 
     def search(self,
-               search_terms: List[ str | Pattern | SearchTerm ]
+               search_terms: List[str | Pattern | SearchTerm]
                ) -> UsageDictionary:
         """
             Searches through the corpora by calling Line.search() on all lines.
@@ -165,17 +173,17 @@ class Corpus:
         n_usages = 0
         for st in search_terms:
             if not isinstance(st, SearchTerm):
-                st = SearchTerm(st, regex = True if isinstance(st, Pattern) else False)
+                st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
             tul = TargetUsageList()
             usage_dictionary[st.term] = tul
             for line in self.line_iterator():
-                match : List[TargetUsage] = line.search(st, time = self.time)
+                match: List[TargetUsage] = line.search(st, time=self.time)
                 tul.extend(match)
                 n_usages += len(match)
         logging.info(f"{n_usages} usages found.")
         return usage_dictionary
 
-    def tokenize(self, tokenizer = "trankit", split_sentences=False, batch_size=128):
+    def tokenize(self, tokenizer="trankit", split_sentences=False, batch_size=128):
         if tokenizer == "trankit":
             p = trankit.Pipeline(self.language)
 
@@ -197,8 +205,8 @@ class Corpus:
                         texts = []
                 if texts != []:
                     for line in process_lines(texts):
-                        yield line  
-                        
+                        yield line
+
             else:
                 for line in self.line_iterator():
                     text = line.raw_text()
@@ -206,11 +214,11 @@ class Corpus:
                         tokenized_sentence = p.tokenize(text, is_sent=True)
                         line._tokens = [token['text'] for token in tokenized_sentence['tokens']]
                         yield line
-        
+
         else:
-            if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
+            if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer, "tokenize")):
                 tokenizer = tokenizer.tokenize
-            
+
             if callable(tokenizer):
                 try:
                     for line in self.line_iterator():
@@ -221,18 +229,22 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use tokenizer {tokenizer} directly as a function to tokenize.")
 
-    def lemmatize(self, lemmatizer = "trankit", pretokenized = False, tokenize = False, split_sentences = False, batch_size=128):
+    def lemmatize(self, lemmatizer="trankit", pretokenized=False, tokenize=False, split_sentences=False, batch_size=128):
         if lemmatizer == "trankit":
             p = trankit.Pipeline(self.language)
 
             # input which is not sentence split
             if split_sentences:
-                
+
                 def process_texts(texts):
                     lemmatized = p.lemmatize(' '.join(texts))
                     lines = []
                     for sentence in lemmatized['sentences']:
-                        lines.append(Line(raw_text=sentence['text'], lemmas=[token['lemma'] for token in sentence['tokens']], tokens=[token['text'] for token in sentence['tokens']] if tokenize else None))
+                        lines.append(
+                            Line(
+                                raw_text=sentence['text'],
+                                lemmas=[token['lemma'] for token in sentence['tokens']],
+                                tokens=[token['text'] for token in sentence['tokens']] if tokenize else None))
                     return lines
 
                 texts = []
@@ -254,7 +266,7 @@ class Corpus:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        lemmatized_sentence = p.lemmatize(text, is_sent = True)
+                        lemmatized_sentence = p.lemmatize(text, is_sent=True)
                         line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
                         yield line
 
@@ -280,12 +292,11 @@ class Corpus:
                 if lines != []:
                     for line in modify_lines(lines):
                         yield line
-                        
 
         # todo: add other lemmatizers if needed
         else:
 
-            if hasattr(lemmatizer, "lemmatize") and callable(getattr(lemmatizer,"lemmatize")):
+            if hasattr(lemmatizer, "lemmatize") and callable(getattr(lemmatizer, "lemmatize")):
                 lemmatizer = lemmatizer.lemmatize
 
             if callable(lemmatizer):
@@ -305,7 +316,12 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use method {lemmatizer} directly as a function to lemmatize.")
 
-    def pos_tagging(self, pos_tagger = "trankit", pretokenized = False, tokenize=False, split_sentences = False, batch_size=128):
+    def pos_tagging(self,
+                    pos_tagger="trankit",
+                    pretokenized=False,
+                    tokenize=False,
+                    split_sentences=False,
+                    batch_size=128):
         if pos_tagger == "trankit":
             p = trankit.Pipeline(self.language)
 
@@ -315,7 +331,11 @@ class Corpus:
                 def process_texts(texts):
                     pos_tagged = p.posdep(' '.join(texts))
                     for sentence in pos_tagged['sentences']:
-                        yield Line(raw_text=sentence['text'], pos_tags=[token['upos'] for token in sentence['tokens']], tokens=[token['text'] for token in sentence['tokens']] if tokenize else None)
+                        yield Line(
+                            raw_text=sentence['text'],
+                            pos_tags=[token['upos'] for token in sentence['tokens']],
+                            tokens=[token['text'] for token in sentence['tokens']] if tokenize else None
+                        )
 
                 texts = []
                 for line in self.line_iterator():
@@ -336,7 +356,7 @@ class Corpus:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        pos_tagged_sentence = p.posdep(text, is_sent = True)
+                        pos_tagged_sentence = p.posdep(text, is_sent=True)
                         line._pos_tags = [token['upos'] for token in pos_tagged_sentence['tokens']]
                         if tokenize:
                             line._tokens = [token['text'] for token in pos_tagged_sentence['tokens']]
@@ -361,13 +381,13 @@ class Corpus:
                         for line in modify_lines(lines):
                             yield line
                         lines = []
-                        
+
                 if lines != []:
                     for line in modify_lines(lines):
                         yield line
-                    
+
         else:
-            if hasattr(pos_tagger, "pos_tag") and callable(getattr(pos_tagger,"pos_tag")):
+            if hasattr(pos_tagger, "pos_tag") and callable(getattr(pos_tagger, "pos_tag")):
                 pos_tagger = pos_tagger.pos_tag
             if callable(pos_tagger):
                 try:
@@ -387,7 +407,7 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use method {pos_tagger} directly as a function to perform POS tagging.")
 
-    def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences = False, batch_size=128):
+    def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences=False, batch_size=128):
         if nlp_model == "trankit":
             p = trankit.Pipeline(self.language)
 
@@ -395,7 +415,7 @@ class Corpus:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        lemmatized_sentence = p.lemmatize(text, is_sent = True)
+                        lemmatized_sentence = p.lemmatize(text, is_sent=True)
                         line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
                         if tokens:
                             line._tokens = [token['text'] for token in lemmatized_sentence['tokens']]
@@ -414,7 +434,11 @@ class Corpus:
                         tokens.append([token['text'] for token in sentence['tokens']])
                     pos_tagged_sentences = p.posdep(tokens)
                     for i, sentence in enumerate(lemmatized_sentences['sentences']):
-                        yield Line(raw_text=sentence['text'], tokens=[token['text'] for token in sentence['tokens']] if tokens else None, lemmas=[token['lemma'] for token in sentence['tokens']],pos_tags=[token['upos'] for token in pos_tagged_sentences['sentences'][i]['tokens']])
+                        yield Line(
+                            raw_text=sentence['text'],
+                            tokens=[token['text'] for token in sentence['tokens']] if tokens else None,
+                            lemmas=[token['lemma'] for token in sentence['tokens']],
+                            pos_tags=[token['upos'] for token in pos_tagged_sentences['sentences'][i]['tokens']])
 
                 texts = []
                 for line in self.line_iterator():
@@ -430,7 +454,7 @@ class Corpus:
                         yield line
 
     # preliminary function
-    def segment_sentences(self, segmentizer = "trankit", batch_size=128):
+    def segment_sentences(self, segmentizer="trankit", batch_size=128):
         if segmentizer == "trankit":
             p = trankit.Pipeline(self.language)
 
@@ -464,27 +488,25 @@ class Corpus:
             except:
                 logging.info(f"ERROR: Could not use method {segmentizer} directly as a function to split sentences.")
 
-
     def folder_iterator(self, path):
 
         fnames = []
 
         for fname in os.listdir(path):
 
-            if os.path.isdir(os.path.join(path,fname)):
-                fnames = fnames + self.folder_iterator(os.path.join(path,fname))
+            if os.path.isdir(os.path.join(path, fname)):
+                fnames = fnames + self.folder_iterator(os.path.join(path, fname))
             else:
-                fnames.append(os.path.join(path,fname))
+                fnames.append(os.path.join(path, fname))
 
         return fnames
-
 
     def cast_to_vertical(corpora, vertical_corpus):
 
         line_iterators = [corpus.line_iterator() for corpus in corpora]
         iterate = True
 
-        with open(vertical_corpus.path,'w+') as f:
+        with open(vertical_corpus.path, 'w+') as f:
 
             while iterate:
                 lines = []
@@ -493,7 +515,8 @@ class Corpus:
                 if not next_line == None:
                     vertical_lines = []
                     for j in range(len(lines[0])):
-                        vertical_lines.append('{vertical_corpus.field_separator}'.join([lines[i][j] for i in range(len(lines))]))
+                        vertical_lines.append('{vertical_corpus.field_separator}'.join(
+                            [lines[i][j] for i in range(len(lines))]))
                     for line in vertical_lines:
                         f.write(line+'\n')
                     f.write(vertical_corpus.sentence_separator)
@@ -502,28 +525,42 @@ class Corpus:
 
     def save(self):
         lc = LanguageChange()
-        lc.save_resource('corpus',f'{self.language} corpora',self.name)
+        lc.save_resource('corpus', f'{self.language} corpora', self.name)
 
-    def save_tokenized_corpora(corpora : Union[Self, List[Self]], tokens = True, lemmas = False, pos = False, save_format = 'linebyline', file_specification = None, file_ending = ".txt", tokenizer="trankit", lemmatizer="trankit", pos_tagger="trankit", split_sentences = True, batch_size=128):
+    def save_tokenized_corpora(
+            corpora: Union[Self, List[Self]],
+            tokens=True,
+            lemmas=False,
+            pos=False,
+            save_format='linebyline',
+            file_specification=None,
+            file_ending=".txt",
+            tokenizer="trankit",
+            lemmatizer="trankit",
+            pos_tagger="trankit",
+            split_sentences=True,
+            batch_size=128):
         if not type(corpora) is list:
             corpora = [corpora]
         if file_specification == None:
             file_specification = ""
-            file_specification += "-tokens" if tokens else '' 
-            file_specification += '-lemmas' if lemmas else '' 
+            file_specification += "-tokens" if tokens else ''
+            file_specification += '-lemmas' if lemmas else ''
             file_specification += '-pos' if pos else ''
         for corpus in corpora:
             tokenized_name = os.path.splitext(corpus.path)[0]+file_specification+file_ending
-            with open(tokenized_name, 'w+') as f: # cache is probably needed here because the file might already exist.
+            with open(tokenized_name, 'w+') as f:  # cache is probably needed here because the file might already exist.
                 if save_format == 'linebyline':
                     if tokens:
                         for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
-                            f.write(' '.join(line.tokens())+'\n') 
+                            f.write(' '.join(line.tokens())+'\n')
                     elif lemmas:
-                        for line in corpus.lemmatize(lemmatizer, split_sentences=split_sentences, batch_size=batch_size):
+                        for line in corpus.lemmatize(
+                                lemmatizer, split_sentences=split_sentences, batch_size=batch_size):
                             f.write(' '.join(line.lemmas())+'\n')
                     elif pos:
-                        for line in corpus.pos_tagging(pos_tagger,split_sentences=split_sentences, batch_size=batch_size):
+                        for line in corpus.pos_tagging(
+                                pos_tagger, split_sentences=split_sentences, batch_size=batch_size):
                             f.write(' '.join(line.pos_tags())+'\n')
                 elif save_format == 'vertical':
 
@@ -536,22 +573,25 @@ class Corpus:
                     if lemmas:
                         if pos:
                             # tokens_lemmas_pos (with or without tokens)
-                            for line in corpus.tokens_lemmas_pos_tags(tokenizer, tokens=tokens,split_sentences=split_sentences, batch_size=batch_size):
+                            for line in corpus.tokens_lemmas_pos_tags(
+                                    tokenizer, tokens=tokens, split_sentences=split_sentences, batch_size=batch_size):
                                 write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-    
+
                         else:
                             # lemmatize (with or without tokens)
-                            for line in corpus.lemmatize(lemmatizer, tokenize=tokens,split_sentences=split_sentences, batch_size=batch_size):
+                            for line in corpus.lemmatize(
+                                    lemmatizer, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
                                 write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
                     elif pos:
                         # pos_tagging (with or without tokens)
-                        for line in corpus.pos_tagging(pos_tagger, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
+                        for line in corpus.pos_tagging(
+                                pos_tagger, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
                             write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
                     elif tokens:
                         # tokenize only
-                        for line in corpus.tokenize(tokenizer,split_sentences=split_sentences, batch_size=batch_size):
+                        for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
                             write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
 
@@ -599,14 +639,14 @@ class LinebyLineCorpus(Corpus):
                 self.is_lemmatized = False
 
     def line_iterator(self):
-        
+
         if os.path.isdir(self.path):
             fnames = self.folder_iterator(self.path)
         else:
             fnames = [self.path]
 
         def get_data(line):
-            line = line.replace('\n','')
+            line = line.replace('\n', '')
             data = {}
             data['raw_text'] = line
             if self.is_lemmatized:
@@ -618,7 +658,7 @@ class LinebyLineCorpus(Corpus):
         for fname in fnames:
 
             if fname.endswith('.txt'):
-                with open(fname,'r') as f:
+                with open(fname, 'r') as f:
                     for i, line in enumerate(f):
                         if i >= self.skip_lines:
                             data = get_data(line)
@@ -630,75 +670,6 @@ class LinebyLineCorpus(Corpus):
                         if i >= self.skip_lines:
                             data = get_data(line)
                             yield Line(fname=fname, **data)
-
-            else:
-                raise Exception('Format not recognized')
-
-
-class VerticalCorpus(Corpus):
-
-    def __init__(self, path, sentence_separator='\n', field_separator='\t', field_map={'token':0, 'lemma':1, 'pos_tag':2}, **args):
-        super().__init__(name=path,**args)
-        self.path = path
-        self.sentence_separator = sentence_separator
-        self.field_separator = field_separator
-        self.field_map = field_map
-
-    def line_iterator(self):
-        
-        if os.path.isdir(self.path):
-            fnames = self.folder_iterator(self.path)
-        else:
-            fnames = [self.path]
-
-        def get_data(line):
-            data = {}
-            splitted_line = [vertical_line.strip('\n').split(self.field_separator) for vertical_line in line]
-            raw_text = [vertical_line[self.field_map['token']] for vertical_line in splitted_line]
-            data['raw_text'] = ' '.join(raw_text)
-            data['tokens'] = raw_text
-            if 'lemma' in self.field_map:
-                lemma_text = [vertical_line[self.field_map['lemma']] for vertical_line in splitted_line]
-                data['lemmas'] = lemma_text
-            if 'pos_tag' in self.field_map:
-                pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]   
-                data['pos_tags'] = pos_text
-            if 'id' in self.field_map:
-                for i in range(1, len(splitted_line)):
-                    assert splitted_line[i][self.field_map['id']] == splitted_line[0][self.field_map['id']]
-                id_text = splitted_line[0][self.field_map['id']]  
-                data['id'] = id_text
-            if 'date' in self.field_map:
-                for i in range(1, len(splitted_line)):
-                    assert splitted_line[i][self.field_map['date']] == splitted_line[0][self.field_map['date']]
-                date_text = splitted_line[0][self.field_map['date']]  
-                data['date'] = date_text  
-            return data
-
-        for fname in fnames:
-
-            if fname.endswith('.txt'):
-                with open(fname,'r') as f:
-                    line = []
-                    for i, vertical_line in enumerate(f):
-                        if i >= self.skip_lines:
-                            if vertical_line.strip(self.field_separator) == self.sentence_separator:
-                                data = get_data(line)
-                                yield Line(fname=fname, **data)
-                                line = []
-                            else:
-                                line.append(vertical_line)
-
-            elif fname.endswith('.gz'):
-                with gzip.open(fname, mode="rt") as f:
-                    for i, vertical_line in enumerate(f):
-                        if i >= self.skip_lines:
-                            if vertical_line.strip(self.field_separator) == self.sentence_separator:
-                                data = get_data(line)
-                                yield Line(fname=fname, **data)
-                                line = []
-                            else:
-                                line.append(vertical_line)
 
             else:
                 raise Exception('Format not recognized')
@@ -706,17 +677,230 @@ class VerticalCorpus(Corpus):
 
 class ParquetCorpus(Corpus):
     def __init__(self, path, **args):
-        super().__init__(name=path,**args)
+        super().__init__(name=path, **args)
+        self.path = path
+
+    def line_iterator(self, chunk_size: int = 10e6):
+        if os.path.isdir(self.path):
+            fnames = self.folder_iterator(self.path)
+        else:
+            fnames = [self.path]
+
+        for fname in fnames:
+            parquet_file = pq.ParquetFile(fname)
+            for batch in parquet_file.iter_batches(batch_size=chunk_size):
+                # token -> tokens etc.
+                chunk = batch.to_pandas().rename(
+                    columns={k: k + "s" for k in set(batch.column_names).difference({'id', 'date'})}
+                )
+                cols = chunk.columns
+                constant_line_fields = set(cols).intersection({'id', 'date'})
+                variable_line_fields = list(set(cols).difference({'id', 'date'}))
+                for _, sent in chunk.groupby('id', sort=False):
+                    yield Line(**{
+                        k: sent[k].tolist() for k in variable_line_fields
+                    } | {
+                        k: sent[k].iloc[0] for k in constant_line_fields
+                    })
+
+    def search(self,
+               search_terms: List[str | Pattern | SearchTerm],
+               chunk_size: int = 10 ** 6,
+               ):
+        usages = defaultdict(list)
+        if os.path.isdir(self.path):
+            fnames = self.folder_iterator(self.path)
+        else:
+            fnames = [self.path]
+
+        for i, st in enumerate(search_terms):
+            if not isinstance(st, SearchTerm):
+                st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
+                search_terms[i] = st
+
+        for fname in fnames:
+            parquet_file = pq.ParquetFile(fname)
+
+            for features, sts in groupby(search_terms, key=lambda s: frozenset(s.word_feature)):
+                targets = [st.term for st in sts]
+                expression = '|'.join(targets)
+                start_index = 0
+                for batch in parquet_file.iter_batches(batch_size=chunk_size):
+                    chunk = batch.to_pandas()
+                    chunk.date = pd.to_datetime(chunk.date.apply(str)).dt.tz_localize(None)
+
+                    chunk.index = range(start_index, start_index + len(chunk))
+                    start_index += len(chunk)
+
+                    all_chunk_occurences = []
+                    for feature in features:
+                        chunk_occurences = chunk[
+                            chunk[feature].str.contains(expression, regex=True, na=False)
+                        ]
+                        chunk_occurences = chunk_occurences.copy()
+                        chunk_occurences.loc[:, feature] = chunk_occurences[feature].str.split('|')
+                        chunk_occurences = chunk_occurences.explode(feature)
+                        chunk_occurences['target'] = chunk_occurences[feature]  # + '_' + chunk_occurences['pos_tag']
+                        chunk_occurences = chunk_occurences[chunk_occurences['target'].isin(targets)]
+                        all_chunk_occurences.append(chunk_occurences)
+
+                    chunk_occurences = pd.concat(all_chunk_occurences)
+                    if chunk_occurences.empty:
+                        continue
+
+                    ids = chunk_occurences.id.unique()
+                    chunk_tokens = chunk[chunk['id'].isin(ids)].copy()
+                    if chunk_tokens.empty:
+                        continue
+
+                    chunk_tokens.sort_index(inplace=True)
+
+                    chunk_tokens['length'] = chunk_tokens['token'].str.len()
+                    chunk_tokens['space'] = 1
+                    is_last = chunk_tokens['id'] != chunk_tokens['id'].shift(-1)
+                    chunk_tokens.loc[is_last, 'space'] = 0
+                    chunk_tokens['start'] = (
+                        chunk_tokens.groupby('id')[['length', 'space']].cumsum()['length'] -
+                        chunk_tokens['length'] +
+                        chunk_tokens.groupby('id')['space'].cumsum() -
+                        chunk_tokens['space']
+                    )
+                    chunk_tokens['end'] = chunk_tokens['start'] + chunk_tokens['length']
+                    chunk_tokens = chunk_tokens.drop(columns=['length', 'space'])
+                    chunk_tokens = chunk_tokens.astype({'start': 'Int32', 'end': 'Int32'})
+
+                    chunk_sentences = (
+                        chunk_tokens
+                        .groupby('id')
+                        .token
+                        .apply(lambda x: x.str.cat(sep=" "))
+                        .reset_index()
+                        .rename(columns={'token': 'text'})
+                    )
+
+                    chunk_targets = chunk_occurences.merge(
+                        chunk_tokens[['start', 'end']], left_index=True, right_index=True
+                    )
+                    chunk_targets = chunk_targets.merge(chunk_sentences, on='id')
+                    chunk_targets['date'] = chunk_targets['date'].dt.strftime("%Y-%m-%d")
+                    chunk_targets['offsets'] = chunk_targets[['start', 'end']].apply(lambda row: row.values, axis=1)
+                    chunk_targets = chunk_targets.drop(columns=['start', 'end', 'id']).rename(columns={"date": "time"})
+
+                    # Add to usage dictionary
+                    for target, group in chunk_targets.groupby("target"):
+                        tul = [TargetUsage(**tu) for tu in group.to_dict("records")]
+                        usages[target].extend(tul)
+
+        usage_dictionary = UsageDictionary({target: TargetUsageList(tul) for target, tul in usages.items()})
+
+        return usage_dictionary
+
+
+class VerticalCorpus(Corpus):
+
+    def __init__(self, path, sentence_separator='\n', field_separator='\t',
+                 field_map={'token': 0, 'lemma': 1, 'pos_tag': 2},
+                 has_header=False, **args):
+        super().__init__(name=path, **args)
+        self.path = path
+        self.sentence_separator = sentence_separator
+        self.field_separator = field_separator
+        self.field_map = field_map
+        self.has_header = has_header
 
     def line_iterator(self):
-        pass
-            
+
+        if os.path.isdir(self.path):
+            fnames = self.folder_iterator(self.path)
+        else:
+            fnames = [self.path]
+
+        def get_data(splitted_line):
+            data = {}
+            # Token level features
+            for field in {'token', 'lemma', 'pos_tag'}.intersection(self.field_map.keys()):
+                text = [vertical_line[field] for vertical_line in splitted_line]
+                data[f'{field}s'] = text
+            if 'tokens' in data:
+                data['raw_text'] = ' '.join(data['tokens'])
+            # Sentence level features
+            for field in {'id', 'date'}.intersection(self.field_map.keys()):
+                for i in range(1, len(splitted_line)):
+                    assert splitted_line[i][field] == splitted_line[0][field], f"found two values \
+                        '{splitted_line[i][field]}' and '{splitted_line[0][field]}' for the same feature \
+                        {field} in a line."
+                text = splitted_line[0][field]
+                data[field] = text
+            return data
+
+        def iterate_lines(f):
+            line = []
+            # If the corpus has a header describing the columns, this overrides self.field_map
+            if self.has_header:
+                field_map = {k: i for i, k in enumerate(next(iter(f)).strip("\n").split(self.field_separator))}
+            else:
+                field_map = self.field_map
+            for vertical_line in islice(f, self.skip_lines, None):
+                if vertical_line.strip(self.field_separator) == self.sentence_separator:
+                    data = get_data(line)
+                    yield Line(fname=fname, **data)
+                    line = []
+                else:
+                    fields = vertical_line.strip('\n').split(self.field_separator)
+                    line.append({field: fields[field_map[field]] for field in field_map})
+
+        for fname in fnames:
+            if fname.endswith('.txt') or fname.endswith('.csv') or fname.endswith('.tsv'):
+                with open(fname, 'r') as f:
+                    yield from iterate_lines(f)
+
+            elif fname.endswith('.gz'):
+                with gzip.open(fname, mode="rt") as f:
+                    yield from iterate_lines(f)
+
+            else:
+                raise Exception('Format not recognized')
+
+    def cast_to_parquet(self,
+                        parquet_corpus_or_path: Union[ParquetCorpus, str] = None,
+                        block_size: int = 1 << 20,
+                        compression: str = "snappy",
+                        delimiter: str = "\t") -> None:
+        if parquet_corpus_or_path is None:
+            basename = os.path.splitext(self.path)[0]
+            parquet_corpus = ParquetCorpus(Path(basename + ".parquet"))
+        elif isinstance(parquet_corpus_or_path, str):
+            parquet_corpus = ParquetCorpus(Path(parquet_corpus_or_path))
+        elif isinstance(parquet_corpus_or_path, ParquetCorpus):
+            parquet_corpus = parquet_corpus_or_path
+        else:
+            raise TypeError("'parquet_corpus_or_path' has to be one of [None, str, ParquetCorpus].")
+        parquet_path = parquet_corpus.path
+
+        read_opts = pv.ReadOptions(block_size=block_size)
+        parse_opts = pv.ParseOptions(delimiter=delimiter, quote_char=False)
+        convert_opts = pv.ConvertOptions()
+
+        csv_reader = pv.open_csv(self.path, read_options=read_opts,
+                                 convert_options=convert_opts, parse_options=parse_opts)
+
+        writer = None
+        for batch in csv_reader:
+            table = pa.Table.from_batches([batch])
+            if writer is None:
+                writer = pq.ParquetWriter(parquet_path, batch.schema, compression=compression)
+            writer.write_table(table)
+
+        if writer:
+            writer.close()
+
 
 # Should be able to load and parse a corpus in XML format.
 # Supports only tokenized corpora so far.
 class XMLCorpus(Corpus):
 
-    def __init__(self, path, sentence_tag='sentence', token_tag='token', is_lemmatized=False, lemma_tag=None, is_pos_tagged=False, pos_tag_tag=None, text_tag='text', **args):
+    def __init__(self, path, sentence_tag='sentence', token_tag='token', is_lemmatized=False, lemma_tag=None,
+                 is_pos_tagged=False, pos_tag_tag=None, text_tag='text', **args):
         if not 'name' in args:
             name = path
         super().__init__(name, **args)
@@ -756,10 +940,8 @@ class XMLCorpus(Corpus):
         self.token_tag = token_tag
         self.text_tag = text_tag
 
-    
     def get_attribute(self, tag, attribute):
         return tag.attrib[attribute]
-
 
     def line_iterator(self):
         if os.path.isdir(self.path):
@@ -767,7 +949,7 @@ class XMLCorpus(Corpus):
         else:
             fnames = [self.path]
 
-        def get_data(tokens, lemmas = [], pos_tags = []):
+        def get_data(tokens, lemmas=[], pos_tags=[]):
             data = {}
             data['raw_text'] = ' '.join(tokens)
             if self.is_lemmatized and lemmas != []:
@@ -780,26 +962,31 @@ class XMLCorpus(Corpus):
         def read_xml(source):
             tokens = []
             lemmas = []
-            parser = ET.iterparse(source, events=('start','end'))
+            pos_tags = []
+            curr_id = None
+            parser = ET.iterparse(source, events=('start', 'end'))
+
             for event, elem in parser:
                 if elem.sourceline >= self.skip_lines:
                     if elem.tag == self.text_tag:
                         date = elem.get('date')
                     if elem.tag == self.sentence_tag:
                         if event == 'start':
-                            tokens = []
-                            lemmas = []
-                            pos_tags = []
                             sentence_id = elem.get('id', None)
-                        # If the sentence has ended, create a new Line object with its content
+                            # A new sentence
+                            if sentence_id != curr_id:
+                                if tokens:
+                                    data = get_data(tokens, lemmas, pos_tags)
+                                    data['date'] = date
+                                    data['id'] = curr_id
+                                    yield Line(fname=fname, **data)
+                                curr_id = sentence_id
+                                tokens = []
+                                lemmas = []
+                                pos_tags = []
+
                         elif event == 'end':
-                            if tokens != []:
-                                data = get_data(tokens, lemmas, pos_tags)
-                                data['date'] = date
-                                line_id = sentence_id
-                                data['id'] = line_id
-                                yield Line(fname=fname, **data)
-                                elem.clear()
+                            elem.clear()
                     elif elem.tag == self.token_tag:
                         if event == 'end':
                             if self.is_lemmatized:
@@ -808,13 +995,22 @@ class XMLCorpus(Corpus):
                             if self.is_pos_tagged:
                                 pos_tag = self.get_attribute(elem, self.pos_tag_tag)
                                 pos_tags.append(pos_tag)
-                            token = elem.text
+                            token = elem.text.strip()
                             tokens.append(token)
                             elem.clear()
                     else:
                         if event == 'end':
                             elem.clear()
+            # Yield the last sentence
+            if tokens:
+                data = get_data(tokens, lemmas, pos_tags)
+                data['date'] = date
+                line_id = sentence_id
+                data['id'] = line_id
+                yield Line(fname=fname, **data)
+                elem.clear()
 
+            del parser
 
         for fname in fnames:
             if fname.endswith('.xml'):
@@ -828,7 +1024,16 @@ class XMLCorpus(Corpus):
                 raise Exception('Format not recognized')
 
     # Cast to a LineByLine corpus and save the result in the path specified in there
-    def cast_to_linebyline(self, linebyline_corpus : LinebyLineCorpus):
+    def cast_to_linebyline(self, linebyline_corpus_or_path = None):
+        if linebyline_corpus_or_path is None:
+            basename = os.path.splitext(self.path)[0]
+            linebyline_corpus = LinebyLineCorpus(basename + ".txt")
+        elif isinstance(linebyline_corpus_or_path, str):
+            linebyline_corpus = LinebyLineCorpus(linebyline_corpus_or_path)
+        elif isinstance(linebyline_corpus_or_path, LinebyLineCorpus):
+            linebyline_corpus = linebyline_corpus_or_path
+        else:
+            raise TypeError("'linebyline_corpus_or_path' has to be one of [None, str, LinebyLineCorpus].")
         savepath = linebyline_corpus.path
         if hasattr(linebyline_corpus, 'tokens_splitter'):
             tokens_splitter = linebyline_corpus.tokens_splitter
@@ -850,44 +1055,72 @@ class XMLCorpus(Corpus):
                 for line in self.line_iterator():
                     f.write(line.raw_text()+'\n')  # cache needed here
 
-    def cast_to_vertical(self, vertical_corpus : VerticalCorpus):
+    def cast_to_vertical(self, vertical_corpus_or_path=None, write_header=True):
+        if vertical_corpus_or_path is None:
+            basename = os.path.splitext(self.path)[0]
+            vertical_corpus = VerticalCorpus(basename + ".tsv")
+        elif isinstance(vertical_corpus_or_path, str):
+            vertical_corpus = VerticalCorpus(vertical_corpus_or_path)
+        elif isinstance(vertical_corpus_or_path, VerticalCorpus):
+            vertical_corpus = vertical_corpus_or_path
+        else:
+            raise TypeError("'vertical_corpus_or_path' has to be one of [None, str, VerticalCorpus].")
         savepath = vertical_corpus.path
         field_separator = vertical_corpus.field_separator
         sentence_separator = vertical_corpus.sentence_separator
-        # We need to make sure that the line features (token, lemma, pos, etc.) come in the same order as in the field_map in the vertical_corpus
-        sorted_field_names = [key for (key, _) in sorted(vertical_corpus.field_map.items(), key = lambda x : x[1])]
-        # id and date are the same across tokens in a sentence
-        constant_line_fields = set(sorted_field_names).intersection({'id','date'})
+        # We need to make sure that the line features (token, lemma, pos, etc.) come in the same order as in the
+        # field_map in the vertical_corpus
+        sorted_field_names = [key for (key, _) in sorted(vertical_corpus.field_map.items(), key=lambda x: x[1])]
+        # id and date are the same across tokens, lemmas etc. in a sentence
+        constant_line_fields = set(sorted_field_names).intersection({'id', 'date'})
         variable_line_fields = list(set(sorted_field_names).difference({'id', 'date'}))
-        
+
         def get_line_feature(line, key):
             field_name_to_line_feature = {
-                'token': line.tokens(), 
-                'lemma': line.lemmas(), 
+                'token': line.tokens(),
+                'lemma': line.lemmas(),
                 'pos_tag': line.pos_tags(),
                 'id': line.id,
                 'date': line.date}
             return field_name_to_line_feature[key]
-        
+
         with open(savepath, 'w', newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, delimiter='\t', fieldnames=sorted_field_names)
-            writer.writeheader()
+            if write_header:
+                csvfile.write(field_separator.join(sorted_field_names) + "\n")
             for line in self.line_iterator():
-                common_row_content = dict()
-                for k in constant_line_fields:
-                    common_row_content[k] = get_line_feature(line, k)
+                sentence_content = {k: get_line_feature(line, k) for k in constant_line_fields}
                 for values in zip(*(get_line_feature(line, k) for k in variable_line_fields)):
-                    vertical_row_content = {f : v for f, v in zip(variable_line_fields, values)}
-                    writer.writerow(vertical_row_content | common_row_content)
-                writer.writerow({})
+                    token_content = {f: v for f, v in zip(variable_line_fields, values)}
+                    all_content = sentence_content | token_content
+                    vertical_row = [all_content[s] for s in sorted_field_names]
+                    csvfile.write(field_separator.join(vertical_row) + "\n")
+                if sentence_separator is not None:
+                    csvfile.write(sentence_separator)
+
+    def cast_to_parquet(self, parquet_corpus_or_path=None, keep_tsv=False):
+        basename = os.path.splitext(self.path)[0]
+        c = VerticalCorpus(
+            basename + ".tsv",
+            field_map={k: i for i, k in enumerate(["token", "lemma", "pos_tag", "id", "date"])},
+            sentence_separator=None,
+            has_header=True)
+        print("Casting to intermediate tsv file...")
+        self.cast_to_vertical(c)
+        print("Casting to parquet...")
+        c.cast_to_parquet(parquet_corpus_or_path)
+        if not keep_tsv:
+            os.remove(c.path)
+            print(f"Removed temporary file {c.path}.")
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
 class SprakBankenCorpus(XMLCorpus):
 
-    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=True, lemma_tag='lemma', is_pos_tagged=True, pos_tag_tag='pos', **args):
+    def __init__(
+            self, path, sentence_tag='sentence', token_tag='token', is_lemmatized=True, lemma_tag='lemma',
+            is_pos_tagged=True, pos_tag_tag='pos', **args):
         super().__init__(path, sentence_tag, token_tag, is_lemmatized, lemma_tag, is_pos_tagged, pos_tag_tag, **args)
-    
+
     def get_attribute(self, tag, attribute):
         content = tag.attrib[attribute]
         if content != None:
@@ -897,7 +1130,7 @@ class SprakBankenCorpus(XMLCorpus):
                     return content[0]
             else:
                 return content
-        return tag.text
+        return tag.text.strip()
 
 
 class HistoricalCorpus(SortedKeyList):
@@ -906,7 +1139,7 @@ class HistoricalCorpus(SortedKeyList):
         """Ensures only valid arguments go to SortedKeyList"""
         return super().__new__(cls)
 
-    def __init__(self, corpora:Union[List[Corpus],str], key=lambda c : c.time, corpus_type=None, time_function=None):
+    def __init__(self, corpora: Union[List[Corpus], str], key=lambda c: c.time, corpus_type=None, time_function=None):
         """
             This class is a SortedKeyList of corpora. A historical corpus can be initialised either from a path where the files are located, or from a list of already instanciated Corpus objects.
 
@@ -918,22 +1151,23 @@ class HistoricalCorpus(SortedKeyList):
         """
         if isinstance(corpora, str):
             try:
-                if corpus_type not in ['line_by_line','vertical','xml','sprakbanken']:
-                    logging.error("When initialising from a folder path, corpus_type must be one of 'line_by_line','vertical','xml' and 'sprakbanken'.")
+                if corpus_type not in ['line_by_line', 'vertical', 'xml', 'sprakbanken']:
+                    logging.error(
+                        "When initialising from a folder path, corpus_type must be one of 'line_by_line','vertical','xml' and 'sprakbanken'.")
                     raise ValueError
                 corpora_list = []
                 for file in os.listdir(corpora):
                     try:
                         if corpus_type == 'line_by_line':
-                            corpus = LinebyLineCorpus(os.path.join(corpora,file),time_function=time_function)
+                            corpus = LinebyLineCorpus(os.path.join(corpora, file), time_function=time_function)
                         elif corpus_type == 'vertical':
-                            corpus = VerticalCorpus(os.path.join(corpora,file),time_function=time_function)
+                            corpus = VerticalCorpus(os.path.join(corpora, file), time_function=time_function)
                         elif corpus_type == 'xml':
-                            corpus = XMLCorpus(os.path.join(corpora,file),time_function=time_function)
+                            corpus = XMLCorpus(os.path.join(corpora, file), time_function=time_function)
                         elif corpus_type == 'sprakbanken':
-                            corpus = SprakBankenCorpus(os.path.join(corpora,file),time_function=time_function)
+                            corpus = SprakBankenCorpus(os.path.join(corpora, file), time_function=time_function)
                         corpora_list.append(corpus)
-                    except: #TODO: proper exception
+                    except:  # TODO: proper exception
                         logging.error(f"Could not initialise a corpus from path {os.path.join(dir,file)}.")
                         continue
                 corpora = corpora_list
@@ -961,7 +1195,7 @@ class HistoricalCorpus(SortedKeyList):
             except:
                 logging.error(f"Could not get lines from {corpus.name}.")
 
-    def search(self, search_terms : List[ str | Pattern | SearchTerm ], index_by_corpus=False):
+    def search(self, search_terms: List[str | Pattern | SearchTerm], index_by_corpus=False):
         """
             Searches through all of the corpora by calling search() for each of them.
 
@@ -979,23 +1213,23 @@ class HistoricalCorpus(SortedKeyList):
         """
 
         if index_by_corpus:
-            usages = {} #TODO: make this saveable
+            usages = {}  # TODO: make this saveable
             for corpus in self:
                 try:
-                    usage_dict : UsageDictionary = corpus.search(search_terms)
+                    usage_dict: UsageDictionary = corpus.search(search_terms)
                 except:
                     logging.error(f"Could not search through {corpus.name}.")
                     continue
                 for key in usage_dict:
                     if not key in usages:
-                        usages[key] = {corpus.name : TargetUsageList()}
+                        usages[key] = {corpus.name: TargetUsageList()}
                     usages[key][corpus.name] = usage_dict[key]
 
         else:
             usages = UsageDictionary()
             for corpus in self:
                 try:
-                    usage_dict : UsageDictionary = corpus.search(search_terms)
+                    usage_dict: UsageDictionary = corpus.search(search_terms)
                 except:
                     logging.error(f"Could not search through {corpus.name}.")
                     continue
