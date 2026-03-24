@@ -7,9 +7,16 @@ class SearchTerm():
 
     VALID_WORD_FEATURES = ['lemma', 'token', 'pos']
 
-    def __init__(self, term : str, regex : bool = False, word_feature : str | Set = 'token'):
-        self.term = term 
+    def __init__(self, feature_value_pairs : dict | list | str, regex : bool = False):
         self.regex = regex
-        self.word_feature = word_feature if isinstance(word_feature, Set) else {word_feature}
-        if not self.word_feature.issubset(self.VALID_WORD_FEATURES):
-            raise ValueError("'word_feature' must be set to one of the following values: ", self.VALID_WORD_FEATURES)
+        if isinstance(feature_value_pairs, str):
+            self.feature_value_pairs = {"token": feature_value_pairs}
+        elif isinstance(feature_value_pairs, list):
+            self.feature_value_pairs = {"token": "(" + "|".join(feature_value_pairs) + ")"}
+            self.regex = True
+        else:
+            self.feature_value_pairs = feature_value_pairs
+        for word_feature in self.feature_value_pairs.keys():
+            if not word_feature in self.VALID_WORD_FEATURES:
+                raise ValueError(f"key '{word_feature}' must be set to one of the following values: \
+                    {self.VALID_WORD_FEATURES}")

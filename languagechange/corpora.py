@@ -3,10 +3,9 @@ import gzip
 import logging
 import os
 import re
-import csv
 from typing import List, Pattern, Self, Union
-from itertools import islice, groupby
-from collections import defaultdict
+from itertools import islice
+from collections import defaultdict, deque
 from pathlib import Path
 import lxml.etree as ET
 from sortedcontainers import SortedKeyList
@@ -15,6 +14,9 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.csv as pv
 import pyarrow.parquet as pq
+from datasets import load_dataset, Dataset
+from datasets.dataset_dict import DatasetDict
+
 from languagechange.resource_manager import LanguageChange
 from languagechange.search import SearchTerm
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
@@ -78,14 +80,14 @@ class Line:
                 raise Exception('No valid data in Line')
 
     def raw_lemma_text(self):
-        if not self._raw_lemmas == None:
-            return self._raw_lemmas
+        if not self._raw_lemma_text == None:
+            return self._raw_lemma_text
         return ' '.join(self._lemmas)
 
     def raw_pos_text(self):
         if not self._raw_pos_text == None:
             return self._raw_pos_text
-        return ' '.join(self._raw_pos_text)
+        return ' '.join(self._pos_tags)
 
     def raw_text_by_feature(self, feat='token'):
         if feat == 'token':
@@ -107,34 +109,85 @@ class Line:
         """
         time = getattr(self, 'date', time)
         tul = TargetUsageList()
-        for feat in search_term.word_feature:
-            if search_term.regex:
-                if search_term.search_func:
-                    def search_func(word, line):
-                        offsets = []
-                        rex = re.compile(f'( |^)+{word}( |$)+', re.MULTILINE)
-                        for fi in re.finditer(rex, line):
-                            s = line[fi.start():fi.end()].find(word)
-                            offsets.append([fi.start()+s, fi.start()+s+len(word)])
-                        return offsets
+        
+        if search_term.regex:
+            
+            def search_func(regexp, line):
+                """
+                    Finds all occurences in 'line' (possibly multiple lines) matching the 'regexp' (possibly multiple
+                    words).
+                """
+                offsets = []
+                rex = re.compile(fr'(?<!\S){regexp}(?!\S)', re.MULTILINE)
+                for fi in re.finditer(rex, line):
+                    offsets.append((fi.start(), fi.end()))
+                return offsets
+
+            def get_corresponding_token_offsets(feature, feature_offsets):
+                """
+                    Takes a 'feature' and target offsets for the raw feature string, and returns the corresponding
+                    offsets for the raw token string.
+                """
+                token_offsets = []
+                sorted_offsets = deque(sorted(feature_offsets, reverse=True))
+                target_offsets = sorted_offsets.pop()
+                feat_acc_chars, token_acc_chars = 0, 0
+                start, stop = None, None
+                for token, feat in zip(self.tokens() + [''], self.tokens_by_feature(feature) + ['']):
+                    # Reached the end of the current target
+                    if feat_acc_chars == target_offsets[1] + 1:
+                        stop = token_acc_chars
+                        if start is not None:
+                            # Add the offsets and get new target offsets, if there are any
+                            token_offsets.append((start, stop - 1))
+                            start = None
+                            stop = None
+                            if not sorted_offsets:
+                                break
+                            target_offsets = sorted_offsets.pop()
+                    # Reached the beginning of the current target
+                    if feat_acc_chars == target_offsets[0]:
+                        start = token_acc_chars
+                    # Increase the accumulated character counts of tokens and the feature
+                    feat_acc_chars += len(feat) + 1
+                    token_acc_chars += len(token) + 1
+                return token_offsets
+            
+            token_offsets = set()
+
+            no_match = False
+            for feat, term in search_term.feature_value_pairs.items():
                 raw_text_by_feature = self.raw_text_by_feature(feat)
-                for offsets in search_func(search_term.term, raw_text_by_feature):
+                feature_offsets = search_func(term, raw_text_by_feature)
+                if feature_offsets:
+                    corr_offsets = get_corresponding_token_offsets(feat, feature_offsets)
+                    if len(token_offsets) == 0:
+                        token_offsets = set(corr_offsets)
+                    else:
+                        # Only keep the offsets for which all features so far have returned a match
+                        token_offsets = token_offsets.intersection(set(corr_offsets))
+                else:
+                    no_match = True
+                    break
+
+            if not no_match:
+                for offsets in sorted(token_offsets):
+                    tu = TargetUsage(self.raw_text(), list(offsets), time, id=getattr(self, 'id', 0))
+                    tul.append(tu)
+        else:
+            for idx, values in enumerate(zip(*(self.tokens_by_feature(f) for f in search_term.feature_value_pairs.keys()))):
+                if list(values) == list(search_term.feature_value_pairs.values()):
+                    offsets = [0, 0]
+                    if not idx == 0:
+                        offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
+                    offsets[1] = offsets[0] + len(self.tokens()[idx])
                     tu = TargetUsage(self.raw_text(), offsets, time, id=getattr(self, 'id', 0))
                     tul.append(tu)
-            else:
-                token_features = self.tokens_by_feature(feat)
-                for idx, token in enumerate(token_features):
-                    if search_term.term == token:
-                        offsets = [0, 0]
-                        if not idx == 0:
-                            offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
-                        offsets[1] = offsets[0] + len(self.tokens()[idx])
-                        tu = TargetUsage(self.raw_text(), offsets, time, id=getattr(self, 'id', 0))
-                        tul.append(tu)
+
         return tul
 
     def __str__(self):
-        return self._raw_text
+        return self.raw_text()
 
 
 class Corpus:
@@ -170,16 +223,15 @@ class Corpus:
         """
 
         usage_dictionary = UsageDictionary()
-        n_usages = 0
         for st in search_terms:
             if not isinstance(st, SearchTerm):
                 st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
             tul = TargetUsageList()
-            usage_dictionary[st.term] = tul
+            usage_dictionary[str(st.feature_value_pairs.items())] = tul
             for line in self.line_iterator():
                 match: List[TargetUsage] = line.search(st, time=self.time)
                 tul.extend(match)
-                n_usages += len(match)
+        n_usages = sum(map(len, usage_dictionary.values()))
         logging.info(f"{n_usages} usages found.")
         return usage_dictionary
 
@@ -593,6 +645,9 @@ class Corpus:
                         # tokenize only
                         for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
                             write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
+    
+    def __iter__(self):
+        yield from self.line_iterator()
 
 
 class LinebyLineCorpus(Corpus):
@@ -676,22 +731,60 @@ class LinebyLineCorpus(Corpus):
 
 
 class ParquetCorpus(Corpus):
-    def __init__(self, path, **args):
+    def __init__(self, path, load_from_huggingface_hub=False, **args):
         super().__init__(name=path, **args)
-        self.path = path
 
-    def line_iterator(self, chunk_size: int = 10e6):
-        if os.path.isdir(self.path):
-            fnames = self.folder_iterator(self.path)
+        if load_from_huggingface_hub:
+            # Download from huggingface hub
+            self.dataset = load_dataset(path)
+            self.path = None
         else:
-            fnames = [self.path]
+            self.path = path
+            self.dataset = None
 
-        for fname in fnames:
-            parquet_file = pq.ParquetFile(fname)
-            for batch in parquet_file.iter_batches(batch_size=chunk_size):
+        self.column_names = {
+            "token":"token",
+            "lemma":"lemma",
+            "pos":"pos_tag",
+            "id":"id",
+            "date":"date"
+            }
+
+    def _get_iters(self, split=None):
+        if self.path:
+            if os.path.isdir(self.path):
+                iters = self.folder_iterator(self.path)
+            else:
+                iters = [self.path]
+        else:
+            if isinstance(self.dataset, DatasetDict):
+                if split is None:
+                    iters = [self.dataset[k] for k in self.dataset.keys()]
+                else:
+                    iters = [self.dataset[split]]
+            elif isinstance(self.dataset, Dataset):
+                iters = [self.dataset]
+            else:
+                raise TypeError(f"{self.dataset} is neither a Dataset nor a DatasetDict.")
+        return iters
+
+    def line_iterator(self, chunk_size: int = 10 ** 6, split=None):
+        for it in self._get_iters(split=split):
+            if self.path:
+                parquet_file = pq.ParquetFile(it)
+                iterator = parquet_file.iter_batches(batch_size=chunk_size)
+            else:
+                iterable = it.to_iterable_dataset()
+                iterator = iterable.iter(batch_size=chunk_size)
+
+            for batch in iterator:
+                if self.path:
+                    chunk = batch.to_pandas()
+                elif self.dataset:
+                    chunk = pd.DataFrame(batch)
                 # token -> tokens etc.
-                chunk = batch.to_pandas().rename(
-                    columns={k: k + "s" for k in set(batch.column_names).difference({'id', 'date'})}
+                chunk = chunk.rename(
+                    columns={k: k + "s" for k in set(chunk.columns).difference({'id', 'date'})}
                 )
                 cols = chunk.columns
                 constant_line_fields = set(cols).intersection({'id', 'date'})
@@ -706,94 +799,110 @@ class ParquetCorpus(Corpus):
     def search(self,
                search_terms: List[str | Pattern | SearchTerm],
                chunk_size: int = 10 ** 6,
+               split=None
                ):
         usages = defaultdict(list)
-        if os.path.isdir(self.path):
-            fnames = self.folder_iterator(self.path)
-        else:
-            fnames = [self.path]
 
         for i, st in enumerate(search_terms):
             if not isinstance(st, SearchTerm):
                 st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
                 search_terms[i] = st
 
-        for fname in fnames:
-            parquet_file = pq.ParquetFile(fname)
+        for it in self._get_iters(split=split):
+            if self.path:
+                parquet_file = pq.ParquetFile(it)
+                iterator = parquet_file.iter_batches(batch_size=chunk_size)
+            else:
+                iterable = it.to_iterable_dataset()
+                iterator = iterable.iter(batch_size=chunk_size)
 
-            for features, sts in groupby(search_terms, key=lambda s: frozenset(s.word_feature)):
-                targets = [st.term for st in sts]
-                expression = '|'.join(targets)
-                start_index = 0
-                for batch in parquet_file.iter_batches(batch_size=chunk_size):
+            start_index = 0
+            for batch in iterator:
+                if self.path:
                     chunk = batch.to_pandas()
-                    chunk.date = pd.to_datetime(chunk.date.apply(str)).dt.tz_localize(None)
+                else:
+                    chunk = pd.DataFrame(batch)
+                chunk.date = pd.to_datetime(chunk.date.apply(str)).dt.tz_localize(None)
 
-                    chunk.index = range(start_index, start_index + len(chunk))
-                    start_index += len(chunk)
+                chunk.index = range(start_index, start_index + len(chunk))
+                start_index += len(chunk)
 
-                    all_chunk_occurences = []
-                    for feature in features:
-                        chunk_occurences = chunk[
-                            chunk[feature].str.contains(expression, regex=True, na=False)
-                        ]
-                        chunk_occurences = chunk_occurences.copy()
-                        chunk_occurences.loc[:, feature] = chunk_occurences[feature].str.split('|')
-                        chunk_occurences = chunk_occurences.explode(feature)
-                        chunk_occurences['target'] = chunk_occurences[feature]  # + '_' + chunk_occurences['pos_tag']
-                        chunk_occurences = chunk_occurences[chunk_occurences['target'].isin(targets)]
-                        all_chunk_occurences.append(chunk_occurences)
+                chunk_occurences = chunk.copy()
+                all_occurences = False
+                chunk_occurences["target"] = ""
+                for st in search_terms:
+                    occurences = True
+                    features_values = st.feature_value_pairs.items()
+                    for f, v in features_values:
+                        if st.regex:
+                            occurences &= chunk_occurences[self.column_names[f]].str.fullmatch(v, na=False)
+                        else:
+                            occurences &= chunk_occurences[self.column_names[f]] == v
+                    all_occurences |= occurences
+                    chunk_occurences.loc[occurences,"target"] = "_".join(f"{k}={v}" for k, v in features_values)
 
-                    chunk_occurences = pd.concat(all_chunk_occurences)
-                    if chunk_occurences.empty:
-                        continue
+                chunk_occurences = chunk_occurences[all_occurences]
+                
+                if chunk_occurences.empty:
+                    continue
 
-                    ids = chunk_occurences.id.unique()
-                    chunk_tokens = chunk[chunk['id'].isin(ids)].copy()
-                    if chunk_tokens.empty:
-                        continue
+                ids = chunk_occurences.id.unique()
+                chunk_tokens = chunk[chunk['id'].isin(ids)].copy()
+                if chunk_tokens.empty:
+                    continue
 
-                    chunk_tokens.sort_index(inplace=True)
+                chunk_tokens.sort_index(inplace=True)
 
-                    chunk_tokens['length'] = chunk_tokens['token'].str.len()
-                    chunk_tokens['space'] = 1
-                    is_last = chunk_tokens['id'] != chunk_tokens['id'].shift(-1)
-                    chunk_tokens.loc[is_last, 'space'] = 0
-                    chunk_tokens['start'] = (
-                        chunk_tokens.groupby('id')[['length', 'space']].cumsum()['length'] -
-                        chunk_tokens['length'] +
-                        chunk_tokens.groupby('id')['space'].cumsum() -
-                        chunk_tokens['space']
-                    )
-                    chunk_tokens['end'] = chunk_tokens['start'] + chunk_tokens['length']
-                    chunk_tokens = chunk_tokens.drop(columns=['length', 'space'])
-                    chunk_tokens = chunk_tokens.astype({'start': 'Int32', 'end': 'Int32'})
+                chunk_tokens['length'] = chunk_tokens['token'].str.len()
+                chunk_tokens['space'] = 1
+                is_last = chunk_tokens['id'] != chunk_tokens['id'].shift(-1)
+                chunk_tokens.loc[is_last, 'space'] = 0
+                chunk_tokens['start'] = (
+                    chunk_tokens.groupby('id')[['length', 'space']].cumsum()['length'] -
+                    chunk_tokens['length'] +
+                    chunk_tokens.groupby('id')['space'].cumsum() -
+                    chunk_tokens['space']
+                )
+                chunk_tokens['end'] = chunk_tokens['start'] + chunk_tokens['length']
+                chunk_tokens = chunk_tokens.drop(columns=['length', 'space'])
+                chunk_tokens = chunk_tokens.astype({'start': 'Int32', 'end': 'Int32'})
 
-                    chunk_sentences = (
-                        chunk_tokens
-                        .groupby('id')
-                        .token
-                        .apply(lambda x: x.str.cat(sep=" "))
-                        .reset_index()
-                        .rename(columns={'token': 'text'})
-                    )
+                chunk_sentences = (
+                    chunk_tokens
+                    .groupby('id')
+                    .token
+                    .apply(lambda x: x.str.cat(sep=" "))
+                    .reset_index()
+                    .rename(columns={'token': 'text'})
+                )
 
-                    chunk_targets = chunk_occurences.merge(
-                        chunk_tokens[['start', 'end']], left_index=True, right_index=True
-                    )
-                    chunk_targets = chunk_targets.merge(chunk_sentences, on='id')
-                    chunk_targets['date'] = chunk_targets['date'].dt.strftime("%Y-%m-%d")
-                    chunk_targets['offsets'] = chunk_targets[['start', 'end']].apply(lambda row: row.values, axis=1)
-                    chunk_targets = chunk_targets.drop(columns=['start', 'end', 'id']).rename(columns={"date": "time"})
+                chunk_targets = chunk_occurences.merge(
+                    chunk_tokens[['start', 'end']], left_index=True, right_index=True
+                )
+                chunk_targets = chunk_targets.merge(chunk_sentences, on='id')
+                chunk_targets['date'] = chunk_targets['date'].dt.strftime("%Y-%m-%d")
+                chunk_targets['offsets'] = chunk_targets[['start', 'end']].apply(lambda row: row.values, axis=1)
+                chunk_targets = chunk_targets.drop(columns=['start', 'end', 'id']).rename(columns={"date": "time"})
 
-                    # Add to usage dictionary
-                    for target, group in chunk_targets.groupby("target"):
-                        tul = [TargetUsage(**tu) for tu in group.to_dict("records")]
-                        usages[target].extend(tul)
+                # Add to usage dictionary
+                for target, group in chunk_targets.groupby("target"):
+                    tul = [TargetUsage(**tu) for tu in group.to_dict("records")]
+                    usages[target].extend(tul)
 
-        usage_dictionary = UsageDictionary({target: TargetUsageList(tul) for target, tul in usages.items()})
+        usage_dictionary = UsageDictionary({t: TargetUsageList(tul) for t, tul in usages.items()})
+        n_usages = sum(map(len, usage_dictionary.values()))
+        logging.info(f"{n_usages} usages found.")
 
         return usage_dictionary
+
+    def push_to_hub(self, repo_name=None, private=False):
+        if repo_name is None and self.path:
+            repo_name = Path(self.path).stem
+        if self.path:
+            local_dataset = Dataset.from_parquet(self.path)
+        else:
+            local_dataset = self.dataset
+        local_dataset.push_to_hub(repo_id=repo_name, private=private)
 
 
 class VerticalCorpus(Corpus):
@@ -1104,13 +1213,13 @@ class XMLCorpus(Corpus):
             field_map={k: i for i, k in enumerate(["token", "lemma", "pos_tag", "id", "date"])},
             sentence_separator=None,
             has_header=True)
-        print("Casting to intermediate tsv file...")
+        logging.info("Casting to intermediate tsv file...")
         self.cast_to_vertical(c)
-        print("Casting to parquet...")
+        logging.info("Casting to parquet...")
         c.cast_to_parquet(parquet_corpus_or_path)
         if not keep_tsv:
             os.remove(c.path)
-            print(f"Removed temporary file {c.path}.")
+            logging.info(f"Removed temporary file {c.path}.")
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
