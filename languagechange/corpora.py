@@ -732,6 +732,16 @@ class LinebyLineCorpus(Corpus):
 
 class ParquetCorpus(Corpus):
     def __init__(self, path, load_from_huggingface_hub=False, **args):
+        """
+        Initialize a ParquetCorpus.
+
+        Args:
+            path (str): path to a local Parquet file, a directory containing Parquet files, or a Hugging Face dataset 
+                identifier.
+            load_from_huggingface_hub (bool): if true, load the dataset from the Hugging Face Hub using `path`; 
+                otherwise treat `path` as a local filesystem path.
+            **args: additional keyword arguments passed to `Corpus`.
+        """
         super().__init__(name=path, **args)
 
         if load_from_huggingface_hub:
@@ -769,6 +779,21 @@ class ParquetCorpus(Corpus):
         return iters
 
     def line_iterator(self, chunk_size: int = 10 ** 6, split=None):
+        """
+        Iterate over the corpus and yield `Line` objects grouped by `id`.
+
+        Token-level columns are converted to plural field names in the output (e.g. `token` -> `tokens`). Fields `id` 
+        and `date` are assumed to be constant within each line.
+
+        Args:
+            chunk_size (int): number of rows to load per batch.
+            split (str|None): dataset split to use when reading from a Hugging
+                Face dataset. If none, all splits are iterated.
+
+        Yields:
+            Line: a Line object containing token-level values as lists and
+                constant metadata fields as scalars.
+        """
         for it in self._get_iters(split=split):
             if self.path:
                 parquet_file = pq.ParquetFile(it)
@@ -801,6 +826,24 @@ class ParquetCorpus(Corpus):
                chunk_size: int = 10 ** 6,
                split=None
                ):
+        """
+        Search the corpus for token-level matches against any of the search terms and return the target usages 
+        consisting of the lines they occur in, with the tokens(s) highlighted.
+
+        Each search term is matched against feature (token/lemma/pos) rows according to the values in the search term. 
+        For each match, the full sentence or line is reconstructed from all rows sharing the same `id`, and character 
+        offsets are computed for the matched token.
+
+        Args:
+            search_terms (List[str|Pattern|SearchTerm]): search terms to apply. Strings and regex patterns are 
+                converted to `SearchTerm` instances automatically.
+            chunk_size (int): number of rows to load per batch.
+            split (str|None): dataset split to use when reading from a Hugging Face dataset. If none, all splits are 
+                searched.
+
+        Returns:
+            UsageDictionary: a dictionary of `TargetUsageList` objects for each search term.
+        """
         usages = defaultdict(list)
 
         for i, st in enumerate(search_terms):
@@ -827,26 +870,26 @@ class ParquetCorpus(Corpus):
                 chunk.index = range(start_index, start_index + len(chunk))
                 start_index += len(chunk)
 
-                chunk_occurences = chunk.copy()
-                all_occurences = False
-                chunk_occurences["target"] = ""
+                chunk_occurrences = chunk.copy()
+                all_matches = False
+                chunk_occurrences["target"] = ""
                 for st in search_terms:
-                    occurences = True
+                    term_matches = True
                     features_values = st.feature_value_pairs.items()
                     for f, v in features_values:
                         if st.regex:
-                            occurences &= chunk_occurences[self.column_names[f]].str.fullmatch(v, na=False)
+                            term_matches &= chunk_occurrences[self.column_names[f]].str.fullmatch(v, na=False)
                         else:
-                            occurences &= chunk_occurences[self.column_names[f]] == v
-                    all_occurences |= occurences
-                    chunk_occurences.loc[occurences,"target"] = "_".join(f"{k}={v}" for k, v in features_values)
+                            term_matches &= chunk_occurrences[self.column_names[f]] == v
+                    all_matches |= term_matches
+                    chunk_occurrences.loc[term_matches,"target"] = "_".join(f"{k}={v}" for k, v in features_values)
 
-                chunk_occurences = chunk_occurences[all_occurences]
+                chunk_occurrences = chunk_occurrences[all_matches]
                 
-                if chunk_occurences.empty:
+                if chunk_occurrences.empty:
                     continue
 
-                ids = chunk_occurences.id.unique()
+                ids = chunk_occurrences.id.unique()
                 chunk_tokens = chunk[chunk['id'].isin(ids)].copy()
                 if chunk_tokens.empty:
                     continue
@@ -876,7 +919,7 @@ class ParquetCorpus(Corpus):
                     .rename(columns={'token': 'text'})
                 )
 
-                chunk_targets = chunk_occurences.merge(
+                chunk_targets = chunk_occurrences.merge(
                     chunk_tokens[['start', 'end']], left_index=True, right_index=True
                 )
                 chunk_targets = chunk_targets.merge(chunk_sentences, on='id')
@@ -896,6 +939,14 @@ class ParquetCorpus(Corpus):
         return usage_dictionary
 
     def push_to_hub(self, repo_name=None, private=False):
+        """
+        Push the corpus to the Hugging Face Hub.
+
+        Args:
+            repo_name (str|None): name of the destination repository. If None and the corpus has a local path, the stem
+                of that path is used.
+            private (bool): if true, push the dataset to a private repository.
+        """
         if repo_name is None and self.path:
             repo_name = Path(self.path).stem
         if self.path:
