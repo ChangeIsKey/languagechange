@@ -539,7 +539,6 @@ class DWUG(SemanticChangeEvaluationDataset):
         if include_senses:
             try:
                 senses = self.get_usage_senses(word, clusters_file_or_dir, remove_outliers, include_usages=False)
-                print(senses)
                 clusters = [senses.get(n, {"label": -1})["label"] for n in judgments_graph.nodes]
             except:
                 logging.info("Could not find senses. Loading usage graph without sense labels.")
@@ -570,13 +569,17 @@ class DWUG(SemanticChangeEvaluationDataset):
                     to the id in G.nodes
                 threshold (int, default=2.5): the threshold for distinguishing between positive and negative edges
                 save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
-                outfile (Union[str, NoneType], default=None): if not None and save_to_file=True, saves the file to the 
+                outfile (Union[str, None], default=None): if not None and save_to_file=True, saves the file to the 
                     string specified
                 plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
                 plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster labels
         """
         if isinstance(word_or_graph, str):
-            graph, clusters = self.load_graph_from_csv(word_or_graph, include_senses=include_senses)
+            graph, clusters = self.load_graph_from_csv(
+                word_or_graph, 
+                judgments_file_or_dir=judgments_file_or_dir, 
+                clusters_file_or_dir=clusters_file_or_dir, 
+                include_senses=include_senses)
         elif isinstance(word_or_graph, nx.Graph):
             graph = word_or_graph
         else:
@@ -720,8 +723,16 @@ class DWUG(SemanticChangeEvaluationDataset):
                            transform_labels: Callable | str = None,
                            return_list=False):
         """
-            Gathers the pairs of usages (including the id, target and context) and judgments between them for a given word in the DWUG.
+            Gathers the pairs of usages (including the id, target and context) and judgments between them for a given 
+            word in the DWUG.
+
             Args:
+                word (str): the target word (one of self.target_words)
+                judgments_file_or_dir (Union[str, None], default=None): optional custom path to a judgments file or directory 
+                    from which judgments should be loaded. If not set, defaults to `{self.home_path}/data/{word}/
+                    judgments.csv`.
+                clusters_file_or_dir (Union[str, None], default=None): optional custom path to a clusters file or directory, 
+                    only used if removing outliers. If not set, defaults to `{self.home_path}/clusters/{word}.csv`.
                 only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
                 remove_outliers (bool) : if true, remove all examples which have been not been assigned to a cluster (cluster label = -1).
                 exclude_non_judgments (bool): if true, remove all pairs of usages for which there is no judgment (label = 0).
@@ -838,6 +849,37 @@ class DWUG(SemanticChangeEvaluationDataset):
 
 
     def get_usage_senses(self, word, clusters_file_or_dir=None, remove_outliers=True, include_usages=False):
+        """
+            Loads sense/cluster assignments for the usages of a target word and returns them as a dictionary keyed by 
+            usage identifier. Optionally, the usages (texts and offsets) are also included.
+
+            Args:
+                word (str): the target word whose usage senses/clusters should be loaded.
+                clusters_file_or_dir (str | None, default=None): path to a clusters/senses file or to a directory 
+                    containing such a file. If a directory is provided, the method looks for an appropriate file either
+                    directly in that directory or in a word-specific subdirectory. If not provided, the default 
+                    location is determined by `self.dataset`:
+
+                    - for `"DWUG Sense"`:
+                    `{self.home_path}/labels/{word}/{self.config}/labels_senses.[ct]sv`
+                    - otherwise:
+                    `{self.home_path}/clusters/{self.config}/{word}.[ct]sv`
+                remove_outliers (bool, default=True): whether to exclude usages whose cluster label is `-1`.
+                include_usages (bool, default=False): whether to additionally load usage information from 
+                    `{self.home_path}/data/{word}/uses.[ct]sv` and include it in the returned entries.
+
+            Returns:
+                dict[str, dict]:
+                    A dictionary mapping usage identifiers to dictionaries containing at least:
+                    - `"id"`: the usage identifier
+                    - `"label"`: the sense or cluster label
+
+                    If `include_usages=True`, each entry additionally contains:
+                    - `"word"`: the target lemma
+                    - `"text"`: the usage context
+                    - `"start"`: start character offset of the target word
+                    - `"end"`: end character offset of the target word
+        """
         usages_by_id = dict()
         matches = self._find_clusters_path(word, clusters_file_or_dir)
 
@@ -887,7 +929,9 @@ class DWUG(SemanticChangeEvaluationDataset):
                 for k in {'text', 'start', 'end', 'word', 'label'}:
                     if not k in ex:
                         logging.error(
-                            f"A value for {k} in missing in the example of id {identifier}. Make sure that {senses_path} and {os.path.join(self.home_path,'data',word,'uses.(c|t)sv')} contain the same examples.")
+                            f"A value for {k} in missing in the example of id {identifier}. Make sure that \
+                                {matches[0]} and {os.path.join(self.home_path,'data',word,'uses.(c|t)sv')} contain \
+                                the same examples.")
                         raise KeyError
 
         return usages_by_id
@@ -948,11 +992,11 @@ class DWUG(SemanticChangeEvaluationDataset):
                     '{usage_1}' and '{usage_2}'.
                 structure (Union[str, pydantic.BaseModel], default="cosine"): the structure to 
                     use, if a PromptModel is used.
-                save_path (str | None, default=None): full path to the output judgments file. If provided, this takes 
+                save_path (Union[str, None], default=None): full path to the output judgments file. If provided, this takes 
                     precedence over `save_dir`.
-                save_dir (str | None, default=None): directory in which to save the judgments file as `judgments.csv`. 
+                save_dir (Union[str, None], default=None): directory in which to save the judgments file as `judgments.csv`. 
                     If neither `save_path` nor `save_dir` is provided, the default location is 
-                    `{self.home_path}/data/judgments.csv`.
+                    `{self.home_path}/data/{word}judgments.csv`.
         """
 
         usages = self.get_word_usages(word)
@@ -1082,11 +1126,16 @@ class DWUG(SemanticChangeEvaluationDataset):
                 max_iters (int): see languagechange.models.meaning.clustering.CorrelationClustering
                 initial (List[Set[int]]): see languagechange.models.meaning.clustering.CorrelationClustering
                 split_flag (bool): see languagechange.models.meaning.clustering.CorrelationClustering
-                judgments_file_or_dir (str | None, default=None): optional custom path to a judgments file or directory 
+                judgments_file_or_dir (Union[str, None], default=None): optional custom path to a judgments file or directory 
                     from which judgments should be loaded. Passed to `self.load_graph_from_csv(...)`.
+                save_path (Union[str, None], default=None): full path to the output clusters file. If provided, this takes
+                    precedence over `save_dir`.
+                save_dir (Union[str, None], default=None): directory in which to save the clusters file as `clusters.csv`.
+                    If neither `save_path` nor `save_dir` is provided, the default location is `{self.home_path}/
+                    clusters/{self.config}/{word}.csv`.
                 plot (bool): whether to plot the clustering or not
                 save_plot (bool, default=False): plot argument, see self.plot_clustering
-                plot_path (Union[str, NoneType], default=None): plot argument, see self.plot_clustering
+                plot_path (Union[str, None], default=None): plot argument, see self.plot_clustering
                 plot_id_labels (bool, default=False): plot argument, see self.plot_clustering
                 plot_cluster_labels (bool, default=False): plot argument, see self.plot_clustering
 
