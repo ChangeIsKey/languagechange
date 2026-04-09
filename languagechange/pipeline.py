@@ -1,6 +1,9 @@
 from typing import List, Set, Union
+from collections import Counter
 import math
 import json
+import pickle
+import hashlib
 import logging
 import inspect
 import os
@@ -12,14 +15,17 @@ import numpy as np
 from languagechange.models.representation.contextualized import ContextualizedModel
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
-from languagechange.usages import TargetUsage, TargetUsageList
+from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
 from languagechange.models.change.metrics import GradedChange, JSD
 from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
+from languagechange.cache import CacheManager
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
 # Utility function to update a dictionary recursively
+
+
 def deep_update(d, u):
     for k, v in u.items():
         if type(v) == dict:
@@ -31,18 +37,30 @@ def deep_update(d, u):
             d[k] = v
     return d
 
+
 def get_depth(d):
     if type(d) != dict:
         return 0
     return 1 + max([get_depth(v) for v in d.values()])
 
 
+def generate_cache_key(data):
+    """
+    Generate a unique cache key based on the input data.
+    """
+    try:
+        serialized = pickle.dumps(data)
+        return hashlib.sha256(serialized).hexdigest()
+    except Exception as e:
+        raise ValueError(f"Invalid input: {e}")
+
+
 class WiCBinary(BaseModel):
-    wic_label : bool = Field(description='Whether the word has the same meaning or not.')
+    wic_label: bool = Field(description='Whether the word has the same meaning or not.')
 
 
 class WiCGraded(BaseModel):
-    wic_label : float = Field(description='How similar the two occurrences of the word are.',le=1, ge=0)
+    wic_label: float = Field(description='How similar the two occurrences of the word are.', le=1, ge=0)
 
 
 class Pipeline:
@@ -50,10 +68,11 @@ class Pipeline:
         A general class for evaluation pipelines, containing methods common to WSIPipeline, WiCPipeline and
         GCDPipeline, used for saving evaluation results and generating tables from the results.
     """
+
     def __init__(self):
         pass
 
-    def save_evaluation_results(self, results, json_path : str, table_path : str = None, **kwargs):
+    def save_evaluation_results(self, results, json_path: str, table_path: str = None, **kwargs):
         """
             Saves evaluation results to a json file, and optionally generates a table of the results (see 
                 self.generate_table). If there is already content in the json file, the results will be merged with 
@@ -90,19 +109,19 @@ class Pipeline:
                 logging.info(f'Evaluation results saved to {json_path}')
         if table_path is not None:
             self.generate_table(results, table_path, **kwargs)
-                
-    def generate_table(self, 
-                            data, 
-                            save_path,
-                            decimals=None, 
-                            remove_headers=0, 
-                            max_w=None, 
-                            natural_split=False, 
-                            remove_empty=False, 
-                            sort_models=False, 
-                            generate_caption=False, 
-                            highlight_best=False, 
-                            n_method_cols=1):
+
+    def generate_table(self,
+                       data,
+                       save_path,
+                       decimals=None,
+                       remove_headers=0,
+                       max_w=None,
+                       natural_split=False,
+                       remove_empty=False,
+                       sort_models=False,
+                       generate_caption=False,
+                       highlight_best=False,
+                       n_method_cols=1):
         """
             Generates one or more tables of results in LaTeX or TSV format, to be saved in a .tex or .tsv file. Meant 
             to be used together with self.save_evaluation_results.
@@ -138,7 +157,7 @@ class Pipeline:
             if header_cells == []:
                 scores_per_method = data
                 return header_cells, scores_per_method
-            
+
             scores_per_method = []
 
             def get_rows_rec(data, depth):
@@ -151,25 +170,25 @@ class Pipeline:
                             # Recursive call to go further down the tree
                             w = get_rows_rec(v, depth + 1)
                             total_w += w
-                            header_cells[depth].append((k,w))
-                        # The case where we have reached the last row before the model and score, i.e. the row 
+                            header_cells[depth].append((k, w))
+                        # The case where we have reached the last row before the model and score, i.e. the row
                         # describing the metric.
                         else:
                             # Add the metric name to the last row.
-                            header_cells[-1].append((k,1))
+                            header_cells[-1].append((k, 1))
                             empty_space += 1
                             total_w += 1
                             scores_per_method.append(v)
                 if empty_space > 0:
                     for de in range(depth, len(header_cells) - 1):
                         # Add empty space to accommodate for longer columns
-                        header_cells[de].extend([('',empty_space)])
+                        header_cells[de].extend([('', empty_space)])
 
                 return total_w
-            
+
             get_rows_rec(data, 0)
             return header_cells, scores_per_method
-        
+
         # Gets the table information for method names and scores in the right order.
         def get_content_cells(methods, scores):
             content_cells = []
@@ -185,7 +204,7 @@ class Pipeline:
 
                 # Sort models alphabetically if we have reached the {model: score} dict
                 if sort_models and all(type(v) != dict for v in m.values()):
-                    items = sorted(m.items(), key = lambda i : i[0])
+                    items = sorted(m.items(), key=lambda i: i[0])
                 else:
                     items = m.items()
 
@@ -194,16 +213,16 @@ class Pipeline:
                         c = n_method_cols - 1
                     else:
                         c = col
-                    l = get_content_cells_rec(v,[s.get(k, None) if s is not None else None for s in scores], row,c+1)
+                    l = get_content_cells_rec(v, [s.get(k, None) if s is not None else None for s in scores], row, c+1)
                     content_cells[row][c] = (k, l)
                     n_leaves += l
                     row += l
                 return n_leaves
-            
+
             get_content_cells_rec(methods, scores, 0, 0)
             return content_cells
 
-        def split_header_row(row, n_cols : List[int]):
+        def split_header_row(row, n_cols: List[int]):
             """
                 Splits a row into multiple rows, with row i n_cols[i] wide.
             """
@@ -229,7 +248,7 @@ class Pipeline:
                     if curr_split_row < len(n_cols):
                         w_left = n_cols[curr_split_row]
             return split_rows
-        
+
         def split_content_and_side_cells(content_cells, side_cells, split_cols):
             """
                 Splits the content and side parts of a table into multiple tables.
@@ -244,7 +263,7 @@ class Pipeline:
                 row_i = 0
                 # Take the current content along with the side cells, which are the same for all split tables
                 for content, side in zip([c[i:i+w] for c in content_cells], side_cells):
-                    if remove_empty and all (c is None for c, _ in content):
+                    if remove_empty and all(c is None for c, _ in content):
                         # If the row is empty and not the first one, decrease the multirow height of rows above
                         if row_i > 0:
                             for c in range(side_width):
@@ -252,7 +271,9 @@ class Pipeline:
                                 while side_cells_to_add[r][c] is None and r > 0:
                                     r -= 1
                                 if side_cells_to_add[r][c] is not None and side_cells_to_add[r][c][1] > 1:
-                                    side_cells_to_add[r][c] = (side_cells_to_add[r][c][0], side_cells_to_add[r][c][1] - 1)
+                                    side_cells_to_add[r][c] = (
+                                        side_cells_to_add[r][c][0],
+                                        side_cells_to_add[r][c][1] - 1)
                     # If the row is not empty, add it
                     else:
                         side_cells_to_add.append(side.copy())
@@ -262,7 +283,7 @@ class Pipeline:
                 split_sides.append(side_cells_to_add)
                 i += w
             return split_contents, split_sides
-        
+
         def get_horizontal_lines(header_cells):
             """
                 Draws horizontal lines between table rows where it fits.
@@ -274,33 +295,36 @@ class Pipeline:
                     index2 = 0
                     match = False
                     for s2, w2 in header_cells[i+1]:
-                        # If the two rows have matching multicolumns and one of them is empty, don't draw a horizontal 
+                        # If the two rows have matching multicolumns and one of them is empty, don't draw a horizontal
                         # line between them
                         if index2 == index1 and index2 + w2 == index1 + w1 and (s1 == '' or s2 == ''):
                             match = True
                         index2 += w2
                     if not match:
-                        line_strings[i] += "\\cline{" + str(index1 + n_method_cols + 1) + "-" + str(index1 + w1 + n_method_cols) + "}"
+                        line_strings[i] += "\\cline{" + str(index1 + n_method_cols + 1) + "-" + str(
+                            index1 + w1 + n_method_cols) + "}"
                     index1 += w1
             # Before the metrics, add a complete horizontal line
             if len(line_strings) >= 2:
-                line_strings[-2] = "\\cline{"+str(n_method_cols+1)+"-" + str(sum(w for _, w in header_cells[0])+(n_method_cols)) + "}"
+                line_strings[-2] = "\\cline{"+str(n_method_cols+1)+"-" + str(sum(w for _,
+                                                                                 w in header_cells[0])+(n_method_cols)) + "}"
             return line_strings
-        
+
         def render_header_row(row):
-            return f"\\multicolumn{{{n_method_cols}}}{{c}}{{}}\t&" + "\t&".join([f"\\multicolumn{{{w}}}{{|c|}}{{{s}}}" for (s,w) in row])
+            return f"\\multicolumn{{{n_method_cols}}}{{c}}{{}}\t&" + "\t&".join(
+                [f"\\multicolumn{{{w}}}{{|c|}}{{{s}}}" for (s, w) in row])
 
         def render_header_row_tsv(row):
             r = [""] * n_method_cols
-            for (s,w) in row:
+            for (s, w) in row:
                 r.extend([s] + [""] * (w - 1))
             return r
-        
+
         def format_scores(d):
             """
                 Rounds scores to a number of decimals, if provided, and optionally sorts the score rows by model name.
             """
-            if not all (type(v) == dict for v in d.values()):
+            if not all(type(v) == dict for v in d.values()):
                 best_model = None
                 best_score = None
                 model_scores = d
@@ -325,7 +349,7 @@ class Pipeline:
             else:
                 for v in d.values():
                     format_scores(v)
-        
+
         def render_content_rows(side_rows, content_rows, n_content_cols):
             score_string = []
 
@@ -342,8 +366,8 @@ class Pipeline:
                 if r == 0:
                     lines = ["\\hline"]
                 else:
-                    lines =  ["\\cline{"+str(i+1)+"-"+str(n_method_cols+n_content_cols)+"}" if c != "" else "" 
-                                for i, c in enumerate(side_cells[:-1])]
+                    lines = ["\\cline{"+str(i+1)+"-"+str(n_method_cols+n_content_cols)+"}" if c != "" else ""
+                             for i, c in enumerate(side_cells[:-1])]
                 row_string = "".join(lines) + "\t" + "\t&".join(side_cells + content_cells)
                 score_string.append(row_string)
             return "\\\\\n".join(score_string)
@@ -362,7 +386,7 @@ class Pipeline:
                 row_string = side_cells + content_cells
                 score_string.append(row_string)
             return score_string
-            
+
         # Puts together the different parts of a table
         def create_table_string(header_rows, side_rows, content_rows, n_content_cols):
             columns_str = "|"+"|".join(["c"] * (n_method_cols+n_content_cols))+"|"
@@ -370,16 +394,17 @@ class Pipeline:
             table_beginning = """
 \\begin{table}[h]
     \\centering
-    \\begin{tabular}{"""+ columns_str +"}\\cline{"+str(n_method_cols+1)+"-"+str(n_content_cols+n_method_cols)+"}"
-                
+    \\begin{tabular}{""" + columns_str + "}\\cline{"+str(n_method_cols+1)+"-"+str(n_content_cols+n_method_cols)+"}"
+
             table_end = """
         \hline
     \\end{tabular}""" + (("\n\\caption{Evaluation results on the " + header_rows[0][0][0] + " task.}") if generate_caption else "") + """
 \\end{table}"""
-            
+
             line_strings = get_horizontal_lines(header_rows)
-            header_string = "".join(render_header_row(row) + "\\\\\n" + line_strings[i] for i, row in enumerate(header_rows))
-            score_string = render_content_rows(side_rows, content_rows, n_content_cols)            
+            header_string = "".join(render_header_row(
+                row) + "\\\\\n" + line_strings[i] for i, row in enumerate(header_rows))
+            score_string = render_content_rows(side_rows, content_rows, n_content_cols)
 
             table_string = table_beginning + header_string + score_string + "\\\\\n" + table_end
             table_string = re.sub("_", "\_", table_string)
@@ -398,7 +423,7 @@ class Pipeline:
         else:
             logging.error("save_path needs to end in .tex or .tsv")
             raise ValueError
-    
+
         data = copy.deepcopy(data)
         header_cells, scores_per_method = get_header_cells_and_scores(data)
         header_cells = header_cells[remove_headers:]
@@ -451,14 +476,14 @@ class Pipeline:
                 if not all(s == "" for s, _ in r):
                     split_header_rows[i].append(r)
                     # Each item in split_tables represents one subtable once the original table has been split
-        
+
         if highlight_best is not False:
             if callable(highlight_best):
                 better_than = highlight_best
             elif highlight_best == "min":
-                better_than = lambda s1, s2 : s1 < s2
+                def better_than(s1, s2): return s1 < s2
             else:
-                better_than = lambda s1, s2 : s1 > s2
+                def better_than(s1, s2): return s1 > s2
         else:
             better_than = None
 
@@ -466,25 +491,34 @@ class Pipeline:
         for scores in scores_per_method:
             format_scores(scores)
             all_methods = deep_update(all_methods, scores)
-            
+
         content_cells = get_content_cells(all_methods, scores_per_method)
 
-        split_content_rows, split_side_rows = split_content_and_side_cells([c[n_method_cols:] for c in content_cells], [c[:n_method_cols] for c in content_cells], split_cols)
+        split_content_rows, split_side_rows = split_content_and_side_cells([c[n_method_cols:] for c in content_cells], [
+                                                                           c[:n_method_cols] for c in content_cells], split_cols)
 
         if save_format == "tex":
-            table_string = "\n".join([create_table_string(split_header_rows[i], split_side_rows[i], split_content_rows[i], split_cols[i]) for i, _ in enumerate(split_cols)])
+            table_string = "\n".join([
+                create_table_string(
+                    split_header_rows[i],
+                    split_side_rows[i],
+                    split_content_rows[i],
+                    split_cols[i]) for i, _ in enumerate(split_cols)])
 
             # Save the LaTeX string to a .tex file
             if save_path.endswith(".tex"):
-                with open(save_path,'w+') as f:
+                with open(save_path, 'w+') as f:
                     f.write(table_string)
             else:
                 raise Exception("The file needs to end in .tex")
         elif save_format == "tsv":
-            with open(save_path, 'w', newline = "") as f:
+            with open(save_path, 'w', newline="") as f:
                 writer = csv.writer(f, delimiter="\t")
                 for i, _ in enumerate(split_cols):
-                    tsv_content = create_table_string_tsv(split_header_rows[i], split_side_rows[i], split_content_rows[i])
+                    tsv_content = create_table_string_tsv(
+                        split_header_rows[i],
+                        split_side_rows[i],
+                        split_content_rows[i])
                     writer.writerows(tsv_content + [""])
         logging.info(f"Wrote results to {save_path}.")
 
@@ -519,7 +553,11 @@ class WSIPipeline(Pipeline):
             TargetUsages.
             dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
-    def __init__(self, dataset, usage_encoding, clustering, partition = 'test', split=False, train_prop=0.8, dev_prop=0.1, test_prop=0.1, shuffle=True, seed=42, labels=[], dataset_name = None):
+
+    def __init__(
+            self, dataset, usage_encoding, clustering, partition='test', split=False, train_prop=0.8, dev_prop=0.1,
+            test_prop=0.1, shuffle=True, seed=42, labels=[],
+            dataset_name=None):
         super().__init__()
         if not (isinstance(usage_encoding, ContextualizedModel) or isinstance(usage_encoding, DefinitionGenerator)):
             logging.error("usage_encoding must be either a ContextualizedModel or a DefinitionGenerator.")
@@ -535,17 +573,20 @@ class WSIPipeline(Pipeline):
                 self.dataset = WSI(name=dataset_name)
                 self.dataset.load_from_target_usages(dataset, labels)
             if split:
-                self.dataset.split_train_dev_test(shuffle=shuffle, seed=seed, train_prop=train_prop, dev_prop=dev_prop, test_prop=test_prop)
-                
+                self.dataset.split_train_dev_test(shuffle=shuffle, seed=seed,
+                                                  train_prop=train_prop, dev_prop=dev_prop, test_prop=test_prop)
+
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
         if len(self.evaluation_set) == 0:
             logging.error('Dataset used for evaluating does not contain any examples.')
             raise Exception
-        
+
         self.clustering = clustering
 
-    def evaluate(self, average = True, min_word_frequency=30, json_path = None, table_path = None, return_predictions = False, **kwargs):
+    def evaluate(
+            self, average=True, min_word_frequency=30, json_path=None, table_path=None, return_predictions=False, **
+            kwargs):
         """
             Evaluate on the WSI task.
 
@@ -578,14 +619,15 @@ class WSIPipeline(Pipeline):
             ids = []
 
             for example in data_by_word[word]:
-                u = TargetUsage(example['text'], [example['start'],example['end']])
+                u = TargetUsage(example['text'], [example['start'], example['end']])
                 target_usage_dict[example['id']] = u
                 target_usages.append(u)
                 ids.append(example['id'])
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(target_usages, encode_definitions = 'vectors') #TODO: make self.dataset.language optional
-            
+                encoded_usages = self.usage_encoding.generate_definitions(
+                    target_usages, encode_definitions='vectors')  # TODO: make self.dataset.language optional
+
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages = self.usage_encoding.encode(target_usages)
 
@@ -595,13 +637,16 @@ class WSIPipeline(Pipeline):
                 cluster_labels[ids[i]] = l
 
         # Compute ARI and purity scores
-        scores = self.dataset.evaluate(cluster_labels, dataset=self.partition, average=average, min_word_frequency=min_word_frequency)
+        scores = self.dataset.evaluate(cluster_labels, dataset=self.partition,
+                                       average=average, min_word_frequency=min_word_frequency)
 
         if json_path is not None:
             model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
 
             if hasattr(self.dataset, 'name'):
-                self.save_evaluation_results({'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}, json_path, table_path=table_path, **kwargs)
+                self.save_evaluation_results(
+                    {'WSI': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}},
+                    json_path, table_path=table_path, **kwargs)
 
             elif hasattr(self.dataset, 'dataset') and self.dataset.dataset is not None:
                 parameters = ['dataset', 'language', 'version', 'subset']
@@ -622,7 +667,7 @@ class WSIPipeline(Pipeline):
             return scores, cluster_labels
         return scores
 
-        
+
 class WiCPipeline(Pipeline):
     """
         A pipeline for evaluating the Word-in-Context (WiC) task.
@@ -653,10 +698,13 @@ class WiCPipeline(Pipeline):
             TargetUsages.
             dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
-    def __init__(self, dataset, usage_encoding, partition='test', split=False, train_prop=0.8, dev_prop=0.1, 
-        test_prop=0.1, shuffle=True, seed=42, labels=[], dataset_name=None):
+
+    def __init__(self, dataset, usage_encoding, partition='test', split=False, train_prop=0.8, dev_prop=0.1,
+                 test_prop=0.1, shuffle=True, seed=42, labels=[], dataset_name=None):
         super().__init__()
-        if not (isinstance(usage_encoding, ContextualizedModel) or isinstance(usage_encoding, DefinitionGenerator) or isinstance(usage_encoding, PromptModel)):
+        if not (
+                isinstance(usage_encoding, ContextualizedModel)
+                or isinstance(usage_encoding, DefinitionGenerator) or isinstance(usage_encoding, PromptModel)):
             logging.error("usage_encoding must be either a ContextualizedModel, a DefinitionGenerator or a PromptModel.")
             raise TypeError
         self.usage_encoding = usage_encoding
@@ -669,7 +717,8 @@ class WiCPipeline(Pipeline):
                 self.dataset = WiC(name=dataset_name)
                 self.dataset.load_from_target_usages(dataset, labels)
             if split:
-                self.dataset.split_train_dev_test(shuffle=shuffle, seed=seed, train_prop=train_prop, dev_prop=dev_prop, test_prop=test_prop)
+                self.dataset.split_train_dev_test(shuffle=shuffle, seed=seed,
+                                                  train_prop=train_prop, dev_prop=dev_prop, test_prop=test_prop)
 
         self.partition = partition
         self.evaluation_set = self.dataset.get_dataset(self.partition)
@@ -697,19 +746,19 @@ class WiCPipeline(Pipeline):
                 labels (list[Union[int, float]], optional): the predicted similarity labels, in the order of the
                     examples in the dataset.
         """
-        if task not in {'binary','graded'}:
+        if task not in {'binary', 'graded'}:
             logging.error(f"Invalid argument for 'task', should be one of ['binary', 'graded']")
             raise ValueError
-        
+
         labels = []
 
         if isinstance(self.usage_encoding, DefinitionGenerator) or isinstance(self.usage_encoding, ContextualizedModel):
             # Find the unique usages among all pairs
-            index = dict() # Index to point to the right position in the usage/embeddings list when comparing usages in pairs
+            index = dict()  # Index to point to the right position in the usage/embeddings list when comparing usages in pairs
             i = 0
             usage_list = TargetUsageList()
             for pair in self.evaluation_set:
-                for j in range(1,3):
+                for j in range(1, 3):
                     if f'id{j}' in pair:
                         id = pair[f'id{j}']
                     else:
@@ -723,14 +772,14 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions = 'vectors')
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions='vectors')
 
             if label_func is None:
                 if task == "graded":
-                    label_func = lambda e1, e2 : np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2))
+                    def label_func(e1, e2): return np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2))
                 else:
-                    label_func = lambda e1, e2 : int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
-            
+                    def label_func(e1, e2): return int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
+
             elif callable(label_func):
                 signature = inspect.signature(label_func)
                 n_req_args = sum([int(p.default == p.empty) for p in signature.parameters.values()])
@@ -744,7 +793,7 @@ class WiCPipeline(Pipeline):
             for pair in self.evaluation_set:
                 embedding_pair = []
 
-                for j in range(1,3):
+                for j in range(1, 3):
                     if f'id{j}' in pair:
                         id = pair[f'id{j}']
                     else:
@@ -760,13 +809,14 @@ class WiCPipeline(Pipeline):
             else:
                 template = 'Please tell me if the meaning of the word \'{target}\' is the same in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
                 self.usage_encoding.set_structure(WiCBinary)
-                
+
             for pair in self.evaluation_set:
                 target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
-                                                        TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
-                label = int(self.usage_encoding.get_response(target_usage_list, user_prompt_template=template, response_attribute="wic_label"))
+                                                     TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
+                label = int(self.usage_encoding.get_response(target_usage_list,
+                            user_prompt_template=template, response_attribute="wic_label"))
                 labels.append(label)
-        
+
         if task == 'binary':
             acc = self.dataset.evaluate_accuracy(labels, self.partition)
             f1 = self.dataset.evaluate_f1(labels, self.partition)
@@ -774,12 +824,13 @@ class WiCPipeline(Pipeline):
 
         elif task == 'graded':
             spearman_r = self.dataset.evaluate_spearman(labels, self.partition)
-            scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic} # Keep rho only
+            scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic}  # Keep rho only
 
         if json_path is not None:
             model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
             if hasattr(self.dataset, 'name'):
-                scores_dict = {f'{task.title()} WiC': {self.dataset.name: {metric: {model_name: score} for metric, score in scores.items()}}}
+                scores_dict = {f'{task.title()} WiC': {self.dataset.name: {metric: {model_name: score}
+                                                                           for metric, score in scores.items()}}}
                 self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
             elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
@@ -797,7 +848,7 @@ class WiCPipeline(Pipeline):
 
             else:
                 logging.error("Dataset has no 'name' attribute, nor 'dataset' attribute. Scores could therefore not be saved.")
-        
+
         if return_predictions:
             return scores, labels
         return scores
@@ -826,12 +877,14 @@ class CDPipeline(Pipeline):
         scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
         dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
-    def __init__(self, dataset : Union[DWUG, List[Set[TargetUsage]]],
+
+    def __init__(self, dataset: Union[DWUG, List[Set[TargetUsage]]],
                  usage_encoding,
-                 metric : Union[GradedChange, WiDiD],
-                 clustering = None,
-                 scores : List = None,
-                 dataset_name : str = None):
+                 metric: Union[GradedChange, WiDiD],
+                 clustering=None,
+                 scores: List = None,
+                 dataset_name: str = None,
+                 usage_cache_dir="~/.cache/languagechange/usages"):
         super().__init__()
         if isinstance(dataset, DWUG) or isinstance(dataset, SemEval2020Task1):
             self.dataset = dataset
@@ -842,17 +895,21 @@ class CDPipeline(Pipeline):
         self.usage_encoding = usage_encoding
         self.metric = metric
         self.clustering = clustering
+        if usage_cache_dir:
+            self.cache_mgr = CacheManager(usage_cache_dir)
+        else:
+            self.cache_mgr = None
 
     def evaluate(self,
-                task, 
-                not_exist_max_count=2, 
-                exist_min_count=5, 
-                n_sampled_usages=0, 
-                random_seed=None, 
-                json_path=None, 
-                table_path=None, 
-                return_predictions=False, 
-                **kwargs):
+                 task,
+                 not_exist_max_count=2,
+                 exist_min_count=5,
+                 n_sampled_usages=0,
+                 random_seed=None,
+                 json_path=None,
+                 table_path=None,
+                 return_predictions=False,
+                 **kwargs):
         """
             Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the 
             predicted and ground truth change scores, and optionally.
@@ -887,8 +944,43 @@ class CDPipeline(Pipeline):
         cluster_labels = dict()
 
         if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-            target_usages_t1_all_words = self.dataset.corpus1_lemma.search([target.target for target in self.dataset.graded_task.keys()])
-            target_usages_t2_all_words = self.dataset.corpus2_lemma.search([target.target for target in self.dataset.graded_task.keys()])
+            all_usages = []
+            for corpus in [self.dataset.corpus1_lemma, self.dataset.corpus2_lemma]:
+                search = True
+                if self.cache_mgr:
+                    # Generate cache key
+                    cache_key = generate_cache_key((self.dataset.dataset, self.dataset.language, corpus))
+                    cache_path = os.path.join(self.cache_mgr.cache_dir,
+                                              f"{self.dataset.dataset}_{self.dataset.language}_{cache_key}.json")
+
+                    # whether the cache files exist
+                    if os.path.exists(cache_path):
+                        try:
+                            logging.info(f"Loading cached usages from {cache_path}")
+                            with open(cache_path, "r") as f:
+                                usages = json.load(f)
+                                # When loading from cache, replace 'text_' with 'text'.
+                                usages = UsageDictionary(
+                                    {w: TargetUsageList(
+                                        [TargetUsage(**({"text": tu.pop("text_")} | tu)) for tu in tul])
+                                        for w, tul in usages.items()})
+                                search = False
+                        except Exception as e:
+                            logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
+                            os.remove(cache_path)
+
+                if search:
+                    logging.info(f"Searching for usages in {corpus.name}...")
+                    usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
+                    if self.cache_mgr:
+                        # save the usages to a json file
+                        with self.cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
+                            serialized = {w: usages[w].to_dict() for w in usages.keys()}
+                            json.dump(serialized, temp_path)
+                            logging.info(f"Saved usages to {cache_path}.")
+                all_usages.append(usages)
+
+            target_usages_t1_all_words, target_usages_t2_all_words = tuple(all_usages)
 
         for word in self.dataset.target_words:
 
@@ -896,11 +988,11 @@ class CDPipeline(Pipeline):
                 target_usages = self.dataset.get_word_usages(word)
                 groupings = set(u.grouping for u in target_usages)
                 try:
-                    sorted_groupings = sorted(list(groupings), key = lambda x: int(x.split('-')[0]))
+                    sorted_groupings = sorted(list(groupings), key=lambda x: int(x.split('-')[0]))
                 except (ValueError, AttributeError):
                     sorted_groupings = sorted(list(groupings))
-                target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0] ]
-                target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1] ]
+                target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0]]
+                target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1]]
 
             elif isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
                 target_usages_t1 = target_usages_t1_all_words[word]
@@ -921,8 +1013,12 @@ class CDPipeline(Pipeline):
                 target_usages_t2 = get_sampled_usages(target_usages_t2, rng, n_sampled_usages)
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages_t1 = self.usage_encoding.generate_definitions(target_usages_t1, encode_definitions='vectors')
-                encoded_usages_t2 = self.usage_encoding.generate_definitions(target_usages_t2, encode_definitions='vectors')
+                encoded_usages_t1 = self.usage_encoding.generate_definitions(
+                    target_usages_t1, 
+                    encode_definitions='vectors')
+                encoded_usages_t2 = self.usage_encoding.generate_definitions(
+                    target_usages_t2, 
+                    encode_definitions='vectors')
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1)
@@ -930,7 +1026,11 @@ class CDPipeline(Pipeline):
 
             # Measure the change using the metric
             if isinstance(self.metric, JSD) and self.clustering is not None:
-                r = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2, self.clustering, return_labels=return_predictions)
+                r = self.metric.compute_scores(
+                    encoded_usages_t1, 
+                    encoded_usages_t2,
+                    self.clustering, 
+                    return_labels=return_predictions)
                 if return_predictions:
                     change, labels = r
                     cluster_labels[word] = labels
@@ -947,7 +1047,7 @@ class CDPipeline(Pipeline):
                 if task != "graded":
                     logging.error("Form-based metrics (APD, PRT) can only be used with task='graded'.")
                 change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
-            
+
             if task == "binary":
                 change = False
                 label_counts_t1 = Counter(cluster_labels[word][0])
@@ -964,7 +1064,7 @@ class CDPipeline(Pipeline):
 
         if task == "graded":
             spearman_r = self.dataset.evaluate_gcd(change_scores)
-            scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic} # Keep rho only
+            scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic}  # Keep rho only
         elif task == "binary":
             acc = self.dataset.evaluate_cd(change_scores)
             scores = {'accuracy': acc}
@@ -973,7 +1073,8 @@ class CDPipeline(Pipeline):
             task_type = "GCD" if task == "graded" else "CD"
             model_name = getattr(self.usage_encoding, 'name', type(self.usage_encoding).__name__)
             if hasattr(self.dataset, 'name'):
-                scores_dict = {'GCD': {self.dataset.name: {metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
+                scores_dict = {'GCD': {self.dataset.name: {
+                    metric: {type(self.metric).__name__: {model_name: score}} for metric, score in scores.items()}}}
                 self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
             elif hasattr(self.dataset, 'dataset'):
@@ -981,16 +1082,17 @@ class CDPipeline(Pipeline):
                 dataset_info = {}
                 d = dataset_info
                 for param in parameters:
-                    if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                    if hasattr(self.dataset, param) and getattr(self.dataset, param) is not None:
                         d[str(getattr(self.dataset, param))] = {}
                         d = d[str(getattr(self.dataset, param))]
                 for metric, score in scores.items():
                     d[metric] = {type(self.metric).__name__: {model_name: score}}
-                scores_dict = {'GCD': dataset_info}
+                scores_dict = {task_type: dataset_info}
                 self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
             else:
-                logging.error("Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")     
+                logging.error(
+                    "Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")
 
         if return_predictions:
             return scores, cluster_labels, change_scores

@@ -22,11 +22,11 @@ class CacheManager:
             cache_dir (str, optional): The directory where cache files will be stored. 
                                        Defaults to './cache' if not provided.
         """
-        self.cache_dir = os.path.abspath(cache_dir or DEFAULT_CACHE_DIR)
+        self.cache_dir = os.path.abspath(os.path.expanduser(cache_dir or DEFAULT_CACHE_DIR))
         os.makedirs(self.cache_dir, exist_ok=True)
 
     @contextmanager
-    def atomic_write(self, path):
+    def atomic_write(self, path, mode='wb'):
         """
         Provides a context manager for writing to cache files in an atomic way.
         This ensures that partial writes do not corrupt the target file, 
@@ -51,7 +51,7 @@ class CacheManager:
         with filelock.FileLock(lock_path):
             try:
                 # Step 1: Write data to a temporary file
-                with open(temp_path, 'wb') as f:
+                with open(temp_path, mode) as f:
                     # Provide the temporary file handle to the caller for writing
                     yield f  
 
