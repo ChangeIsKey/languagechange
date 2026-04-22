@@ -22,7 +22,7 @@ import tqdm
 from sentence_transformers import SentenceTransformer
 import numpy as np
 
-from languagechange.usages import TargetUsage
+from languagechange.usages import TargetUsage, TargetUsageList
 from languagechange.cache import CacheManager
 
 # Define types for chat dialog outside the class for clarity
@@ -68,8 +68,10 @@ class DefinitionGenerator:
         Generates a unique cache key based on the input data.
         """
         try:
-            if isinstance(target_usages, list):
-                data = [u.__dict__ if hasattr(u, '__dict__') else u for u in target_usages]
+            if isinstance(target_usages, TargetUsageList):
+                data = target_usages.to_dict()
+            elif isinstance(target_usages, list) and all(isinstance(tu, TargetUsage) for tu in target_usages):
+                data = [u.to_dict() for u in target_usages]
             elif isinstance(target_usages, pd.DataFrame):
                 data = json.loads(target_usages.to_json(orient='records'))
             else:

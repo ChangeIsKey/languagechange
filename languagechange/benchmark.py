@@ -96,7 +96,7 @@ class Benchmark():
             return self.data['all']
         else:
             all_data = []
-            for k in set(self.data.keys()).difference({'all'}):
+            for k in sorted(set(self.data.keys())):
                 all_data += self.data[k]
             return all_data
 
