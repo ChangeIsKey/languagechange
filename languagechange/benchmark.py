@@ -1,8 +1,7 @@
 import os
-from itertools import islice
+from itertools import islice, combinations
 import re
 import json
-import random
 import webbrowser
 import pickle
 import math
@@ -55,11 +54,19 @@ def generate_index_pairs(total, n, random_seed=None):
     """
         Utility function to generate n pairs of indices from a range of indices
     """
-    all_index_pairs = [(i, j) for i in range(total) for j in range(i+1, total)]
-    if n >= len(all_index_pairs):
-        return all_index_pairs
+    n_all_combs = total * (total - 1) // 2
+    if n >= n_all_combs:
+        return np.array(list(combinations(range(total), 2)))
+
     rng = np.random.default_rng(seed=random_seed)
-    return rng.choice(all_index_pairs, n, replace=False)
+    selected = rng.choice(np.arange(n_all_combs), size=n, replace=False)
+    # Backwards mapping from index in combination array to the combination itself
+    # Pick the first in the pair
+    c1 = np.floor(total - 0.5 - np.sqrt(np.power(total, 2) - total + 0.25 - 2 * selected))
+    sum_c1_indices = c1 * (2 * total - 1 - c1) / 2
+    # Pick the second in the pair
+    c2 = selected - sum_c1_indices + c1 + 1
+    return np.stack([c1, c2]).astype(int).transpose()
 
 
 class Benchmark():
@@ -71,34 +78,20 @@ class Benchmark():
         if key in self.data.keys():
             return self.data[key]
         else:
-            raise KeyError
+            logging.info(f"Did not find a `{key}` set. Returning []")
+            return []
 
     def get_train(self):
-        if 'train' in self.data.keys():
-            return self.data['train']
-        else:
-            logging.info('Did not find a train set. Returning None')
+        return self.get_dataset('train')
 
     def get_dev(self):
-        if 'dev' in self.data.keys():
-            return self.data['dev']
-        else:
-            logging.info('Did not find a dev set. Returning None')
+        return self.get_dataset('dev')
 
     def get_test(self):
-        if 'test' in self.data.keys():
-            return self.data['test']
-        else:
-            logging.info('Did not find a test set. Returning None')
+        return self.get_dataset('test')
 
     def get_all_data(self):
-        if 'all' in self.data.keys():
-            return self.data['all']
-        else:
-            all_data = []
-            for k in sorted(set(self.data.keys())):
-                all_data += self.data[k]
-            return all_data
+        return self.get_dataset('all') or np.concatenate([list(self.get_dataset(k)) for k in sorted(self.data.keys())])
 
     def filter_by_word_frequency(self, dataset, threshold):
         data = self.get_dataset(dataset)
