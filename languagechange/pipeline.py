@@ -28,8 +28,8 @@ logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=lo
 
 def deep_update(d, u):
     for k, v in u.items():
-        if type(v) == dict:
-            if k in d and type(d[k]) == dict:
+        if isinstance(v, dict):
+            if k in d and isinstance(d[k], dict):
                 d[k] = deep_update(d[k], v.copy())
             else:
                 d[k] = v.copy()
@@ -39,7 +39,7 @@ def deep_update(d, u):
 
 
 def get_depth(d):
-    if type(d) != dict:
+    if not isinstance(d, dict):
         return 0
     return 1 + max([get_depth(v) for v in d.values()])
 
@@ -164,7 +164,7 @@ class Pipeline:
                 total_w = 0
                 empty_space = 0
                 for k, v in data.items():
-                    if type(v) == dict:
+                    if isinstance(v, dict):
                         # Normal case
                         if get_depth(v) > n_method_cols:
                             # Recursive call to go further down the tree
@@ -194,7 +194,7 @@ class Pipeline:
             content_cells = []
 
             def get_content_cells_rec(m, scores, row, col):
-                if not type(m) == dict:
+                if not isinstance(m, dict):
                     while len(content_cells) < row + 1:
                         content_cells.append([None for _ in range(n_method_cols+n_content_cols)])
                     for c, s in enumerate(scores):
@@ -203,13 +203,13 @@ class Pipeline:
                 n_leaves = 0
 
                 # Sort models alphabetically if we have reached the {model: score} dict
-                if sort_models and all(type(v) != dict for v in m.values()):
+                if sort_models and all(not isinstance(v, dict) for v in m.values()):
                     items = sorted(m.items(), key=lambda i: i[0])
                 else:
                     items = m.items()
 
                 for k, v in items:
-                    if type(v) != dict:
+                    if not isinstance(v, dict):
                         c = n_method_cols - 1
                     else:
                         c = col
@@ -306,8 +306,8 @@ class Pipeline:
                     index1 += w1
             # Before the metrics, add a complete horizontal line
             if len(line_strings) >= 2:
-                line_strings[-2] = "\\cline{"+str(n_method_cols+1)+"-" + str(sum(w for _,
-                                                                                 w in header_cells[0])+(n_method_cols)) + "}"
+                line_strings[-2] = "\\cline{"+str(n_method_cols+1)+"-" + str(
+                    sum(w for _, w in header_cells[0])+(n_method_cols)) + "}"
             return line_strings
 
         def render_header_row(row):
@@ -324,7 +324,7 @@ class Pipeline:
             """
                 Rounds scores to a number of decimals, if provided, and optionally sorts the score rows by model name.
             """
-            if not all(type(v) == dict for v in d.values()):
+            if not all(isinstance(v, dict) for v in d.values()):
                 best_model = None
                 best_score = None
                 model_scores = d
@@ -334,7 +334,7 @@ class Pipeline:
                     else:
                         try:
                             # If decimals is provided, round each score to the amount of decimals set
-                            if decimals != None and type(decimals) == int:
+                            if decimals is not None and isinstance(decimals, int):
                                 model_scores[model] = '{:.{dec}f}'.format(score, dec=decimals)
                             else:
                                 model_scores[model] = str(score)
@@ -454,7 +454,7 @@ class Pipeline:
             if max_w is None:
                 split_cols = [n_content_cols]
             # If max_w is an int, all tables should be of this width (except maybe the last one)
-            elif type(max_w) == int and max_w > 0:
+            elif isinstance(max_w, int) and max_w > 0:
                 if max_w > n_content_cols:
                     split_cols = [n_content_cols]
                 else:
@@ -462,7 +462,7 @@ class Pipeline:
                     if n_content_cols % max_w != 0:
                         split_cols.append(n_content_cols % max_w)
             # If max_w is a list of ints, it defines a custom table split
-            elif type(max_w) == list:
+            elif isinstance(max_w, list):
                 split_cols = max_w
             else:
                 raise TypeError("'max_w' has to be either None, an int > 0 or a list[int].")
@@ -481,9 +481,11 @@ class Pipeline:
             if callable(highlight_best):
                 better_than = highlight_best
             elif highlight_best == "min":
-                def better_than(s1, s2): return s1 < s2
+                def better_than(s1, s2):
+                    return s1 < s2
             else:
-                def better_than(s1, s2): return s1 > s2
+                def better_than(s1, s2): 
+                    return s1 > s2
         else:
             better_than = None
 
@@ -494,8 +496,10 @@ class Pipeline:
 
         content_cells = get_content_cells(all_methods, scores_per_method)
 
-        split_content_rows, split_side_rows = split_content_and_side_cells([c[n_method_cols:] for c in content_cells], [
-                                                                           c[:n_method_cols] for c in content_cells], split_cols)
+        split_content_rows, split_side_rows = split_content_and_side_cells(
+            [c[n_method_cols:] for c in content_cells], 
+            [c[:n_method_cols] for c in content_cells], 
+            split_cols)
 
         if save_format == "tex":
             table_string = "\n".join([
@@ -626,7 +630,7 @@ class WSIPipeline(Pipeline):
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
                 encoded_usages = self.usage_encoding.generate_definitions(
-                    target_usages, encode_definitions='vectors')  # TODO: make self.dataset.language optional
+                    target_usages, encode_definitions='vectors')
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages = self.usage_encoding.encode(target_usages)
@@ -758,13 +762,13 @@ class WiCPipeline(Pipeline):
             i = 0
             usage_list = TargetUsageList()
             for pair in self.evaluation_set:
-                for j in range(1, 3):
+                for j in [1, 2]:
                     if f'id{j}' in pair:
-                        id = pair[f'id{j}']
+                        usage_id = pair[f'id{j}']
                     else:
-                        id = (pair[f'text{j}'], pair[f'start{j}'], pair[f'end{j}'])
-                    if id not in index:
-                        index[id] = i
+                        usage_id = (pair[f'text{j}'], pair[f'start{j}'], pair[f'end{j}'])
+                    if usage_id not in index:
+                        index[usage_id] = i
                         i += 1
                         usage_list.append(TargetUsage(pair[f'text{j}'], [pair[f'start{j}'], pair[f'end{j}']]))
 
@@ -776,9 +780,11 @@ class WiCPipeline(Pipeline):
 
             if label_func is None:
                 if task == "graded":
-                    def label_func(e1, e2): return np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2))
+                    def label_func(e1, e2): 
+                        return np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2))
                 else:
-                    def label_func(e1, e2): return int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
+                    def label_func(e1, e2): 
+                        return int(np.dot(e1, e2)/(np.linalg.norm(e1) * np.linalg.norm(e2)) > 0.5)
 
             elif callable(label_func):
                 signature = inspect.signature(label_func)
@@ -793,12 +799,12 @@ class WiCPipeline(Pipeline):
             for pair in self.evaluation_set:
                 embedding_pair = []
 
-                for j in range(1, 3):
+                for j in [1, 2]:
                     if f'id{j}' in pair:
-                        id = pair[f'id{j}']
+                        usage_id = pair[f'id{j}']
                     else:
-                        id = (pair[f'text{j}'], pair[f'start{j}'], pair[f'end{j}'])
-                    embedding_pair.append(encoded_usages[index[id]])
+                        usage_id = (pair[f'text{j}'], pair[f'start{j}'], pair[f'end{j}'])
+                    embedding_pair.append(encoded_usages[index[usage_id]])
 
                 labels.append(label_func(embedding_pair[0], embedding_pair[1]))
 
@@ -833,12 +839,12 @@ class WiCPipeline(Pipeline):
                                                                            for metric, score in scores.items()}}}
                 self.save_evaluation_results(scores_dict, json_path, table_path=table_path, **kwargs)
 
-            elif hasattr(self.dataset, 'dataset') and self.dataset.dataset != None:
+            elif hasattr(self.dataset, 'dataset') and self.dataset.dataset is not None:
                 parameters = ['dataset', 'language', 'version', 'linguality', 'subset']
                 dataset_info = {}
                 d = dataset_info
                 for param in parameters:
-                    if hasattr(self.dataset, param) and getattr(self.dataset, param) != None:
+                    if hasattr(self.dataset, param) and getattr(self.dataset, param) is not None:
                         d[str(getattr(self.dataset, param))] = {}
                         d = d[str(getattr(self.dataset, param))]
                 for metric, score in scores.items():
@@ -1014,10 +1020,10 @@ class CDPipeline(Pipeline):
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
                 encoded_usages_t1 = self.usage_encoding.generate_definitions(
-                    target_usages_t1, 
+                    target_usages_t1,
                     encode_definitions='vectors')
                 encoded_usages_t2 = self.usage_encoding.generate_definitions(
-                    target_usages_t2, 
+                    target_usages_t2,
                     encode_definitions='vectors')
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
@@ -1027,9 +1033,9 @@ class CDPipeline(Pipeline):
             # Measure the change using the metric
             if isinstance(self.metric, JSD) and self.clustering is not None:
                 r = self.metric.compute_scores(
-                    encoded_usages_t1, 
+                    encoded_usages_t1,
                     encoded_usages_t2,
-                    self.clustering, 
+                    self.clustering,
                     return_labels=return_predictions)
                 if return_predictions:
                     change, labels = r
