@@ -761,7 +761,6 @@ class ParquetCorpus(Corpus):
         
         self.rev_column_names = {name: feature for feature, name in self.column_names.items()}
         if not len(self.rev_column_names) == len(self.column_names):
-            print(self.column_names, self.rev_column_names)
             logging.error("Two features have the same name.")
             raise ValueError
         
