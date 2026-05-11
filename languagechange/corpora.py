@@ -63,7 +63,7 @@ class Line:
             return self.tokens()
         elif feat == 'lemma':
             return self.lemmas()
-        elif feat == 'pos':
+        elif feat == 'pos_tag':
             return self.pos_tags()
         else:
             raise ValueError(f"'{feat}' is not a valid word feature")
@@ -94,7 +94,7 @@ class Line:
             return self.raw_text()
         elif feat == 'lemma':
             return self.raw_lemma_text()
-        elif feat == 'pos':
+        elif feat == 'pos_tag':
             return self.raw_pos_text()
         else:
             raise ValueError(f"'{feat}' is not a valid word feature")
@@ -203,9 +203,6 @@ class Corpus:
         else:
             self.time = time
         self.skip_lines = skip_lines
-
-    def set_sentences_iterator(self, sentences):
-        self.sentences_iterator = sentences
 
     def search(self,
                search_terms: List[str | Pattern | SearchTerm]
@@ -583,7 +580,7 @@ class Corpus:
             corpora: Union[Self, List[Self]],
             tokens=True,
             lemmas=False,
-            pos=False,
+            pos_tags=False,
             save_format='linebyline',
             file_specification=None,
             file_ending=".txt",
@@ -598,7 +595,7 @@ class Corpus:
             file_specification = ""
             file_specification += "-tokens" if tokens else ''
             file_specification += '-lemmas' if lemmas else ''
-            file_specification += '-pos' if pos else ''
+            file_specification += '-pos_tags' if pos_tags else ''
         for corpus in corpora:
             tokenized_name = os.path.splitext(corpus.path)[0]+file_specification+file_ending
             with open(tokenized_name, 'w+') as f:  # cache is probably needed here because the file might already exist.
@@ -623,7 +620,7 @@ class Corpus:
                         f.write('\n')
 
                     if lemmas:
-                        if pos:
+                        if pos_tags:
                             # tokens_lemmas_pos (with or without tokens)
                             for line in corpus.tokens_lemmas_pos_tags(
                                     tokenizer, tokens=tokens, split_sentences=split_sentences, batch_size=batch_size):
@@ -635,7 +632,7 @@ class Corpus:
                                     lemmatizer, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
                                 write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
-                    elif pos:
+                    elif pos_tags:
                         # pos_tagging (with or without tokens)
                         for line in corpus.pos_tagging(
                                 pos_tagger, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
@@ -731,7 +728,13 @@ class LinebyLineCorpus(Corpus):
 
 
 class ParquetCorpus(Corpus):
-    def __init__(self, path, load_from_huggingface_hub=False, **args):
+    def __init__(self,
+                 path: str,
+                 load_from_huggingface_hub: bool =False,
+                 token_level_features: set = {"token", "lemma", 'pos_tag'},
+                 sentence_level_features: set = {"id", "date"},
+                 column_names: dict = None,
+                 **kwargs):
         """
         Initialize a ParquetCorpus.
 
@@ -742,7 +745,7 @@ class ParquetCorpus(Corpus):
                 otherwise treat `path` as a local filesystem path.
             **args: additional keyword arguments passed to `Corpus`.
         """
-        super().__init__(name=path, **args)
+        super().__init__(name=path, **kwargs)
 
         if load_from_huggingface_hub:
             # Download from huggingface hub
@@ -752,13 +755,25 @@ class ParquetCorpus(Corpus):
             self.path = path
             self.dataset = None
 
-        self.column_names = {
-            "token":"token",
-            "lemma":"lemma",
-            "pos":"pos_tag",
-            "id":"id",
-            "date":"date"
-            }
+        self.column_names = {f: f for f in token_level_features.union(sentence_level_features)}
+        if column_names:
+            self.column_names.update(column_names)
+        
+        self.rev_column_names = {name: feature for feature, name in self.column_names.items()}
+        if not len(self.rev_column_names) == len(self.column_names):
+            print(self.column_names, self.rev_column_names)
+            logging.error("Two features have the same name.")
+            raise ValueError
+        
+        self.token_name = self.column_names["token"]
+        self.id_name = self.column_names["id"]
+        self.date_name = self.column_names["date"]
+
+        self.token_level_features = token_level_features
+        self.sentence_level_features = sentence_level_features
+
+        self.token_level_feature_names = {self.column_names.get(f, f) for f in self.token_level_features}
+        self.sentence_level_feature_names = {self.column_names.get(f, f) for f in self.sentence_level_features}
 
     def _get_iters(self, split=None):
         if self.path:
@@ -782,8 +797,8 @@ class ParquetCorpus(Corpus):
         """
         Iterate over the corpus and yield `Line` objects grouped by `id`.
 
-        Token-level columns are converted to plural field names in the output (e.g. `token` -> `tokens`). Fields `id` 
-        and `date` are assumed to be constant within each line.
+        Token-level columns are converted to plural field names in the output (e.g. `token` -> `tokens`). Features in
+        `self.sentence_level_features` are assumed to be constant within each line.
 
         Args:
             chunk_size (int): number of rows to load per batch.
@@ -805,20 +820,16 @@ class ParquetCorpus(Corpus):
             for batch in iterator:
                 if self.path:
                     chunk = batch.to_pandas()
-                elif self.dataset:
+                else:
                     chunk = pd.DataFrame(batch)
-                # token -> tokens etc.
-                chunk = chunk.rename(
-                    columns={k: k + "s" for k in set(chunk.columns).difference({'id', 'date'})}
-                )
                 cols = chunk.columns
-                constant_line_fields = set(cols).intersection({'id', 'date'})
-                variable_line_fields = list(set(cols).difference({'id', 'date'}))
-                for _, sent in chunk.groupby('id', sort=False):
+                constant_line_fields = set(cols).intersection(self.sentence_level_feature_names)
+                variable_line_fields = list(set(cols).intersection(self.token_level_feature_names))
+                for _, sent in chunk.groupby(self.id_name, sort=False):
                     yield Line(**{
-                        k: sent[k].tolist() for k in variable_line_fields
+                        f'{self.rev_column_names[k]}s': sent[k].tolist() for k in variable_line_fields
                     } | {
-                        k: sent[k].iloc[0] for k in constant_line_fields
+                        self.rev_column_names[k]: sent[k].iloc[0] for k in constant_line_fields
                     })
 
     def search(self,
@@ -865,7 +876,7 @@ class ParquetCorpus(Corpus):
                     chunk = batch.to_pandas()
                 else:
                     chunk = pd.DataFrame(batch)
-                chunk.date = pd.to_datetime(chunk.date.apply(str)).dt.tz_localize(None)
+                chunk[self.date_name] = pd.to_datetime(chunk[self.date_name].apply(str)).dt.tz_localize(None)
 
                 chunk.index = range(start_index, start_index + len(chunk))
                 start_index += len(chunk)
@@ -889,21 +900,21 @@ class ParquetCorpus(Corpus):
                 if chunk_occurrences.empty:
                     continue
 
-                ids = chunk_occurrences.id.unique()
-                chunk_tokens = chunk[chunk['id'].isin(ids)].copy()
+                ids = chunk_occurrences[self.id_name].unique()
+                chunk_tokens = chunk[chunk[self.id_name].isin(ids)].copy()
                 if chunk_tokens.empty:
                     continue
 
                 chunk_tokens.sort_index(inplace=True)
 
-                chunk_tokens['length'] = chunk_tokens['token'].str.len()
+                chunk_tokens['length'] = chunk_tokens[self.token_name].str.len()
                 chunk_tokens['space'] = 1
-                is_last = chunk_tokens['id'] != chunk_tokens['id'].shift(-1)
+                is_last = chunk_tokens[self.id_name] != chunk_tokens[self.id_name].shift(-1)
                 chunk_tokens.loc[is_last, 'space'] = 0
                 chunk_tokens['start'] = (
-                    chunk_tokens.groupby('id')[['length', 'space']].cumsum()['length'] -
+                    chunk_tokens.groupby(self.id_name)[['length', 'space']].cumsum()['length'] -
                     chunk_tokens['length'] +
-                    chunk_tokens.groupby('id')['space'].cumsum() -
+                    chunk_tokens.groupby(self.id_name)['space'].cumsum() -
                     chunk_tokens['space']
                 )
                 chunk_tokens['end'] = chunk_tokens['start'] + chunk_tokens['length']
@@ -912,20 +923,25 @@ class ParquetCorpus(Corpus):
 
                 chunk_sentences = (
                     chunk_tokens
-                    .groupby('id')
-                    .token
+                    .groupby(self.id_name)[self.token_name]
                     .apply(lambda x: x.str.cat(sep=" "))
                     .reset_index()
-                    .rename(columns={'token': 'text'})
+                    .rename(columns={self.token_name: 'text'})
                 )
 
                 chunk_targets = chunk_occurrences.merge(
                     chunk_tokens[['start', 'end']], left_index=True, right_index=True
                 )
-                chunk_targets = chunk_targets.merge(chunk_sentences, on='id')
-                chunk_targets['date'] = chunk_targets['date'].dt.strftime("%Y-%m-%d")
+                chunk_targets = chunk_targets.merge(chunk_sentences, on=self.id_name)
+                if self.date_name in chunk_targets:
+                    chunk_targets[self.date_name] = chunk_targets[self.date_name].dt.strftime("%Y-%m-%d")
                 chunk_targets['offsets'] = chunk_targets[['start', 'end']].apply(lambda row: row.values, axis=1)
-                chunk_targets = chunk_targets.drop(columns=['start', 'end', 'id']).rename(columns={"date": "time"})
+
+                chunk_targets = (
+                    chunk_targets.
+                    drop(columns=['start', 'end', self.id_name]).
+                    rename(columns={self.date_name: "time"})
+                )
 
                 # Add to usage dictionary
                 for target, group in chunk_targets.groupby("target"):
@@ -1025,12 +1041,13 @@ class VerticalCorpus(Corpus):
                         parquet_corpus_or_path: Union[ParquetCorpus, str] = None,
                         block_size: int = 1 << 20,
                         compression: str = "snappy",
-                        delimiter: str = "\t") -> None:
+                        delimiter: str = "\t",
+                        **kwargs) -> None:
         if parquet_corpus_or_path is None:
             basename = os.path.splitext(self.path)[0]
-            parquet_corpus = ParquetCorpus(Path(basename + ".parquet"))
+            parquet_corpus = ParquetCorpus(Path(basename + ".parquet"), **kwargs)
         elif isinstance(parquet_corpus_or_path, str):
-            parquet_corpus = ParquetCorpus(Path(parquet_corpus_or_path))
+            parquet_corpus = ParquetCorpus(Path(parquet_corpus_or_path), **kwargs)
         elif isinstance(parquet_corpus_or_path, ParquetCorpus):
             parquet_corpus = parquet_corpus_or_path
         else:
@@ -1060,10 +1077,10 @@ class VerticalCorpus(Corpus):
 class XMLCorpus(Corpus):
 
     def __init__(self, path, sentence_tag='sentence', token_tag='token', is_lemmatized=False, lemma_tag=None,
-                 is_pos_tagged=False, pos_tag_tag=None, text_tag='text', **args):
-        if not 'name' in args:
+                 is_pos_tagged=False, pos_tag_tag=None, text_tag='text', **kwargs):
+        if not 'name' in kwargs:
             name = path
-        super().__init__(name, **args)
+        super().__init__(name, **kwargs)
         self.path = path
 
         if lemma_tag:
@@ -1091,7 +1108,7 @@ class XMLCorpus(Corpus):
             if pos_tag_tag != '':
                 self.pos_tag_tag = pos_tag_tag
             else:
-                self.pos_tag_tag = 'pos'
+                self.pos_tag_tag = 'pos_tag'
         else:
             self.is_pos_tagged = False
             self.pos_tag_tag = ''
@@ -1124,12 +1141,13 @@ class XMLCorpus(Corpus):
             lemmas = []
             pos_tags = []
             curr_id = None
+            date = None
             parser = ET.iterparse(source, events=('start', 'end'))
 
             for event, elem in parser:
                 if elem.sourceline >= self.skip_lines:
                     if elem.tag == self.text_tag:
-                        date = elem.get('date')
+                        date = elem.get('date', None)
                     if elem.tag == self.sentence_tag:
                         if event == 'start':
                             sentence_id = elem.get('id', None)
@@ -1137,7 +1155,8 @@ class XMLCorpus(Corpus):
                             if sentence_id != curr_id:
                                 if tokens:
                                     data = get_data(tokens, lemmas, pos_tags)
-                                    data['date'] = date
+                                    if date is not None:
+                                        data['date'] = date
                                     data['id'] = curr_id
                                     yield Line(fname=fname, **data)
                                 curr_id = sentence_id
@@ -1218,9 +1237,13 @@ class XMLCorpus(Corpus):
     def cast_to_vertical(self, vertical_corpus_or_path=None, write_header=True):
         if vertical_corpus_or_path is None:
             basename = os.path.splitext(self.path)[0]
-            vertical_corpus = VerticalCorpus(basename + ".tsv")
+            vertical_corpus = VerticalCorpus(
+                basename + ".tsv",
+                field_map={k: i for i, k in enumerate(["token", "lemma", 'pos_tag', "id", "date"])})
         elif isinstance(vertical_corpus_or_path, str):
-            vertical_corpus = VerticalCorpus(vertical_corpus_or_path)
+            vertical_corpus = VerticalCorpus(
+                vertical_corpus_or_path,
+                field_map={k: i for i, k in enumerate(["token", "lemma", 'pos_tag', "id", "date"])})
         elif isinstance(vertical_corpus_or_path, VerticalCorpus):
             vertical_corpus = vertical_corpus_or_path
         else:
@@ -1261,13 +1284,16 @@ class XMLCorpus(Corpus):
         basename = os.path.splitext(self.path)[0]
         c = VerticalCorpus(
             basename + ".tsv",
-            field_map={k: i for i, k in enumerate(["token", "lemma", "pos_tag", "id", "date"])},
+            field_map={k: i for i, k in enumerate(["token", "lemma", 'pos_tag', "id", "date"])},
             sentence_separator=None,
             has_header=True)
         logging.info("Casting to intermediate tsv file...")
         self.cast_to_vertical(c)
         logging.info("Casting to parquet...")
-        c.cast_to_parquet(parquet_corpus_or_path)
+        c.cast_to_parquet(parquet_corpus_or_path, column_names={
+            "token": self.token_tag,
+            "lemma": self.lemma_tag,
+            'pos_tag': self.pos_tag_tag})
         if not keep_tsv:
             os.remove(c.path)
             logging.info(f"Removed temporary file {c.path}.")
