@@ -1,4 +1,7 @@
+"""Simple time representations used across the LanguageChange toolkit."""
+
 from numbers import Number
+
 
 class Time:
     def __init__(self):
@@ -6,6 +9,8 @@ class Time:
 
 
 class LiteralTime(Time):
+    """Represents a literal timestamp or label for usage references."""
+
     def __init__(self, time: str):
         self.time = time
 
@@ -26,6 +31,8 @@ class LiteralTime(Time):
 
 
 class NumericalTime(Time):
+    """Numeric timestamp (e.g., time slice) that supports comparisons."""
+
     def __init__(self, time: Number):
         self.time = time
 
@@ -53,7 +60,9 @@ class NumericalTime(Time):
 
 
 class TimeInterval(Time):
-    def __init__(self, start: Time, end:Time):
+    """Represents an interval between two Time points."""
+
+    def __init__(self, start: Time, end: Time):
         self.start = start
         self.end = end
         if type(self.start).__name__ == type(self.end).__name__:

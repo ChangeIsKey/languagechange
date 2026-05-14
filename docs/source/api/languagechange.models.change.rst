@@ -1,9 +1,6 @@
 languagechange.models.change package
 ====================================
 
-Submodules
-----------
-
 languagechange.models.change.metrics module
 -------------------------------------------
 

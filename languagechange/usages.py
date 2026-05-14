@@ -1,3 +1,5 @@
+"""Target usage helpers and containers for LanguageChange."""
+
 import enum
 import pickle
 import logging
@@ -12,13 +14,17 @@ from languagechange.utils import Time
 
 
 class POS(enum.Enum):
-   NOUN = 1
-   VERB = 2
-   ADJECTIVE = 3
-   ADVERB = 4
+    """Enumeration of supported parts of speech for targets."""
+
+    NOUN = 1
+    VERB = 2
+    ADJECTIVE = 3
+    ADVERB = 4
 
 
 class Target:
+    """Stores a target word together with optional metadata."""
+
     def __init__(self, target : str):
         self.target = target
 
@@ -36,6 +42,8 @@ class Target:
 
 
 class TargetUsage:
+    """Represents an individual usage with offsets and optional time metadata."""
+
     def __init__(self, text: str, offsets: str, time: Time = None, **kwargs):
         self.text_ = text
         self.offsets = offsets
@@ -59,7 +67,7 @@ class TargetUsage:
         d['time'] = str(d['time'])
         return d
 
-    def __getitem__(self,item):
+    def __getitem__(self, item):
         return self.text_[item]
 
     def __str__(self):
@@ -67,6 +75,7 @@ class TargetUsage:
 
 
 class DWUGUsage(TargetUsage):
+    """DWUG-specific usage metadata, including annotator judgments."""
 
     def __init__(self, target, date, grouping, identifier, description,  **args):
         super().__init__(**args)
@@ -78,6 +87,7 @@ class DWUGUsage(TargetUsage):
 
 
 class TargetUsageList(list):
+    """List of TargetUsage instances with serialization helpers."""
 
     def save(self, path, target):
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -96,6 +106,7 @@ class TargetUsageList(list):
 
 
 class UsageDictionary(dict):
+    """Dictionary mapping words to TargetUsageList instances."""
 
     def save(self, path, words = {}):
         Path(path).mkdir(parents=True, exist_ok=True)

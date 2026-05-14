@@ -1,9 +1,6 @@
 languagechange.models.representation package
 ============================================
 
-Submodules
-----------
-
 languagechange.models.representation.alignment module
 -----------------------------------------------------
 

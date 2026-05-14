@@ -63,7 +63,7 @@ Running the examples may require additional packages listed under each example d
 
 ## Documentation
 
-For more detailed information, read the [API reference guide](https://languagechange.readthedocs.io/en/latest/).
+For walkthrough tutorials and the API reference guide, please visit our official [documentation](https://languagechange.readthedocs.io/en/latest/). There are also documented notebooks and scripts in our [examples](examples/) folder.
 
 ## Citation
 
