@@ -91,11 +91,13 @@ class JSD(GradedChange):
     def __init__(self):
         pass
 
-    def compute_scores(self, embeddings1, embeddings2, clustering_algorithm, metric='cosine'):
+    def compute_scores(self, embeddings1, embeddings2, clustering_algorithm, metric='cosine', return_labels=False):
         clustering = Clustering(clustering_algorithm)
         clustering.get_cluster_results(np.concatenate((embeddings1,embeddings2),axis=0))
         labels1 = clustering.labels[:len(embeddings1)]
         labels2 = clustering.labels[len(embeddings1):]
+        if return_labels:
+            return self.compute_scores_from_labels(labels1, labels2), (labels1, labels2)
         return self.compute_scores_from_labels(labels1, labels2)
 
     def compute_scores_from_labels(self, labels1, labels2):

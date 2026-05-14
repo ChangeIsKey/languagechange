@@ -5,6 +5,7 @@ import warnings
 import urllib.request
 from urllib.error import HTTPError
 import json
+import hashlib
 from typing import Literal, Sequence, TypedDict, Tuple, List, Union, Any
 import getpass
 import logging
@@ -19,7 +20,10 @@ import pandas as pd
 import torch
 import tqdm
 from sentence_transformers import SentenceTransformer
-from languagechange.usages import TargetUsage
+import numpy as np
+
+from languagechange.usages import TargetUsage, TargetUsageList
+from languagechange.cache import CacheManager
 
 # Define types for chat dialog outside the class for clarity
 Role = Literal["system", "user"]
@@ -31,24 +35,132 @@ class Message(TypedDict):
 Dialog = Sequence[Message]
 
 class DefinitionGenerator:
-    def __init__(self, embedding_model: str = "all-mpnet-base-v2"):
+    def __init__(self, embedding_model: str = "all-mpnet-base-v2", cache_dir="~/.cache/languagechange/definition"):
         if embedding_model != None and embedding_model != "":
             self.embedding_model = SentenceTransformer(embedding_model)
         else:
             self.embedding_model = None
+        if cache_dir:
+            self.cache_mgr = CacheManager(cache_dir)
+        else:
+            self.cache_mgr = None
 
-    def encode_definitions(self, definitions, encode = 'both'):
-        if self.embedding_model != None and (encode == 'both' or encode == 'vectors'):
-            vectors = self.embedding_model.encode(definitions)
+    def _encode_definitions(self, definitions):
+        if self.embedding_model is not None:
+            return self.embedding_model.encode(definitions)
+        logging.error("'self.embedding_model' is None. Definitions could not be encoded.")
+        return None
+
+    def _return_definitions_embeddings(self, definitions, embeddings, return_definitions, return_embeddings):
+        if not (return_definitions or return_embeddings):
+            logging.error("Neither 'return_definitions' nor 'return_embeddings' was set to True. Returning None.")
+            return None
+        if return_embeddings:
+            if return_definitions:
+                return definitions, embeddings
+            else:
+                return embeddings
         else:
             return definitions
+    
+    def _generate_cache_key(self, target_usages, prompt):
+        """
+        Generates a unique cache key based on the input data.
+        """
+        try:
+            if isinstance(target_usages, TargetUsageList):
+                data = target_usages.to_dict()
+            elif isinstance(target_usages, list) and all(isinstance(tu, TargetUsage) for tu in target_usages):
+                data = [u.to_dict() for u in target_usages]
+            elif isinstance(target_usages, pd.DataFrame):
+                data = json.loads(target_usages.to_json(orient='records'))
+            else:
+                data = target_usages.__dict__ if hasattr(target_usages, '__dict__') else target_usages
+
+            serialized = json.dumps({
+                "model": self.model_identifier, 
+                "prompt": prompt, 
+                "data": data}, 
+                sort_keys=True)
+            return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        except Exception as e:
+            raise ValueError(f"Invalid input: {e}")
+
+    def find_cached_definitions(self, target_usages, prompt, embedding=False):
+        """
+            Finds cached definitions/embeddings, if they exist. Returns the definitions/embeddings or None, if
+            none were found, along with the path to the cache file.
+        """
+        if not self.cache_mgr:
+            return None, None
+        # Generate cache key
+        cache_key = self._generate_cache_key(target_usages, prompt)
+        if embedding:
+            ext = "npy"
+        else:
+            ext = "json"
+        cache_path = os.path.join(self.cache_mgr.cache_dir, f"{self.model_identifier}_{cache_key}.{ext}")
         
-        if encode == 'both':
-            return definitions, vectors
-        elif encode == 'vectors':
-            return vectors
+        definitions = None
+        # Check whether the cache files exist
+        if os.path.exists(cache_path):
+            logging.info(f"Cache path exists. Trying to load {'embeddings' if embedding else 'definitions'}.")
+            try:
+                if embedding:
+                    logging.info(f"Loading cached embeddings from {cache_path}")
+                    definitions = np.load(cache_path, allow_pickle=True)
+                else:
+                    logging.info(f"Loading cached definitions from {cache_path}")
+                    with open(cache_path, "r") as f:
+                        definitions = json.load(f)
+            except Exception as e:
+                logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
+                os.remove(cache_path)
         else:
-            return definitions
+            logging.info("Cache path did not exist.")
+        return definitions, cache_path
+    
+    def cache_definitions(self, definitions, cache_path, embedding=False):
+        """
+            Saves definitions/embeddings to `cache_path`.
+        """
+        mode = 'wb' if embedding else 'w'
+        # Save the usages to a json file
+        with self.cache_mgr.atomic_write(cache_path, mode=mode) as temp_path:
+            if embedding:
+                np.save(temp_path, definitions)
+                logging.info(f"Saved definition embeddings to {cache_path}.")
+            else:
+                json.dump(definitions, temp_path)
+                logging.info(f"Saved definitions to {cache_path}.")
+
+    def _find_or_generate_definitions(self, 
+                                      target_usages, 
+                                      system_message, 
+                                      user_message_template, 
+                                      return_definitions, 
+                                      return_embeddings):
+        """
+            Tries to find cached definitions and/or embeddings. If not found, definitions are generated. If embeddings
+            are found but definitions need to be re-generated, the embeddings are re-computed.
+        """
+        definitions, def_cache_path = self.find_cached_definitions(
+            target_usages, (system_message, user_message_template), embedding=False)
+        embeddings, vec_cache_path = self.find_cached_definitions(
+            target_usages, (system_message, user_message_template), embedding=True)
+        # If we have cached embeddings but no definitions and aim to return definitions, then recompute embeddings too.
+        if return_definitions and definitions is None:
+            embeddings = None
+        # If we either want the definitions themselves, or have no cached embeddings, new definitions must be generated.
+        if (return_definitions or embeddings is None) and definitions is None:
+            definitions = self._generate_definitions(target_usages, system_message, user_message_template)
+            if self.cache_mgr:
+                self.cache_definitions(definitions, def_cache_path, embedding=False)
+        if return_embeddings and embeddings is None:
+            embeddings = self._encode_definitions(definitions)
+            if self.cache_mgr:
+                self.cache_definitions(embeddings, vec_cache_path, embedding=True)
+        return self._return_definitions_embeddings(definitions, embeddings, return_definitions, return_embeddings)
         
 
 class LlamaDefinitionGenerator(DefinitionGenerator):
@@ -70,7 +182,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
     """
     def __init__(self, model_name: str, ft_model_name: str, hf_token: str = None, is_adapter = False,
                  max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
-                 temperature: float = 1, sampling=False, language=None, embedding_model: str = "all-mpnet-base-v2", torch_dtype = torch.float16, low_cpu_mem_usage = True):
+                 temperature: float = 1, sampling=False, language=None, embedding_model: str = "all-mpnet-base-v2", 
+                 torch_dtype = torch.float16, low_cpu_mem_usage = True, 
+                 cache_dir = "~/.cache/languagechange/definition"):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
@@ -88,7 +202,7 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             torch_dtype: the torch float type, applicable for the pre-trained models.
             low_cpu_mem_usage (bool): if True, set low_cpu_mem_usage=True for the pre-trained model.
         """
-        super().__init__(embedding_model = embedding_model)
+        super().__init__(embedding_model = embedding_model, cache_dir=cache_dir)
         self.model_name = model_name
         self.ft_model_name = ft_model_name
         self.name = "LlamaDefinitionGenerator_" + self.model_name + "_" + self.ft_model_name
@@ -99,6 +213,12 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
         self.sampling = sampling
         self.is_adapter = is_adapter
         self.language = language
+        self.torch_dtype = torch_dtype
+
+        self.model_identifier = "_".join(map(str, [
+            self.name, self.max_length, self.batch_size, self.max_time, self.temperature, self.sampling, 
+            self.is_adapter, self.language, self.torch_dtype
+        ]))
 
         if hf_token is None:
             hf_token = os.environ.get("HF_TOKEN")
@@ -144,7 +264,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             self.model = pipeline("text-generation", model=ft_model, tokenizer=self.tokenizer, device_map="auto")
 
         if "Llama-3" in self.model_name and self.is_adapter:
-            self.eos_tokens = [self.model.tokenizer.eos_token_id] + [self.model.tokenizer.encode(token, add_special_tokens=False)[0] for token in ['.', ' .']] #TODO: look into this
+            self.eos_tokens = [self.model.tokenizer.eos_token_id] + [self.model.tokenizer.encode(
+                token, 
+                add_special_tokens=False)[0] for token in ['.', ' .']] #TODO: look into this
         else:
             self.eos_tokens = [self.tokenizer.encode(token, add_special_tokens=False)[0] 
                         for token in [';', ' ;', '.', ' .']]
@@ -217,50 +339,9 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
             definition = ''
             warnings.warn("Model type not supported – add handling logic in extract_definition if needed")
         return definition.replace('\n', ' ') + '\n'
-
-    def generate_definitions(self, target_usages: List[TargetUsage],
-                             language = None,
-                             system_message: str = None,
-                             user_message_template: str = None,
-                             encode_definitions : str = None
+    
+    def _generate_definitions(self, target_usages: List[TargetUsage], system_message: str, user_message_template: str
                              ) -> List[str]:
-        """
-        Generates definitions for all examples in batches using the model.
-
-        Args:
-            target_usages (List[TargetUsage]): A list of TargetUsage objects.
-            language (str): a two digit language code. If not None, it overrides self.language. Falls back to English.
-            system_message (str): The system prompt message. If not None, it overrides the default message for the 
-                chosen language.
-            user_message_template (str): The template for the user prompt with placeholders {target} and {example}. 
-                If not None, it overrides the default message template for the chosen language.
-            encode_definitions (str): if not None, use self.embedding_model to encode the definitions. If 'vectors', 
-                return only the sentence embeddings. If 'both', return both definitions and embeddings.
-
-        Returns:
-            Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
-        """
-        # Choose the system and user messages for the specific language, fall back to English if the language is not available
-        if language is None:
-            if self.language is None:
-                language = "EN"
-            else:
-                language = self.language
-
-        if not system_message or not user_message_template:
-            try:
-                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/{language.lower()}.json') as url:
-                    messages = json.load(url)
-            except HTTPError:
-                logging.info(f"Could not load system and user messages for {language}. Falling back to English.")
-                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/en.json') as url:
-                    messages = json.load(url)
-                    
-            if not system_message:
-                system_message = messages["llama_definition_messages"]["system_message"]
-            if not user_message_template:
-                user_message_template = messages["llama_definition_messages"]["user_message"]
-
         examples = []
         for usage in target_usages:
             target = usage.text()[usage.offsets[0]:usage.offsets[1]]
@@ -333,10 +414,58 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
                 logging.info(e)
                 batch_size = len(batch)
                 definitions.extend([''] * batch_size)
-            
         if len(definitions) != total:
             raise ValueError(f"Generated definitions count ({len(definitions)}) doesn't match input count ({total}).")
-        return self.encode_definitions(definitions, encode=encode_definitions)
+        return definitions
+
+    def generate_definitions(self, 
+                             target_usages: List[TargetUsage],
+                             language = None,
+                             system_message: str = None,
+                             user_message_template: str = None,
+                             return_definitions : bool = True,
+                             return_embeddings : bool = False
+                             ) -> List[str]:
+        """
+        Generates definitions for all examples in batches using the model.
+
+        Args:
+            target_usages (List[TargetUsage]): A list of TargetUsage objects.
+            language (str): a two digit language code. If not None, it overrides self.language. Falls back to English.
+            system_message (str): The system prompt message. If not None, it overrides the default message for the 
+                chosen language.
+            user_message_template (str): The template for the user prompt with placeholders {target} and {example}. 
+                If not None, it overrides the default message template for the chosen language.
+            return_definitions (bool, default=True): whether to return the definitions themselves.
+            return_embeddings (bool, default=False): whether to return sentence embeddings of the definitions.
+
+        Returns:
+            Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding 
+                to each TargetUsage, as text, sentence embeddings, or both.
+        """
+        # Choose the system and user messages for the specific language, fall back to English if the language is not available
+        if language is None:
+            if self.language is None:
+                language = "EN"
+            else:
+                language = self.language
+
+        if not system_message or not user_message_template:
+            try:
+                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/{language.lower()}.json') as url:
+                    messages = json.load(url)
+            except HTTPError:
+                logging.info(f"Could not load system and user messages for {language}. Falling back to English.")
+                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/en.json') as url:
+                    messages = json.load(url)
+                    
+            if not system_message:
+                system_message = messages["llama_definition_messages"]["system_message"]
+            if not user_message_template:
+                user_message_template = messages["llama_definition_messages"]["user_message"]
+        
+        return self._find_or_generate_definitions(target_usages, system_message, user_message_template, 
+            return_definitions, return_embeddings)
 
     def print_results(self, target_usages: List[TargetUsage], definitions: List[str]) -> None:
         """
@@ -391,7 +520,8 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
     def __init__(self, model_name: str, model_provider: str, 
                  langsmith_key: str = None, provider_key_name: str = None, 
                  provider_key: str = None, language: str = None,
-                 embedding_model: str = "all-mpnet-base-v2"):
+                 embedding_model: str = "all-mpnet-base-v2",
+                 cache_dir="~/.cache/languagechange/definition"):
         """
         Initializes the DefinitionModel.
 
@@ -403,7 +533,7 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
             provider_key (str, optional): The provider API key. Defaults to None.
             language (str, optional): Language code for potential lemmatization. Defaults to None.
         """
-        super().__init__(embedding_model = embedding_model)
+        super().__init__(embedding_model=embedding_model, cache_dir=cache_dir)
         self.model_name = model_name
         self.name = "ChatModelDefinitionGenerator_" + self.model_name
         self.language = language
@@ -446,26 +576,13 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
         # Configure the model to use structured output with the DefinitionOutput schema.
         self.model = llm.with_structured_output(DefinitionOutput)
 
-    def generate_definitions(self, target_usages: List[TargetUsage],
-                        user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}"),
-                        encode_definitions : str = None
-                       ) -> List[str]:
-        """
-        Generates definitions for each TargetUsage using a chat model.
-        
-        Args:
-            target_usages (List[TargetUsage]): List of target usages.
-            user_prompt_template (str): Template for the user prompt.
-        
-        Returns:
-            Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
-        """
-        definitions = []
-        system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
+        self.model_identifier = self.name
+
+    def _generate_definitions(self, target_usages: List[TargetUsage], system_message, user_prompt_template) -> List[str]:
         prompt_template = ChatPromptTemplate.from_messages(
             [("system", system_message), ("user", user_prompt_template)]
         )
-        
+        definitions = []
         for usage in target_usages:
             # Extract target word and example sentence
             if hasattr(usage, 'target') and hasattr(usage, 'example'):
@@ -484,8 +601,29 @@ class ChatModelDefinitionGenerator(DefinitionGenerator):
             except Exception as e:
                 logging.error(f"Could not run chat completion: {e}")
                 definitions.append("")
-        return self.encode_definitions(definitions, encode=encode_definitions)
+        return definitions
 
+    def generate_definitions(self, 
+                             target_usages: List[TargetUsage],
+                             user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}"),
+                             return_definitions : bool = True,
+                             return_embeddings : bool = False
+                            ) -> List[str]:
+        """
+        Generates definitions for each TargetUsage using a chat model.
+        
+        Args:
+            target_usages (List[TargetUsage]): List of target usages.
+            user_prompt_template (str): Template for the user prompt.
+            return_definitions (bool, default=True): whether to return the definitions themselves.
+            return_embeddings (bool, default=False): whether to return sentence embeddings of the definitions.
+        
+        Returns:
+            Union[List[str], List[np.ndarray], Tuple[List[str],List[np.ndarray]]: Generated definitions corresponding to each TargetUsage, as text, sentence embeddings, or both.
+        """
+        system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
+        return self._find_or_generate_definitions(target_usages, system_message, user_prompt_template, 
+            return_definitions, return_embeddings)
 
 
 class T5DefinitionGenerator(DefinitionGenerator):
@@ -493,7 +631,8 @@ class T5DefinitionGenerator(DefinitionGenerator):
 
     def __init__(self, model_path, bsize=4, max_length=256, filter_target=True,
                  sampling=False, temperature=1.0, repetition_penalty=1.0,
-                 num_beams=1, num_beam_groups=1):
+                 num_beams=1, num_beam_groups=1, embedding_model: str = "all-mpnet-base-v2", 
+                 cache_dir="~/.cache/languagechange/definition"):
         """
         Initialize the T5 definition generator.
 
@@ -508,7 +647,7 @@ class T5DefinitionGenerator(DefinitionGenerator):
             num_beams (int): Number of beams for beam search. Defaults to 1.
             num_beam_groups (int): Number of beam groups for diversity. Defaults to 1.
         """
-        super().__init__()
+        super().__init__(embedding_model=embedding_model, cache_dir=cache_dir)
         self.logger = logging.getLogger(__name__)
         logging.basicConfig(format="%(asctime)s : %(levelname)s : %(message)s", level=logging.INFO)
 
@@ -522,6 +661,10 @@ class T5DefinitionGenerator(DefinitionGenerator):
         self.repetition_penalty = repetition_penalty
         self.num_beams = num_beams
         self.num_beam_groups = num_beam_groups
+
+        self.model_identifier = "_".join(map(str, [
+            self.name, self.bsize, self.max_length, self.filter_target, self.sampling, self.temperature, 
+            self.repetition_penalty, self.num_beams, self.num_beam_groups]))
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.logger.info(f"Loading model from {model_path}...")
@@ -561,45 +704,50 @@ class T5DefinitionGenerator(DefinitionGenerator):
         
         if path.isfile(path_to_data):
             self.logger.info(f"Loading file: {path_to_data}")
-            df = pd.read_csv(path_to_data, delimiter="\t", header="infer", quoting=csv.QUOTE_NONE,
+            usage_df = pd.read_csv(path_to_data, delimiter="\t", header="infer", quoting=csv.QUOTE_NONE,
                              encoding="utf-8", on_bad_lines="warn")
-            if len(df.columns) == 2:
-                df.columns = ["Targets", "Context"]
-            df.dropna(subset=["Context"], inplace=True)
+            if len(usage_df.columns) == 2:
+                usage_df.columns = ["Targets", "Context"]
+            usage_df.dropna(subset=["Context"], inplace=True)
         else:
             self.logger.info(f"Loading directory: {path_to_data}")
             if "oxford" not in path_to_data and "wordnet" not in path_to_data:
                 datafile = path.join(path_to_data, f"{split}.complete.tsv.gz" if split else "complete.tsv.gz")
-                df = pd.read_csv(datafile, delimiter="\t", header=0, quoting=csv.QUOTE_NONE,
+                usage_df = pd.read_csv(datafile, delimiter="\t", header=0, quoting=csv.QUOTE_NONE,
                                  encoding="utf-8", on_bad_lines="warn")
-                df["Context"] = df.example
-                df["Targets"] = [w.split("%")[0] for w in df.word]
+                usage_df["Context"] = usage_df.example
+                usage_df["Targets"] = [w.split("%")[0] for w in usage_df.word]
                 try:
-                    df["Definition"] = df.gloss
+                    usage_df["Definition"] = usage_df.gloss
                 except AttributeError:
                     self.logger.info("No definitions found.")
             else:
                 datafile = path.join(path_to_data, f"{split}.eg.gz")
                 datafile_defs = path.join(path_to_data, f"{split}.txt.gz")
-                df = pd.read_csv(datafile, delimiter="\t", quoting=csv.QUOTE_NONE,
+                usage_df = pd.read_csv(datafile, delimiter="\t", quoting=csv.QUOTE_NONE,
                                  encoding="utf-8", on_bad_lines="warn")
-                df_defs = pd.read_csv(datafile_defs, delimiter="\t", quoting=csv.QUOTE_NONE,
+                def_df = pd.read_csv(datafile_defs, delimiter="\t", quoting=csv.QUOTE_NONE,
                                       encoding="utf-8", on_bad_lines="warn")
-                df_defs.columns = ["Sense", "Ignore1", "Ignore2", "Definition", "Ignore3", "Ignore4"]
-                df.columns = ["Sense", "Context"]
-                df["Targets"] = [w.split("%")[0] for w in df.Sense]
-                df["Definition"] = df_defs.Definition
+                def_df.columns = ["Sense", "Ignore1", "Ignore2", "Definition", "Ignore3", "Ignore4"]
+                usage_df.columns = ["Sense", "Context"]
+                usage_df["Targets"] = [w.split("%")[0] for w in usage_df.Sense]
+                usage_df["Definition"] = def_df.Definition
         if "wordnet" in path_to_data:
-            df["POS"] = [w.split("%")[1].split(".")[2] for w in df.Sense]
-        df["Real_Contexts"] = [ctxt.replace("<TRG>", tgt).strip() for ctxt, tgt in zip(df.Context, df.Targets)]
-        return df
+            usage_df["POS"] = [w.split("%")[1].split(".")[2] for w in usage_df.Sense]
+        usage_df["Real_Contexts"] = [ctxt.replace("<TRG>", tgt).strip() for ctxt, tgt in zip(usage_df.Context, usage_df.Targets)]
+        return usage_df
 
-    def _generate_definitions(self, prompts, targets):
+    def _generate_definitions(self, usage_df, task_prefix):
         """Generate definitions for the given prompts (internal use)."""
+        context_col = "Real_Contexts" if "Real_Contexts" in usage_df.columns else "Context"
+        prompts = [" ".join([task_prefix[0].replace("<TRG>", tgt), ctx]) if task_prefix[1] == "pre"
+                   else " ".join([ctx, task_prefix[0].replace("<TRG>", tgt)])
+                   for tgt, ctx in zip(usage_df["Targets"], usage_df[context_col])]
+        usage_df["Real_Contexts"] = prompts
         self.logger.info(f"Tokenizing with max length {self.max_length}...")
         inputs = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True,
                                 max_length=self.max_length)
-        target_ids = torch.tensor([t[-1] for t in self.tokenizer(targets, add_special_tokens=False).input_ids])
+        target_ids = torch.tensor([t[-1] for t in self.tokenizer(usage_df["Targets"].tolist(), add_special_tokens=False).input_ids])
 
         if torch.cuda.is_available():
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -624,33 +772,53 @@ class T5DefinitionGenerator(DefinitionGenerator):
             definitions.extend(self.tokenizer.batch_decode(outputs, skip_special_tokens=True))
         return definitions
 
-    def encode_definitions(self, df, encode = 'both', return_df = False):
-        if encode == 'both' or encode == 'vectors':
-            if self.embedding_model != None:
-                vectors = self.embedding_model.encode(df["Generated_Definition"].tolist())
-            else:
-                logging.error("No embedding model specified, could not encode definitions.")
-                raise AttributeError
-        if not return_df:
-            df = df["Generated_Definition"].tolist()
-            
-        if encode == 'both':
-            return df, vectors
-        elif encode == 'vectors':
-            return vectors
-        else:
-            return df
+    def _find_or_generate_definitions(self, usage_df, user_message_template, return_definitions, return_embeddings, 
+            return_df):
+        """
+            Overrides the default method due to different kinds and number of arguments.
+        """
+        definitions = None
+        embeddings = None
+        definitions, def_cache_path = self.find_cached_definitions(usage_df, user_message_template, embedding=False)
+        embeddings, vec_cache_path = self.find_cached_definitions(usage_df, user_message_template, embedding=True)
+        # If we have cached embeddings but no definitions and aim to return definitions, then recompute embeddings too.
+        if return_definitions and definitions is None:
+            embeddings = None
+        # If we either want the definitions themselves, or have no cached embeddings, new definitions must be generated.
+        if (return_definitions or embeddings is None) and definitions is None:
+            definitions = self._generate_definitions(usage_df, user_message_template)
+            if self.cache_mgr:
+                self.cache_definitions(definitions, def_cache_path, embedding=False)
+        if return_embeddings and embeddings is None:
+            embeddings = self._encode_definitions(definitions)
+            if self.cache_mgr:
+                self.cache_definitions(embeddings, vec_cache_path, embedding=True)
+        if return_df and definitions is not None:
+            usage_df["Generated_Definition"] = definitions
+            definitions = usage_df
+        return self._return_definitions_embeddings(definitions, embeddings, return_definitions, return_embeddings)
 
-    def generate_definitions(self, target_usage_list=None, df=None, prompt_index=8, encode_definitions : str = None, return_df = False):
+    def generate_definitions(self, 
+                             target_usages,
+                             prompt_index=8, 
+                             return_definitions : bool = True, 
+                             return_embeddings : bool = False, 
+                             return_df : bool = False):
         """
         Generate definitions for words in the DataFrame.
 
         Args:
-            df (pd.DataFrame): Data with 'Targets' and 'Context' or 'Real_Contexts' columns.
+            target_usages (Union[List[TargetUsage], TargetUsageList, pd.DataFrame): Target usages to generate
+                definitions for. If a pd.DataFrame, 'Targets' and 'Context' or 'Real_Contexts' columns are needed.
             prompt_index (int): Index of the prompt template to use. Defaults to 8.
+            return_definitions (bool, default=True): whether to return the definitions themselves.
+            return_embeddings (bool, default=False): whether to return sentence embeddings of the definitions.
+            return_df (bool, default=False): whether to return the definitions as a pd.DataFrame object.
 
         Returns:
-            pd.DataFrame: Updated DataFrame with 'Generated_Definition' column.
+            Union[List[str], pd.DataFrame, np.ndarray, (List[str], np.ndarray), (pd.DataFrame, np.ndarray)] : 
+                Definitions and/or embeddings. If return_df, an updated DataFrame with 'Generated_Definition' column is 
+                returned for definitions.
 
         Raises:
             ValueError: If prompt_index is invalid or required columns are missing.
@@ -658,27 +826,27 @@ class T5DefinitionGenerator(DefinitionGenerator):
         if prompt_index < 0 or prompt_index >= len(self.prompts):
             raise ValueError(f"Prompt index {prompt_index} is out of range (0-{len(self.prompts)-1})")
 
-        if target_usage_list is not None:
-            targets = [u.text()[u.offsets[0]:u.offsets[1]] for u in target_usage_list]
-            contexts = [u.text() for u in target_usage_list]
-            df = pd.DataFrame({"Targets": targets, "Context": contexts})
-        elif df == None:
-            raise ValueError("Either target_usage_list or df must be provided")
+        if isinstance(target_usages, list) and all(isinstance(tu, TargetUsage) for tu in target_usages):
+            targets = [u.text()[u.offsets[0]:u.offsets[1]] for u in target_usages]
+            contexts = [u.text() for u in target_usages]
+            usage_df = pd.DataFrame({"Targets": targets, "Context": contexts})
+        elif isinstance(target_usages, pd.DataFrame):
+            usage_df = target_usages
+        else:
+            logging.error("'target_usages' must be a TargetUsageList, a list of TargetUsage or a pd.DataFrame ")
+            raise TypeError
 
-        if "Targets" not in df.columns or ("Context" not in df.columns and "Real_Contexts" not in df.columns):
+        if "Targets" not in usage_df.columns or (
+            "Context" not in usage_df.columns and "Real_Contexts" not in usage_df.columns):
             raise ValueError("DataFrame must contain 'Targets' and either 'Context' or 'Real_Contexts'")
 
         task_prefix = self.prompts[prompt_index]
         self.logger.info(f"Using prompt: {task_prefix}")
-        context_col = "Real_Contexts" if "Real_Contexts" in df.columns else "Context"
-        prompts = [" ".join([task_prefix[0].replace("<TRG>", tgt), ctx]) if task_prefix[1] == "pre"
-                   else " ".join([ctx, task_prefix[0].replace("<TRG>", tgt)])
-                   for tgt, ctx in zip(df["Targets"], df[context_col])]
-        df["Generated_Definition"] = self._generate_definitions(prompts, df["Targets"].tolist())
-        df["Real_Contexts"] = prompts
-        return self.encode_definitions(df, encode=encode_definitions, return_df=return_df)
+        
+        return self._find_or_generate_definitions(usage_df, task_prefix, return_definitions, return_embeddings, 
+            return_df)
 
-    def save_definitions(self, df, output_file):
+    def save_definitions(self, usage_df, output_file):
         """Save the DataFrame with definitions to a TSV file."""
-        df.to_csv(output_file, sep="\t", index=False, encoding="utf-8", quoting=csv.QUOTE_NONE)
+        usage_df.to_csv(output_file, sep="\t", index=False, encoding="utf-8", quoting=csv.QUOTE_NONE)
         self.logger.info(f"Saved definitions to {output_file}")
