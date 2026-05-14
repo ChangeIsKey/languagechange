@@ -1004,11 +1004,17 @@ class CDPipeline(Pipeline):
         # A list of target usages
         else:
             for word in all_words:
-                print(word)
                 word_usages = self.dataset[word]
-                # TODO: add option to give usages that are not pre-sorted
                 if isinstance(word_usages, list):
-                    usages_by_time = {i: u for i,u in enumerate(word_usages)}
+                    if all(isinstance(u, list) for u in word_usages):
+                        usages_by_time = {i: u for i,u in enumerate(word_usages)}
+                    elif all(isinstance(u, TargetUsage) for u in word_usages):
+                        usages_by_time = dict()
+                        for u in word_usages:
+                            t = u.time
+                            if not t in usages_by_time:
+                                usages_by_time[t] = []
+                            usages_by_time[t].append(u)
                 elif isinstance(word_usages, dict):
                     usages_by_time = word_usages
                 else:
@@ -1041,7 +1047,7 @@ class CDPipeline(Pipeline):
         
         return embeddings
 
-    def _compute_scores(self, embeddings):
+    def _compute_scores(self, embeddings, timeseries_type="consecutive"):
         change_scores = dict()
         cluster_labels = dict()
         for word, embeddings_by_period in embeddings.items():
@@ -1069,7 +1075,7 @@ class CDPipeline(Pipeline):
                 change, time_labels = timeseries.compute(
                     labels_list,
                     change_metric=self.metric,
-                    timeseries_type="consecutive", #TODO: make optional
+                    timeseries_type=timeseries_type,
                     time_labels=sorted_periods
                 )
             
@@ -1079,7 +1085,7 @@ class CDPipeline(Pipeline):
                 change, time_labels, labels = timeseries.compute(
                     embeddings_list, 
                     change_metric=self.metric,
-                    timeseries_type="consecutive", #TODO: make optional
+                    timeseries_type=timeseries_type,
                     time_labels=sorted_periods,
                     clustering_algorithm=self.clustering,
                     return_labels=True)
@@ -1090,7 +1096,7 @@ class CDPipeline(Pipeline):
                 change, time_labels = timeseries.compute(
                     embeddings_list, 
                     change_metric=self.metric,
-                    timeseries_type="consecutive", #TODO: make optional
+                    timeseries_type=timeseries_type,
                     time_labels=sorted_periods,
                     clustering_algorithm=self.clustering)
     
@@ -1102,7 +1108,8 @@ class CDPipeline(Pipeline):
         
     def run_pipeline(self,
                  n_sampled_usages=0,
-                 random_seed=None):
+                 random_seed=None,
+                 timeseries_type="consecutive"):
         """
             Runs the semantic change pipeline for two or more time-periods.
 
@@ -1111,10 +1118,12 @@ class CDPipeline(Pipeline):
                     all usages.
                 random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
                     is used.
+                timeseries_type (str): the type of comparison to use (see languagechange.models.change.TimeSeries),
+                    in case multiple time periods are used.
         """
         usages = self._find_usages(n_sampled_usages, random_seed)
         embeddings = self._encode_usages(usages)
-        cluster_labels, change_scores = self._compute_scores(embeddings)
+        cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type)
         return usages, embeddings, cluster_labels, change_scores
 
     def _evaluate_change_scores(self, change_scores, task, json_path, table_path, **kwargs):
@@ -1158,8 +1167,6 @@ class CDPipeline(Pipeline):
                  json_path=None,
                  table_path=None,
                  return_predictions=False,
-                 return_embeddings=False,
-                 evaluate=True,
                  **kwargs):
         """
             Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the 
@@ -1175,9 +1182,12 @@ class CDPipeline(Pipeline):
                     results to this json file.
                 table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
                     json_path is also specified, add the results to a table in this file.
-
+                return_predictions (bool: default=False): if True, return usages, embeddings, and predicted cluster
+                    labels and change scores along with the evaluation scores.
             Returns:
                 scores (dict): A dictionary containing the Spearman correlation score (rho).
+                usages (dict, optional): the usages used for every word, divided into the two time periods.
+                embeddings (dict, optional): the embeddings corresponding to each returned usage.
                 cluster_labels (dict, optional): the predicted cluster labels for every word, divided into the two time
                     periods.
                 change_scores (dict, optional): the predicted change score between t1 and t2 for every word.
