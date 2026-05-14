@@ -53,6 +53,8 @@ class Visualizer():
             time_labels (list, default=None):
                 Labels for time periods or domain names, used in subplot titles (e.g., years). If not provided and 
                 `usages` is provided, labels may be inferred from `usage.time`.
+            target (str, default=None):
+                The target word for which usages, embeddings and cluster labels are visualized.
             cache_dir (str or Path, default="~/.cache/languagechange/reduced_embeddings"):
                 Directory used for caching reduced (2D) embeddings for faster repeated plotting.
     """
@@ -62,44 +64,63 @@ class Visualizer():
                  cluster_labels=None,
                  counts_per_time_period=None,
                  time_labels=None,
+                 target=None,
                  cache_dir="~/.cache/languagechange/reduced_embeddings"):
         self.cache_mgr = CacheManager(cache_dir)
 
         indices = None
-        if embeddings is not None:
-            # Initialize from a list of embeddings belonging to different time periods
-            if isinstance(embeddings, list) and all(isinstance(e, np.ndarray) for e in embeddings):
-                indices = np.cumsum([0] + [len(e) for e in embeddings])
-                embeddings = np.concatenate(embeddings)
-            elif not isinstance(embeddings, np.ndarray):
-                logging.error("'embeddings' must be either a numpy array of embeddings or a list of such.")
-                raise TypeError
 
-        if usages is not None and len(usages) != len(embeddings):
-            logging.error("Number of embeddings does not match the number of usages.")
-            raise ValueError
+        if isinstance(usages, dict) and all(isinstance(ul, list) for ul in usages.values()):
+            time_labels = sorted(list(usages.keys()))
+            indices = np.cumsum([0] + [len(usages[t]) for t in time_labels])
+            u = []
+            for t in time_labels:
+                u.extend(usages[t])
+            usages = u
+        
+        def reshape(embs_or_labels, indices, time_labels):
+            # Initialize from a list of embeddings/cluster_labels belonging to different time periods
+            if isinstance(embs_or_labels, list) and all(isinstance(e, np.ndarray) for e in embs_or_labels):
+                temp_indices = np.cumsum([0] + [len(e) for e in embs_or_labels])
+                res_array = np.concatenate(embs_or_labels)
+            # Initialize from a dict {t: embs/cluster_labels}
+            elif isinstance(embs_or_labels, dict) and all(isinstance(e, np.ndarray) for e in embs_or_labels.values()):
+                time_labels = sorted(list(embs_or_labels.keys()))
+                temp_indices = np.cumsum([0] + [len(embs_or_labels[t]) for t in time_labels])
+                res_array = np.concatenate([embs_or_labels[t] for t in time_labels])
+            else:
+                logging.error("'embeddings' and 'cluster_labels' must be either None, a numpy array or a list or dict "
+                              "of such.")
+                raise TypeError
+            if indices is None:
+                indices = temp_indices
+            elif not (indices == temp_indices).all():
+                logging.error("Some of 'usages', 'embeddings' and 'cluster_labels' have different amounts of examples "
+                              "for each period.")
+                raise ValueError
+            return res_array, indices, time_labels
+
+        if embeddings is not None:
+            if not isinstance(embeddings, np.ndarray):
+                embeddings, indices, time_labels = reshape(embeddings, indices, time_labels)
+            self.embeddings = embeddings
     
         if cluster_labels is not None:
-            # Initialize from a list of cluster labels belonging to different time periods
-            if isinstance(cluster_labels, list) and all(isinstance(l, np.ndarray) for l in cluster_labels):
-                label_indices = np.cumsum([0] + [len(l) for l in cluster_labels])
-                if indices is not None and not (label_indices == indices).all():
-                    logging.error("'embeddings' and 'cluster_labels' have different amounts of items in each part of the list.")
-                    raise ValueError
-                cluster_labels = np.concatenate(cluster_labels)
-            elif not isinstance(cluster_labels, np.ndarray) and cluster_labels is not None:
-                raise TypeError("'cluster_labels' must be either None, a numpy array of labels or a list of such.")
+            if not isinstance(cluster_labels, np.ndarray):
+                cluster_labels, indices, time_labels = reshape(cluster_labels, indices, time_labels)
         
-            if len(cluster_labels) != len(embeddings):
-                logging.error("Number of embeddings does not match the number of cluster labels.")
-                raise ValueError
             self.cluster_labels = cluster_labels
+
+        for (a, b) in [(usages, embeddings), (usages, cluster_labels), (embeddings, cluster_labels)]:
+            if not (i is None or j is None or len(i) == len(j)):
+                logging.error("The amount of usages, embeddings and cluster labels have to be equal.")
+                raise ValueError
         
         # Split the embeddings into a list of embeddings by time period
         if counts_per_time_period is not None:
             indices = np.cumsum([0] + counts_per_time_period)
         elif indices is None:
-            if usages is not None and all(hasattr(u, "time") for u in usages):
+            if usages is not None and isinstance(usages, list) and all(hasattr(u, "time") for u in usages):
                 # Sort usages by time, and reorder embeddings and cluster labels by the same ordering
                 new_order, sorted_usages = zip(*sorted(enumerate(usages), key = lambda u : u[1].time))
                 usages = list(sorted_usages)
@@ -130,6 +151,7 @@ class Visualizer():
         self.cluster_labels = cluster_labels
         self.indices = indices
         self.time_labels = time_labels
+        self.target = target
 
     def plot_usage_embeddings(self,
                               one_plot=False,
@@ -164,7 +186,7 @@ class Visualizer():
                 time_labels (list, default=None): Labels used in subplot titles for each time period or domain. If 
                     None, falls back to 'self.time_labels' if available.
                 target (str, default=None):
-                    Optional target word, added to the title of the subplot(s).
+                    Optional custom target word, added to the title of the subplot(s).
                 ncols (int, default=3):
                     Number of subplot columns when plotting multiple time periods. Ignored if 'one_plot=True'.
                 plot_w (float, default=15):
@@ -196,7 +218,8 @@ class Visualizer():
             raise ValueError            
 
         n_time_periods = len(indices) - 1
-        time_labels = time_labels or self.time_labels
+        time_labels = time_labels if time_labels is not None else self.time_labels
+        target = target if target is not None else self.target
     
         kwargs["perplexity"] = min(kwargs.get("perplexity", 30), len(self.embeddings) - 1)
         cache_key = generate_cache_key({"emb": self.embeddings, "lr": learning_rate, "init": init, **kwargs})
@@ -265,7 +288,7 @@ class Visualizer():
                 x = period_reduced_embs[:,0]
                 y = period_reduced_embs[:,1]
                 ax.scatter(x,y, c="blue", s=marker_size)
-    
+
             if target:
                 if one_plot or (ncols == 1 and nrows == 1) or time_labels is None:
                     ax.set_title(f"Usages of '{target}'")
