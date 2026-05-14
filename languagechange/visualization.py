@@ -80,6 +80,7 @@ class Visualizer():
             raise ValueError
     
         if cluster_labels is not None:
+            # Initialize from a list of cluster labels belonging to different time periods
             if isinstance(cluster_labels, list) and all(isinstance(l, np.ndarray) for l in cluster_labels):
                 label_indices = np.cumsum([0] + [len(l) for l in cluster_labels])
                 if indices is not None and not (label_indices == indices).all():
@@ -94,7 +95,7 @@ class Visualizer():
                 raise ValueError
             self.cluster_labels = cluster_labels
         
-        # Split the embeddings into a list of embeddings by year
+        # Split the embeddings into a list of embeddings by time period
         if counts_per_time_period is not None:
             indices = np.cumsum([0] + counts_per_time_period)
         elif indices is None:
@@ -136,7 +137,7 @@ class Visualizer():
                               time_labels=None,
                               target=None,
                               ncols=3,
-                              plot_w=15,
+                              plot_w: float =15,
                               plot_cluster_labels=True,
                               plot=True,
                               save_f=None,
@@ -230,7 +231,6 @@ class Visualizer():
             unique_clusters = sorted(set(self.cluster_labels).difference({-1,"-1"}))
             label_index = {-1: -1, "-1": -1} | {l: i for i, l in enumerate(unique_clusters)}
             n_classes = len(unique_clusters)
-            # Generate a colormap with colors that are distinguishable from each other
             cmap = generate_colormap(n_classes)
         
         for t in range(n_time_periods):
