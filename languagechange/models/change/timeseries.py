@@ -1,7 +1,8 @@
 from typing import List, Union
-import numpy as np
-from languagechange.models.change.metrics import GradedChange, APD, PRT, JSD
 import logging
+import numpy as np
+import matplotlib.pyplot as plt
+from languagechange.models.change.metrics import GradedChange, APD, PRT, JSD
 
 
 def moving_average(ts, k):
@@ -185,3 +186,30 @@ class TimeSeries:
         if return_labels:
             return series, ts, list(labels)
         return series, ts
+
+    def plot(self, ymin=None, ymax=None, xlabel=None, ylabel=None, save_f=None):
+        """
+            Plots the time series, with the scores ('self.series') on the y axis and the time values on the x axis.
+
+            Args:
+                ymin (int, optional): the minimum y value for the plot. By default, it will adjust to the time series.
+                ymax (int, optional): the maximum y value for the plot. By default, it will adjust to the time series.
+                xlabel (str, optional): the label to use underneath the x axis.
+                ylabel (str, optional): the label to use next to the y axis.
+                save_f (str, optional): the path to save the figure to. If None, the figure is not saved.
+        """
+        fig, ax = plt.subplots()
+        ax.plot(self.ts, self.series, marker='o')
+        if ymin is not None and ymax is not None:
+            ax.set_ylim(ymin, ymax)
+        elif ymin is not None:
+            ax.set_ylim(bottom=ymin)
+        elif ymax is not None:
+            ax.set_ylim(top=ymax)
+        if xlabel:
+            ax.set_xlabel(xlabel)
+        if ylabel:
+            ax.set_ylabel(ylabel)
+        if save_f is not None:
+            plt.savefig(save_f, dpi=300)
+        plt.show()
