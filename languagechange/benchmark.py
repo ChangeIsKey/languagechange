@@ -28,7 +28,7 @@ from languagechange.models.representation.contextualized import ContextualizedMo
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
-from languagechange.utils import NumericalTime, LiteralTime
+from languagechange.utils import NumericalTime, LiteralTime, generate_colormap
 from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
 
 
@@ -605,35 +605,23 @@ class DWUG(SemanticChangeEvaluationDataset):
             n_clusters = len(unique_labels)
 
             # Generate a colormap with colors that are distinguishable from each other
-            hues = np.linspace(0, 1, n_clusters, endpoint=False)
-            saturations = np.full(n_clusters, 0.5)
-            values = np.tile(np.linspace(0.5, 1, 3), n_clusters//3+1)[:n_clusters]
-            hsv = np.stack([hues, saturations, values], axis=1)
-            including_grey = np.vstack(([(0.7, 0.7, 0.7)], matplotlib.colors.hsv_to_rgb(hsv)))
-            cmap = matplotlib.colors.ListedColormap(including_grey)
-
-            norm = matplotlib.colors.BoundaryNorm(
-                boundaries=np.arange(-1.5, n_clusters + 0.5, 1),
-                ncolors=n_clusters + 1, clip=True)
-
-            discrete_cmap = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap).get_cmap()
+            cmap = generate_colormap(n_classes)
 
             nx.draw_networkx_nodes(
-                graph,
-                pos,
-                node_size=node_size,
-                node_color=clusters,
-                cmap=discrete_cmap,
-                vmin=-1,
-                vmax=n_clusters
-            )
+                judgments_graph, 
+                pos, 
+                node_size=node_size, 
+                node_color=classes, 
+                cmap=cmap, 
+                vmin=-1, 
+                vmax=n_classes)
 
             if plot_cluster_labels:
-                for v in unique_labels:
-                    plt.scatter([], [], c=discrete_cmap(v+1), label=str(rev_mapping[v]))
-                if -1 in clusters:
-                    plt.scatter([], [], c=discrete_cmap(0), label='No cluster')
-                plt.legend()
+                for v in unique_classes:
+                    plt.scatter([],[], c=cmap(v+1), label=str(rev_mapping[v]))
+                if -1 in classes:
+                    plt.scatter([],[], c=cmap(0), label='No cluster')
+                plt.legend(title="Clusters")
         else:
             nx.draw_networkx_nodes(graph, pos, node_color="blue", node_size=node_size)
 
@@ -732,7 +720,9 @@ class DWUG(SemanticChangeEvaluationDataset):
                 transform_labels (Callable): a function which takes a list of labels and returns a label. By default, all labels are kept. As a string, only 'mean' is supported.
                 return_list (bool): if true, return the judgments as a list.
             Returns:
-                (Dict[frozenset, Dict] or List[Dict]) a dictionary {frozenset([id1, id2]) : {'word': word, 'id1': id1, 'text1': text1, 'start1': start1, 'end1': end1, 'id2': id2, 'text2': text2, 'start2': start2, 'end2': end2, 'label': label}} or a list of such dictionaries if return_list is true.
+                (Dict[frozenset, Dict] or List[Dict]) a dictionary {frozenset([id1, id2]) : {'word': word, 'id1': id1, 
+                    'text1': text1, 'start1': start1, 'end1': end1, 'id2': id2, 'text2': text2, 'start2': start2, 
+                    'end2': end2, 'label': label}} or a list of such dictionaries if return_list is true.
         """
 
         judgments = {}
