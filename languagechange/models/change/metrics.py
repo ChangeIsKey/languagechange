@@ -13,11 +13,32 @@ class ChangeModel():
 
 class BinaryChange(ChangeModel):
 
-    def __init__(self):
-        pass
+    def __init__(self, not_exist_max_count=2, exist_min_count=5):
+        """
+        Computes binary change by counting cluster occurrences.
 
-    def predict(self):
-        pass
+        Parameters:
+            not_exist_max_count (int, default=2): the maximum amount of examples allowed in a cluster (for one time 
+                period) in order for it to count as a non-existent/vanished sense of the word, if computing binary 
+                change scores.
+            exist_min_count (int, default=5): the minimum amount of examples needed in a cluster (for one time period) 
+                in order for it to count as an existing/emerged sense of the word, if computnig binary change scores.
+        """
+        self.not_exist_max_count = not_exist_max_count
+        self.exist_min_count = exist_min_count
+
+    def compute_scores(self, cluster_labels1, cluster_labels2):
+        change = False
+        label_counts_t1 = Counter(cluster_labels1)
+        label_counts_t2 = Counter(cluster_labels2)
+        for l in label_counts_t1.keys() | label_counts_t2.keys():
+            if change:
+                return 1
+            c1, c2 = label_counts_t1[l], label_counts_t2[l]
+            change = change or ((c1 < self.not_exist_max_count and c2 > self.exist_min_count) or
+                                (c2 < self.not_exist_max_count and c1 > self.exist_min_count))
+            
+        return int(change)
 
 
 class GradedChange(ChangeModel):
@@ -59,7 +80,7 @@ class OptimalThrehold(Threshold):
         for v in vrange:
             labels = np.array(scores > v, dtype=int)
             score = evaluator(labels)
-            if best_score == None or score > best_score:
+            if best_score is None or score > best_score:
                 best_score = score
                 best_threshold = v
 

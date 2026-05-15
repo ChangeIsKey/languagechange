@@ -2,7 +2,7 @@ from typing import List, Union
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from languagechange.models.change.metrics import GradedChange, APD, PRT, JSD
+from languagechange.models.change.metrics import BinaryChange, GradedChange, APD, PRT, JSD
 
 
 def moving_average(ts, k):
@@ -59,6 +59,8 @@ class TimeSeries:
                 self.ts = time_labels[self.series]
         else:
             self.series = np.array([])
+            self.ts = None
+        self.labels = None
 
     def compute(self,
                 embeddings_or_cluster_labels,
@@ -107,7 +109,7 @@ class TimeSeries:
                 logging.error("Error: if 'change_metric' is a string it must be one of 'APD','PRT' and 'JSD'.")
                 raise ValueError from e
 
-        if not isinstance(change_metric, GradedChange):
+        if not (isinstance(change_metric, GradedChange) or isinstance(change_metric, BinaryChange)):
             logging.error("Error: if 'change_metric' is an object it must be an instance of GradedChange.")
             raise TypeError
 
@@ -135,13 +137,22 @@ class TimeSeries:
                     "* 2d np.ndarray containing embeddings, or\n"
                     "* a 1d np.ndarray or list containing cluster labels.")
                 raise ValueError
-        else:
+        elif isinstance(change_metric, GradedChange):
             if not all(isinstance(e, np.ndarray) and e.ndim == 2 for e in embeddings_or_cluster_labels):
                 logging.error(
                     f"Error: if using {type(change_metric).__name__} as change metric, 'embeddings_or_cluster_labels' "
                      "must be a list of 2d np.ndarray containing embeddings.")
             def compute_scores(e1, e2):
                 return change_metric.compute_scores(e1, e2, distance_metric)
+        elif isinstance(change_metric, BinaryChange):
+            if not all((isinstance(cl, np.ndarray) and cl.ndim == 1) or
+                     isinstance(cl, list) for cl in embeddings_or_cluster_labels):
+                logging.error(
+                    f"Error: if using {type(change_metric).__name__} as change metric, 'embeddings_or_cluster_labels' "
+                     "must be a 1d np.ndarray or list containing cluster labels.")
+            compute_scores = change_metric.compute_scores
+
+        labels = None 
 
         # Compare every time period with the first one
         if timeseries_type == "compare_to_first":
@@ -183,8 +194,9 @@ class TimeSeries:
 
         self.series = series
         self.ts = ts
+        self.labels = labels
         if return_labels:
-            return series, ts, list(labels)
+            return series, ts, list(labels) if labels is not None else labels
         return series, ts
 
     def plot(self, ymin=None, ymax=None, xlabel=None, ylabel=None, save_f=None):

@@ -16,7 +16,8 @@ from languagechange.models.representation.contextualized import ContextualizedMo
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
-from languagechange.models.change.metrics import GradedChange, JSD
+from languagechange.models.change.metrics import BinaryChange, GradedChange, JSD
+from languagechange.models.change.timeseries import TimeSeries
 from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from languagechange.cache import CacheManager
@@ -589,8 +590,14 @@ class WSIPipeline(Pipeline):
         self.clustering = clustering
 
     def evaluate(
-            self, average=True, min_word_frequency=30, json_path=None, table_path=None, return_predictions=False, **
-            kwargs):
+            self, 
+            average=True, 
+            min_word_frequency=30, 
+            json_path=None, 
+            table_path=None, 
+            return_predictions=False, 
+            evaluate=True,
+            **kwargs):
         """
             Evaluate on the WSI task.
 
@@ -639,6 +646,9 @@ class WSIPipeline(Pipeline):
             clustering_results = self.clustering.get_cluster_results(encoded_usages)
             for i, l in enumerate(clustering_results.labels):
                 cluster_labels[ids[i]] = l
+        
+        if not evaluate:
+            return cluster_labels
 
         # Compute ARI and purity scores
         scores = self.dataset.evaluate(cluster_labels, dataset=self.partition,
@@ -730,7 +740,15 @@ class WiCPipeline(Pipeline):
             logging.error('Dataset used for evaluating does not contain any examples.')
             raise ValueError
 
-    def evaluate(self, task, label_func=None, json_path=None, table_path=None, return_predictions=False, **kwargs):
+    def evaluate(
+            self, 
+            task, 
+            label_func=None, 
+            json_path=None, 
+            table_path=None, 
+            return_predictions=False, 
+            evaluate=True,
+            **kwargs):
         """
             Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if 
             task='graded'.
@@ -822,6 +840,9 @@ class WiCPipeline(Pipeline):
                 label = int(self.usage_encoding.get_response(target_usage_list,
                             user_prompt_template=template, response_attribute="wic_label"))
                 labels.append(label)
+        
+        if not evaluate:
+            return labels
 
         if task == 'binary':
             acc = self.dataset.evaluate_accuracy(labels, self.partition)
@@ -886,17 +907,20 @@ class CDPipeline(Pipeline):
 
     def __init__(self, dataset: Union[DWUG, List[Set[TargetUsage]]],
                  usage_encoding,
-                 metric: Union[GradedChange, WiDiD],
+                 metric: Union[BinaryChange, GradedChange, WiDiD],
                  clustering=None,
                  scores: List = None,
                  dataset_name: str = None,
+                 load_sc_dataset=False,
                  usage_cache_dir="~/.cache/languagechange/usages"):
         super().__init__()
         if isinstance(dataset, DWUG) or isinstance(dataset, SemEval2020Task1):
             self.dataset = dataset
-        else:
+        elif load_sc_dataset:
             self.dataset = SemanticChangeEvaluationDataset(name=dataset_name)
             self.dataset.load_from_target_usages(dataset, scores)
+        else:
+            self.dataset = dataset
 
         self.usage_encoding = usage_encoding
         self.metric = metric
@@ -906,51 +930,21 @@ class CDPipeline(Pipeline):
         else:
             self.cache_mgr = None
 
-    def evaluate(self,
-                 task,
-                 not_exist_max_count=2,
-                 exist_min_count=5,
-                 n_sampled_usages=0,
-                 random_seed=None,
-                 json_path=None,
-                 table_path=None,
-                 return_predictions=False,
-                 **kwargs):
-        """
-            Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the 
-            predicted and ground truth change scores, and optionally.
+    def _sample_usages(self, target_usages, generator, n_samples):
+        if n_samples < len(target_usages):
+            return generator.choice(target_usages, size=n_samples, replace=False).tolist()
+        return target_usages
 
-            Args:
-                task (str): the task to evaluate on, 'graded' or 'binary'.
-                not_exist_max_count (int, default=2): the maximum amount of examples allowed in a cluster (for one time period) in 
-                    order for it to count as a non-existent/vanished sense of the word, if computing binary change 
-                    scores.
-                exist_min_count (int, default=5): the minimum amount of examples needed in a cluster (for one time period) in 
-                    order for it to count as an existing/emerged sense of the word, if computnig binary change scores.
-                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
-                    all usages.
-                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
-                    is used.
-                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
-                    results to this json file.
-                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
-                    json_path is also specified, add the results to a table in this file.
+    def _find_usages(self, n_sampled_usages, random_seed):
+        usages = dict()
 
-            Returns:
-                scores (dict): A dictionary containing the Spearman correlation score (rho).
-                cluster_labels (dict, optional): the predicted cluster labels for every word, divided into the two time
-                    periods.
-                change_scores (dict, optional): the predicted change score between t1 and t2 for every word.
-        """
-        if task.lower() not in {"graded", "binary"}:
-            logging.error("'task' has to be one of 'graded' and 'binary'.")
-            raise ValueError
-
-        change_scores = dict()
-        cluster_labels = dict()
+        if isinstance(self.dataset, SemanticChangeEvaluationDataset):
+            all_words = self.dataset.target_words
+        else:
+            all_words = self.dataset.keys()
 
         if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-            all_usages = []
+            usage_list = []
             for corpus in [self.dataset.corpus1_lemma, self.dataset.corpus2_lemma]:
                 search = True
                 if self.cache_mgr:
@@ -964,12 +958,12 @@ class CDPipeline(Pipeline):
                         try:
                             logging.info(f"Loading cached usages from {cache_path}")
                             with open(cache_path, "r") as f:
-                                usages = json.load(f)
+                                corpus_usages = json.load(f)
                                 # When loading from cache, replace 'text_' with 'text'.
-                                usages = UsageDictionary(
+                                corpus_usages = UsageDictionary(
                                     {w: TargetUsageList(
                                         [TargetUsage(**({"text": tu.pop("text_")} | tu)) for tu in tul])
-                                        for w, tul in usages.items()})
+                                        for w, tul in corpus_usages.items()})
                                 search = False
                         except Exception as e:
                             logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
@@ -977,97 +971,162 @@ class CDPipeline(Pipeline):
 
                 if search:
                     logging.info(f"Searching for usages in {corpus.name}...")
-                    usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
+                    corpus_usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
                     if self.cache_mgr:
                         # save the usages to a json file
                         with self.cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
-                            serialized = {w: usages[w].to_dict() for w in usages.keys()}
+                            serialized = {w: corpus_usages[w].to_dict() for w in corpus_usages.keys()}
                             json.dump(serialized, temp_path)
                             logging.info(f"Saved usages to {cache_path}.")
-                all_usages.append(usages)
-
-            target_usages_t1_all_words, target_usages_t2_all_words = tuple(all_usages)
-
-        for word in self.dataset.target_words:
-
-            if isinstance(self.dataset, DWUG) or (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"}):
+                usage_list.append(corpus_usages)
+            for t, usages_per_word in enumerate(usage_list):
+                for w, us in usages_per_word.items():
+                    if w not in usages:
+                        usages[w] = dict()
+                    usages[w][t] = us
+        
+        elif (isinstance(self.dataset, DWUG) or 
+             (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"})):
+            for word in all_words:
                 target_usages = self.dataset.get_word_usages(word)
-                groupings = set(u.grouping for u in target_usages)
-                try:
-                    sorted_groupings = sorted(list(groupings), key=lambda x: int(x.split('-')[0]))
-                except (ValueError, AttributeError):
-                    sorted_groupings = sorted(list(groupings))
-                target_usages_t1 = [u for u in target_usages if u.grouping == sorted_groupings[0]]
-                target_usages_t2 = [u for u in target_usages if u.grouping == sorted_groupings[1]]
+                usages_by_time = dict()
+                for u in target_usages:
+                    g = u.grouping
+                    if g not in usages_by_time:
+                        usages_by_time[g] = []
+                    usages_by_time[g].append(u)
+                usages[word] = usages_by_time
+        
+        elif isinstance(self.dataset, SemanticChangeEvaluationDataset):
+            for word in all_words:
+                usages[word] = {0: self.dataset.target_usages_t1[word], 1: self.dataset.target_usages_t2[word]}
+        
+        # A list of target usages
+        else:
+            for word in all_words:
+                word_usages = self.dataset[word]
+                if isinstance(word_usages, list):
+                    if all(isinstance(u, list) for u in word_usages):
+                        usages_by_time = {i: u for i,u in enumerate(word_usages)}
+                    elif all(isinstance(u, TargetUsage) for u in word_usages):
+                        usages_by_time = dict()
+                        for u in word_usages:
+                            t = u.time
+                            if not t in usages_by_time:
+                                usages_by_time[t] = []
+                            usages_by_time[t].append(u)
+                elif isinstance(word_usages, dict):
+                    usages_by_time = word_usages
+                else:
+                    raise TypeError
+                usages[word] = usages_by_time
 
-            elif isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-                target_usages_t1 = target_usages_t1_all_words[word]
-                target_usages_t2 = target_usages_t2_all_words[word]
+        if n_sampled_usages > 0:
+            for word in all_words:
+                rng = np.random.default_rng(seed=random_seed) #TODO: maybe move this up
+                for t, us in usages[word].items():
+                    usages[word][t] = self._sample_usages(us, rng, n_sampled_usages)
+        
+        return usages
 
-            elif isinstance(self.dataset, SemanticChangeEvaluationDataset):
-                target_usages_t1 = self.dataset.target_usages_t1[word]
-                target_usages_t2 = self.dataset.target_usages_t2[word]
+    def _encode_usages(self, usages):
+        embeddings = dict()
 
-            def get_sampled_usages(target_usages, generator, n_samples):
-                if n_samples < len(target_usages):
-                    return generator.choice(target_usages, size=n_samples, replace=False).tolist()
-                return target_usages
-
-            if n_sampled_usages > 0:
-                rng = np.random.default_rng(seed=random_seed)
-                target_usages_t1 = get_sampled_usages(target_usages_t1, rng, n_sampled_usages)
-                target_usages_t2 = get_sampled_usages(target_usages_t2, rng, n_sampled_usages)
+        for word, usages_by_period in usages.items():
+            embeddings_per_period = dict()
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages_t1 = self.usage_encoding.generate_definitions(
-                    target_usages_t1,
-                    encode_definitions='vectors')
-                encoded_usages_t2 = self.usage_encoding.generate_definitions(
-                    target_usages_t2,
-                    encode_definitions='vectors')
+                for t, us in usages_by_period.items():
+                    embeddings_per_period[t] = self.usage_encoding.generate_definitions(us, encode_definitions='vectors')
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
-                encoded_usages_t1 = self.usage_encoding.encode(target_usages_t1)
-                encoded_usages_t2 = self.usage_encoding.encode(target_usages_t2)
+                for t, us in usages_by_period.items():
+                    embeddings_per_period[t] = self.usage_encoding.encode(us)
+            
+            embeddings[word] = embeddings_per_period
+        
+        return embeddings
+
+    def _compute_scores(self, embeddings, timeseries_type="consecutive"):
+        change_scores = dict()
+        cluster_labels = dict()
+        for word, embeddings_by_period in embeddings.items():
+            periods = embeddings_by_period.keys()
+            try:
+                sorted_periods = sorted(list(periods), key=lambda x: int(x.split('-')[0]))
+            except (ValueError, AttributeError):
+                sorted_periods = sorted(list(periods))
+            embeddings_list = [embeddings_by_period[t] for t in sorted_periods]
+
+            labels = None
 
             # Measure the change using the metric
-            if isinstance(self.metric, JSD) and self.clustering is not None:
-                r = self.metric.compute_scores(
-                    encoded_usages_t1,
-                    encoded_usages_t2,
-                    self.clustering,
-                    return_labels=return_predictions)
-                if return_predictions:
-                    change, labels = r
-                    cluster_labels[word] = labels
-                else:
-                    change = r
-            elif isinstance(self.metric, WiDiD):
+            if isinstance(self.metric, WiDiD):
                 if self.clustering is not None:
                     self.metric = WiDiD(algorithm=self.clustering)
-                labels, _, timeseries = self.metric.compute_scores([encoded_usages_t1, encoded_usages_t2])
-                change = timeseries.series[0]
-                if return_predictions:
-                    cluster_labels[word] = labels
+                labels, time_labels, timeseries = self.metric.compute_scores(embeddings_list)
+                change = timeseries.series
+            
+            elif isinstance(self.metric, BinaryChange):
+                labels = self.clustering.get_cluster_results(np.concatenate(embeddings_list))
+                labels_list = np.array_split(labels, np.cumsum([len(e) for e in embeddings_list[:-1]]))
+                
+                timeseries = TimeSeries()
+                change, time_labels = timeseries.compute(
+                    labels_list,
+                    change_metric=self.metric,
+                    timeseries_type=timeseries_type,
+                    time_labels=sorted_periods
+                )
+            
+            elif isinstance(self.metric, JSD) and self.clustering is not None:
+                timeseries = TimeSeries()
+
+                change, time_labels, labels = timeseries.compute(
+                    embeddings_list, 
+                    change_metric=self.metric,
+                    timeseries_type=timeseries_type,
+                    time_labels=sorted_periods,
+                    clustering_algorithm=self.clustering,
+                    return_labels=True)
+
             else:
-                if task != "graded":
-                    logging.error("Form-based metrics (APD, PRT) can only be used with task='graded'.")
-                change = self.metric.compute_scores(encoded_usages_t1, encoded_usages_t2)
+                timeseries = TimeSeries()
 
-            if task == "binary":
-                change = False
-                label_counts_t1 = Counter(cluster_labels[word][0])
-                label_counts_t2 = Counter(cluster_labels[word][1])
-                for c in label_counts_t1.keys() | label_counts_t2.keys():
-                    c1, c2 = label_counts_t1[c], label_counts_t2[c]
-                    if (c1 < not_exist_max_count and c2 > exist_min_count) or (c2 < not_exist_max_count and c1 > exist_min_count):
-                        change = True
-                        break
-                change_scores[word] = int(change)
+                change, time_labels = timeseries.compute(
+                    embeddings_list, 
+                    change_metric=self.metric,
+                    timeseries_type=timeseries_type,
+                    time_labels=sorted_periods,
+                    clustering_algorithm=self.clustering)
+    
+            if labels is not None:
+                cluster_labels[word] = labels
+            change_scores[word] = change
+        
+        return cluster_labels, change_scores
+        
+    def run_pipeline(self,
+                 n_sampled_usages=0,
+                 random_seed=None,
+                 timeseries_type="consecutive"):
+        """
+            Runs the semantic change pipeline for two or more time-periods.
 
-            else:
-                change_scores[word] = change
+            Args:
+                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
+                    all usages.
+                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
+                    is used.
+                timeseries_type (str): the type of comparison to use (see languagechange.models.change.TimeSeries),
+                    in case multiple time periods are used.
+        """
+        usages = self._find_usages(n_sampled_usages, random_seed)
+        embeddings = self._encode_usages(usages)
+        cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type)
+        return usages, embeddings, cluster_labels, change_scores
 
+    def _evaluate_change_scores(self, change_scores, task, json_path, table_path, **kwargs):
         if task == "graded":
             spearman_r = self.dataset.evaluate_gcd(change_scores)
             scores = {'spearman_r': None if math.isnan(spearman_r.statistic) else spearman_r.statistic}  # Keep rho only
@@ -1098,8 +1157,49 @@ class CDPipeline(Pipeline):
 
             else:
                 logging.error(
-                    "Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")
+                    "Dataset has no 'name' attribute, nor 'version' and 'language' attributes. Scores could therefore not be saved.")   
+        return scores     
+
+    def evaluate(self,
+                 task,
+                 n_sampled_usages=0,
+                 random_seed=None,
+                 json_path=None,
+                 table_path=None,
+                 return_predictions=False,
+                 **kwargs):
+        """
+            Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the 
+            predicted and ground truth change scores, and optionally.
+
+            Args:
+                task (str): the task to evaluate on, 'graded' or 'binary'.
+                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
+                    all usages.
+                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
+                    is used.
+                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
+                    results to this json file.
+                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
+                    json_path is also specified, add the results to a table in this file.
+                return_predictions (bool: default=False): if True, return usages, embeddings, and predicted cluster
+                    labels and change scores along with the evaluation scores.
+            Returns:
+                scores (dict): A dictionary containing the Spearman correlation score (rho).
+                usages (dict, optional): the usages used for every word, divided into the two time periods.
+                embeddings (dict, optional): the embeddings corresponding to each returned usage.
+                cluster_labels (dict, optional): the predicted cluster labels for every word, divided into the two time
+                    periods.
+                change_scores (dict, optional): the predicted change score between t1 and t2 for every word.
+        """
+        if task.lower() not in {"graded", "binary"}:
+            logging.error("'task' has to be one of 'graded' and 'binary'.")
+            raise ValueError
+
+        usages, embeddings, cluster_labels, change_scores = self.run_pipeline(n_sampled_usages, random_seed)
+
+        scores = self._evaluate_change_scores(change_scores, task, json_path, table_path, **kwargs)
 
         if return_predictions:
-            return scores, cluster_labels, change_scores
+            return scores, usages, embeddings, cluster_labels, change_scores
         return scores
