@@ -25,7 +25,7 @@ class LiteralTime(Time):
         return self.time <= other.time
     
     def __repr__(self):
-        return self.time
+        return str(self.time)
 
 
 class NumericalTime(Time):

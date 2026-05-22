@@ -18,6 +18,7 @@ from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
 from languagechange.models.change.metrics import BinaryChange, GradedChange, JSD
 from languagechange.models.change.timeseries import TimeSeries
+from languagechange.models.meaning.clustering import Clustering
 from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from languagechange.cache import CacheManager
@@ -935,13 +936,13 @@ class CDPipeline(Pipeline):
             return generator.choice(target_usages, size=n_samples, replace=False).tolist()
         return target_usages
 
-    def _find_usages(self, n_sampled_usages, random_seed):
+    def _find_usages(self, n_sampled_usages, random_seed, time_attr=None):
         usages = dict()
 
         if isinstance(self.dataset, SemanticChangeEvaluationDataset):
             all_words = self.dataset.target_words
         else:
-            all_words = self.dataset.keys()
+            all_words = set(self.dataset.keys())
 
         if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
             usage_list = []
@@ -987,11 +988,13 @@ class CDPipeline(Pipeline):
         
         elif (isinstance(self.dataset, DWUG) or 
              (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"})):
+            default_time_attr = 'grouping'
+            time_attr = time_attr if time_attr is not None else default_time_attr
             for word in all_words:
                 target_usages = self.dataset.get_word_usages(word)
                 usages_by_time = dict()
                 for u in target_usages:
-                    g = u.grouping
+                    g = getattr(u, time_attr)
                     if g not in usages_by_time:
                         usages_by_time[g] = []
                     usages_by_time[g].append(u)
@@ -1003,6 +1006,8 @@ class CDPipeline(Pipeline):
         
         # A list of target usages
         else:
+            default_time_attr = 'time'
+            time_attr = time_attr if time_attr is not None else default_time_attr
             for word in all_words:
                 word_usages = self.dataset[word]
                 if isinstance(word_usages, list):
@@ -1011,7 +1016,7 @@ class CDPipeline(Pipeline):
                     elif all(isinstance(u, TargetUsage) for u in word_usages):
                         usages_by_time = dict()
                         for u in word_usages:
-                            t = u.time
+                            t = getattr(u, time_attr)
                             if not t in usages_by_time:
                                 usages_by_time[t] = []
                             usages_by_time[t].append(u)
@@ -1020,6 +1025,9 @@ class CDPipeline(Pipeline):
                 else:
                     raise TypeError
                 usages[word] = usages_by_time
+        
+        usages = UsageDictionary({w: u for w, u in usages.items() if u})
+        all_words = set(usages.keys())
 
         if n_sampled_usages > 0:
             for word in all_words:
@@ -1047,7 +1055,7 @@ class CDPipeline(Pipeline):
         
         return embeddings
 
-    def _compute_scores(self, embeddings, timeseries_type="consecutive"):
+    def _compute_scores(self, embeddings, timeseries_type="consecutive", cluster_jointly=True):
         change_scores = dict()
         cluster_labels = dict()
         for word, embeddings_by_period in embeddings.items():
@@ -1067,19 +1075,20 @@ class CDPipeline(Pipeline):
                 labels, time_labels, timeseries = self.metric.compute_scores(embeddings_list)
                 change = timeseries.series
             
-            elif isinstance(self.metric, BinaryChange):
-                labels = self.clustering.get_cluster_results(np.concatenate(embeddings_list))
-                labels_list = np.array_split(labels, np.cumsum([len(e) for e in embeddings_list[:-1]]))
-                
-                timeseries = TimeSeries()
-                change, time_labels = timeseries.compute(
-                    labels_list,
-                    change_metric=self.metric,
-                    timeseries_type=timeseries_type,
-                    time_labels=sorted_periods
-                )
+                """elif isinstance(self.metric, BinaryChange):
+                    labels = Clustering(self.clustering).get_cluster_results(np.concatenate(embeddings_list)).labels
+                    labels_list = np.array_split(labels, np.cumsum([len(e) for e in embeddings_list[:-1]]))
+                    
+                    timeseries = TimeSeries()
+                    change, time_labels = timeseries.compute(
+                        labels_list,
+                        change_metric=self.metric,
+                        timeseries_type=timeseries_type,
+                        time_labels=sorted_periods
+                    )"""
             
-            elif isinstance(self.metric, JSD) and self.clustering is not None:
+            elif ((isinstance(self.metric, JSD) or isinstance(self.metric, BinaryChange)) 
+                  and self.clustering is not None):
                 timeseries = TimeSeries()
 
                 change, time_labels, labels = timeseries.compute(
@@ -1088,6 +1097,7 @@ class CDPipeline(Pipeline):
                     timeseries_type=timeseries_type,
                     time_labels=sorted_periods,
                     clustering_algorithm=self.clustering,
+                    cluster_jointly=cluster_jointly,
                     return_labels=True)
 
             else:
@@ -1098,7 +1108,8 @@ class CDPipeline(Pipeline):
                     change_metric=self.metric,
                     timeseries_type=timeseries_type,
                     time_labels=sorted_periods,
-                    clustering_algorithm=self.clustering)
+                    clustering_algorithm=self.clustering,
+                    cluster_jointly=cluster_jointly)
     
             if labels is not None:
                 cluster_labels[word] = labels
@@ -1109,7 +1120,9 @@ class CDPipeline(Pipeline):
     def run_pipeline(self,
                  n_sampled_usages=0,
                  random_seed=None,
-                 timeseries_type="consecutive"):
+                 timeseries_type="consecutive",
+                 cluster_jointly=True,
+                 time_attr=None):
         """
             Runs the semantic change pipeline for two or more time-periods.
 
@@ -1120,10 +1133,12 @@ class CDPipeline(Pipeline):
                     is used.
                 timeseries_type (str): the type of comparison to use (see languagechange.models.change.TimeSeries),
                     in case multiple time periods are used.
+                time_attr (str, default=None): the attribute to group usages by, overriding the default ('grouping'
+                    for DWUGs, 'time' otherwise).
         """
-        usages = self._find_usages(n_sampled_usages, random_seed)
+        usages = self._find_usages(n_sampled_usages, random_seed, time_attr=time_attr)
         embeddings = self._encode_usages(usages)
-        cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type)
+        cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type, cluster_jointly=cluster_jointly)
         return usages, embeddings, cluster_labels, change_scores
 
     def _evaluate_change_scores(self, change_scores, task, json_path, table_path, **kwargs):

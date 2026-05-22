@@ -32,18 +32,20 @@ class Visualizer():
     """ 
         Visualize usage embeddings across time and optionally inspect underlying usages.
 
-        This class stores embeddings (optionally grouped by time or domain), usages and optional cluster labels. It can 
-        project embeddings to 2D with t-SNE and plot them as scatter plots per time period or domain. It can also 
-        display usages grouped by cluster.
+        This class stores embeddings (optionally grouped by time or domain), usages and optional cluster labels for a 
+        single word. It can project embeddings to 2D with t-SNE and plot them as scatter plots per time period or 
+        domain. It can also display usages grouped by cluster and sorted by time period or domain.
 
         Parameters:
-            embeddings (Union[np.ndarray, list[np.ndarray]]):
+            embeddings (Union[np.ndarray, list[np.ndarray], dict[np.ndarray]]):
                 Embedding vectors of shape (n_samples, n_features). If a list of arrays is provided, each array
                 is treated as a separate time period and concatenated internally.
-            usages (list, default=None):
-                List of usage objects with a '.time' attribute that can be used for sorting. Used to automatically 
-                derive time period boundaries if 'counts_per_time_period' is not provided.
-            cluster_labels (np.ndarray or list[np.ndarray]):
+            usages (Union[list[TargetUsage], dict], default=None):
+                List of TargetUsage objects with a '.time' attribute that can be used for sorting, alt. a dictionary 
+                where the keys correspond to time periods or domains and the values are lists of target usages. 
+                If a flat list, it is used to automatically derive time period boundaries if 'counts_per_time_period' 
+                is not provided.
+            cluster_labels (Union[np.ndarray, list[np.ndarray], dict[np.ndarray]]):
                 Cluster label per embedding (shape: (n_samples,)). If a list is provided, it must mirror the
                 structure of 'embeddings' when embeddings are provided as a list. Label -1 is treated as
                 "No cluster".
@@ -52,21 +54,25 @@ class Visualizer():
                 these counts. If omitted, boundaries may be inferred from 'usages' grouped by 'usage.time'.
             time_labels (list, default=None):
                 Labels for time periods or domain names, used in subplot titles (e.g., years). If not provided and 
-                `usages` is provided, labels may be inferred from `usage.time`.
+                `usages` is provided, labels may be inferred from `usage.time` or a custom time attribute.
+            time_attr (str, default='time'): the attribute to group usages by. Only used if a flat usage list is 
+                provided. Otherwise, the existing grouping is used.
             target (str, default=None):
                 The target word for which usages, embeddings and cluster labels are visualized.
             cache_dir (str or Path, default="~/.cache/languagechange/reduced_embeddings"):
                 Directory used for caching reduced (2D) embeddings for faster repeated plotting.
     """
-    def __init__(self, 
-                 embeddings=None,
+    def __init__(self,
                  usages=None,
+                 embeddings=None,
                  cluster_labels=None,
                  counts_per_time_period=None,
                  time_labels=None,
+                 time_attr='time',
                  target=None,
                  cache_dir="~/.cache/languagechange/reduced_embeddings"):
         self.cache_mgr = CacheManager(cache_dir)
+        self.time_attr = time_attr
 
         indices = None
 
@@ -111,7 +117,7 @@ class Visualizer():
         
             self.cluster_labels = cluster_labels
 
-        for (a, b) in [(usages, embeddings), (usages, cluster_labels), (embeddings, cluster_labels)]:
+        for (i, j) in [(usages, embeddings), (usages, cluster_labels), (embeddings, cluster_labels)]:
             if not (i is None or j is None or len(i) == len(j)):
                 logging.error("The amount of usages, embeddings and cluster labels have to be equal.")
                 raise ValueError
@@ -120,7 +126,7 @@ class Visualizer():
         if counts_per_time_period is not None:
             indices = np.cumsum([0] + counts_per_time_period)
         elif indices is None:
-            if usages is not None and isinstance(usages, list) and all(hasattr(u, "time") for u in usages):
+            if usages is not None and isinstance(usages, list) and all(hasattr(u, self.time_attr) for u in usages):
                 # Sort usages by time, and reorder embeddings and cluster labels by the same ordering
                 new_order, sorted_usages = zip(*sorted(enumerate(usages), key = lambda u : u[1].time))
                 usages = list(sorted_usages)
@@ -128,7 +134,7 @@ class Visualizer():
                 cluster_labels = cluster_labels[list(new_order)] if cluster_labels is not None else None
 
                 # Group usages by time and count each group to automatically derive indices
-                usages_by_time = groupby(usages, key = lambda u : u.time)
+                usages_by_time = groupby(usages, key = lambda u : getattr(u, self.time_attr))
                 counts = []
                 ts = []
                 for t, us in usages_by_time:
@@ -323,7 +329,7 @@ class Visualizer():
     def _display_selected_usages(self, indices):
         for i in indices:
             usage = self.usages[i]
-            display(Markdown(text_formatting(usage, usage.time)))
+            display(Markdown(text_formatting(usage, getattr(usage, self.time_attr))))
 
     def display_usages(self, sort=False, max_usages = None, randomize = False):
         """
@@ -354,11 +360,11 @@ class Visualizer():
             for c in sorted(label_usage_dict):
                 print(f'Cluster {c}:')
                 indices = label_usage_dict[c]
-                times = [self.usages[i].time for i in indices]
+                times = [getattr(self.usages[i], self.time_attr) for i in indices]
                 indices = self._randomize_sort_select(indices, times, sort, randomize, max_usages)
                 self._display_selected_usages(indices)
                 print("-" * 80)
         else:
-            times = [u.time for u in self.usages]
+            times = [getattr(u, self.time_attr) for u in self.usages]
             indices = self._randomize_sort_select(list(range(len(self.usages))), times, sort, randomize, max_usages)
             self._display_selected_usages(indices)

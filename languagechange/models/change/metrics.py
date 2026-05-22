@@ -26,8 +26,17 @@ class BinaryChange(ChangeModel):
         """
         self.not_exist_max_count = not_exist_max_count
         self.exist_min_count = exist_min_count
+    
+    def compute_scores(self, embeddings1, embeddings2, clustering_algorithm, return_labels=False):
+        clustering = Clustering(clustering_algorithm)
+        clustering.get_cluster_results(np.concatenate((embeddings1,embeddings2),axis=0))
+        labels1 = clustering.labels[:len(embeddings1)]
+        labels2 = clustering.labels[len(embeddings1):]
+        if return_labels:
+            return self.compute_scores_from_labels(labels1, labels2), (labels1, labels2)
+        return self.compute_scores_from_labels(labels1, labels2)
 
-    def compute_scores(self, cluster_labels1, cluster_labels2):
+    def compute_scores_from_labels(self, cluster_labels1, cluster_labels2):
         change = False
         label_counts_t1 = Counter(cluster_labels1)
         label_counts_t2 = Counter(cluster_labels2)
@@ -112,7 +121,7 @@ class JSD(GradedChange):
     def __init__(self):
         pass
 
-    def compute_scores(self, embeddings1, embeddings2, clustering_algorithm, metric='cosine', return_labels=False):
+    def compute_scores(self, embeddings1, embeddings2, clustering_algorithm, return_labels=False):
         clustering = Clustering(clustering_algorithm)
         clustering.get_cluster_results(np.concatenate((embeddings1,embeddings2),axis=0))
         labels1 = clustering.labels[:len(embeddings1)]
