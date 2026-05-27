@@ -10,6 +10,8 @@ from pathlib import Path
 
 from languagechange.utils import Time
 
+import numpy as np
+
 
 class POS(enum.Enum):
    NOUN = 1
@@ -93,7 +95,7 @@ class TargetUsageList(list):
 
     def to_dict(self):
         return [tu.to_dict() for tu in self]
-
+                
 
 class UsageDictionary(dict):
 
