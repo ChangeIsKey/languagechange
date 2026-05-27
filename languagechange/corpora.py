@@ -172,7 +172,7 @@ class Line:
 
             if not no_match:
                 for offsets in sorted(token_offsets):
-                    tu = TargetUsage(self.raw_text(), list(offsets), time, id=getattr(self, 'id', 0))
+                    tu = TargetUsage(self.raw_text(), list(offsets), str(pd.to_datetime(time).date()), id=getattr(self, 'id', 0))
                     tul.append(tu)
         else:
             for idx, values in enumerate(zip(*(self.tokens_by_feature(f) for f in search_term.feature_value_pairs.keys()))):
@@ -181,7 +181,7 @@ class Line:
                     if not idx == 0:
                         offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
                     offsets[1] = offsets[0] + len(self.tokens()[idx])
-                    tu = TargetUsage(self.raw_text(), offsets, time, id=getattr(self, 'id', 0))
+                    tu = TargetUsage(self.raw_text(), offsets, str(pd.to_datetime(time).date()), id=getattr(self, 'id', 0))
                     tul.append(tu)
 
         return tul
@@ -224,7 +224,7 @@ class Corpus:
             if not isinstance(st, SearchTerm):
                 st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
             tul = TargetUsageList()
-            usage_dictionary[str(st.feature_value_pairs.items())] = tul
+            usage_dictionary["_".join(f"{k}={v}" for k, v in st.feature_value_pairs.items())] = tul
             for line in self.line_iterator():
                 match: List[TargetUsage] = line.search(st, time=self.time)
                 tul.extend(match)
@@ -607,7 +607,7 @@ class Corpus:
                         for line in corpus.lemmatize(
                                 lemmatizer, split_sentences=split_sentences, batch_size=batch_size):
                             f.write(' '.join(line.lemmas())+'\n')
-                    elif pos:
+                    elif pos_tags:
                         for line in corpus.pos_tagging(
                                 pos_tagger, split_sentences=split_sentences, batch_size=batch_size):
                             f.write(' '.join(line.pos_tags())+'\n')
