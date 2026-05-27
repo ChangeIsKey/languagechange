@@ -169,8 +169,6 @@ class Visualizer():
                               plot_cluster_labels=True,
                               plot=True,
                               save_f=None,
-                              learning_rate="auto",
-                              init="random",
                               **kwargs):
         """
             Plot 2D t-SNE projections of usage embeddings, optionally split into time periods or domains.
@@ -203,10 +201,6 @@ class Visualizer():
                     If True, display the plot using 'plt.show()'.
                 save_f (str or Path, default=None):
                     If provided, save the figure to this file path.
-                learning_rate (str or float, default="auto"):
-                    Learning rate parameter passed to 'sklearn.manifold.TSNE'.
-                init (str or np.ndarray, default="random"):
-                    Initialization method passed to 'sklearn.manifold.TSNE'.
                 **kwargs:
                     Additional keyword arguments forwarded to 'sklearn.manifold.TSNE'.
         """
@@ -228,7 +222,7 @@ class Visualizer():
         target = target if target is not None else self.target
     
         kwargs["perplexity"] = min(kwargs.get("perplexity", 30), len(self.embeddings) - 1)
-        cache_key = generate_cache_key({"emb": self.embeddings, "lr": learning_rate, "init": init, **kwargs})
+        cache_key = generate_cache_key({"emb": self.embeddings, **kwargs})
         cache_path = os.path.join(self.cache_mgr.cache_dir, f"{cache_key}.npy")
         compute_embeddings = True
         if os.path.exists(cache_path):
@@ -241,12 +235,19 @@ class Visualizer():
                 os.remove(cache_path)
         if compute_embeddings:
             logging.info("Projecting embeddings to two dimensions using t-SNE.")
-            tsne = TSNE(n_components=2, learning_rate=learning_rate, init=init, **kwargs)
+            tsne = TSNE(
+                n_components=2, 
+                learning_rate=kwargs.get('learning_rate', "auto"), 
+                init=kwargs.get('init', "random"), 
+                metric=kwargs.get('metric', "cosine"), 
+                **kwargs)
             reduced_embs = tsne.fit_transform(self.embeddings)
             with self.cache_mgr.atomic_write(cache_path) as temp_path:
                 np.save(temp_path, reduced_embs)
                 logging.info("Done. Reduced embeddings were saved.")
-    
+                
+        if ncols > n_time_periods:
+            ncols = n_time_periods
         nrows = math.ceil(n_time_periods / ncols)
         fig, axs = plt.subplots(ncols=ncols, nrows=nrows, sharex = True, sharey = True)
     

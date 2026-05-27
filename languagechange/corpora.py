@@ -97,7 +97,7 @@ class Line:
                 search_term : SearchTerm
             Returns: A TargetUsageList of all matches.
         """
-        time  = getattr(self, 'date', time)
+        time = LiteralTime(getattr(self, 'date', time))
         tul = TargetUsageList()
         for feat in search_term.word_feature:
             if search_term.regex:

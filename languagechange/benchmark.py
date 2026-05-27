@@ -332,7 +332,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                     u['target'].set_lemma(u['lemma'])
                     u['target'].set_pos(u['pos'])
                     u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
-                    u['time'] = LiteralTime(u['date'])
+                    u['time'] = NumericalTime(u['date'])
                     usages.append(DWUGUsage(**u))
 
         elif self.dataset == 'RuShiftEval':
@@ -352,7 +352,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                 u['target'].set_lemma(u['lemma'])
                 u['target'].set_pos(u['pos'])
                 u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
-                u['time'] = LiteralTime(u['date'])
+                u['time'] = NumericalTime(u['date'])
                 usages.append(DWUGUsage(**u))
 
         return usages
@@ -660,7 +660,7 @@ class DWUG(SemanticChangeEvaluationDataset):
                 u['target'].set_lemma(u['lemma'])
                 u['target'].set_pos(u['pos'])
                 u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
-                u['time'] = LiteralTime(u['date'])
+                u['time'] = NumericalTime(u['date'])
                 usages.append(DWUGUsage(**u))
 
         return usages

@@ -1,5 +1,6 @@
 from typing import List, Set, Union
-from collections import Counter
+from collections import Counter, deque
+from datetime import datetime
 import math
 import json
 import pickle
@@ -22,8 +23,12 @@ from languagechange.models.meaning.clustering import Clustering
 from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from languagechange.cache import CacheManager
+from languagechange.utils import Time, NumericalTime, LiteralTime, TimeInterval
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
+
+
+DATE_FORMATS = ["%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]
 
 # Utility function to update a dictionary recursively
 
@@ -930,13 +935,76 @@ class CDPipeline(Pipeline):
             self.cache_mgr = CacheManager(usage_cache_dir)
         else:
             self.cache_mgr = None
+    
+    def _parse_year(self, time : Union[str, int]):
+        """
+            Takes a string or Time describing a date and tries to parse it and return the year.
+        """
+        if isinstance(time, int):
+            return time
+        parsed = None
+        for f in DATE_FORMATS:
+            try:
+                parsed = datetime.strptime(str(time), f)
+                break
+            except ValueError:
+                continue
+        if parsed:
+            return parsed.year
+        return None
+    
+    def _group_by_interval(self, 
+            usages : list[TargetUsage], 
+            intervals : list[TimeInterval],
+            time_attr="time"):
+        ins = deque(sorted(intervals))
+        us = deque(sorted(usages, key = lambda u : getattr(u, time_attr)))
+        usage_dict = dict()
+        t = ins.popleft()
+        u = us.popleft()
+        u_t = getattr(u, time_attr)
+        if not isinstance(u_t, Time):
+            u_t = NumericalTime(self._parse_year(u_t))
+        curr_u = []
+
+        while u and t:
+            if u_t <= t.end:
+                if u_t >= t.start:
+                    curr_u.append(u)
+
+                if us:
+                    u = us.popleft()
+                    u_t = getattr(u, time_attr)
+                    if not isinstance(u_t, Time):
+                        u_t = LiteralTime(self._parse_year(u_t))
+                else:
+                    u = None
+            else:
+                if curr_u:
+                    usage_dict[str(t)] = curr_u
+
+                if ins:
+                    t = ins.popleft()
+                    curr_u = []
+                else:
+                    t = None
+        if curr_u and t:
+            usage_dict[str(t)] = curr_u
+        
+        return usage_dict
+
 
     def _sample_usages(self, target_usages, generator, n_samples):
         if n_samples < len(target_usages):
             return generator.choice(target_usages, size=n_samples, replace=False).tolist()
         return target_usages
 
-    def _find_usages(self, n_sampled_usages, random_seed, time_attr=None):
+    def _find_usages(self, 
+            n_sampled_usages, 
+            random_seed, 
+            time_attr=None, 
+            time_intervals=None, 
+            time_period_length=None):
         usages = dict()
 
         if isinstance(self.dataset, SemanticChangeEvaluationDataset):
@@ -992,12 +1060,23 @@ class CDPipeline(Pipeline):
             time_attr = time_attr if time_attr is not None else default_time_attr
             for word in all_words:
                 target_usages = self.dataset.get_word_usages(word)
-                usages_by_time = dict()
-                for u in target_usages:
-                    g = getattr(u, time_attr)
-                    if g not in usages_by_time:
-                        usages_by_time[g] = []
-                    usages_by_time[g].append(u)
+                if time_period_length:
+                    sorted_usages = sorted(target_usages, key = lambda u : getattr(u, time_attr))
+                    min_t = self._parse_year(getattr(sorted_usages[0], time_attr))
+                    max_t = self._parse_year(getattr(sorted_usages[-1], time_attr))
+                    time_intervals = ([TimeInterval(NumericalTime(t), NumericalTime(t + time_period_length)) 
+                        for t in np.arange(min_t, max_t + 1, time_period_length)])
+                if time_intervals:
+                    usages_by_time = self._group_by_interval(target_usages, time_intervals, time_attr=time_attr)
+                else:
+                    usages_by_time = dict()
+                    for u in target_usages:
+                        g = getattr(u, time_attr)
+                        if isinstance(g, Time):
+                            g = str(g)
+                        if g not in usages_by_time:
+                            usages_by_time[g] = []
+                        usages_by_time[g].append(u)
                 usages[word] = usages_by_time
         
         elif isinstance(self.dataset, SemanticChangeEvaluationDataset):
@@ -1010,20 +1089,41 @@ class CDPipeline(Pipeline):
             time_attr = time_attr if time_attr is not None else default_time_attr
             for word in all_words:
                 word_usages = self.dataset[word]
-                if isinstance(word_usages, list):
-                    if all(isinstance(u, list) for u in word_usages):
-                        usages_by_time = {i: u for i,u in enumerate(word_usages)}
-                    elif all(isinstance(u, TargetUsage) for u in word_usages):
-                        usages_by_time = dict()
-                        for u in word_usages:
-                            t = getattr(u, time_attr)
-                            if not t in usages_by_time:
-                                usages_by_time[t] = []
-                            usages_by_time[t].append(u)
-                elif isinstance(word_usages, dict):
-                    usages_by_time = word_usages
+                if time_period_length or time_intervals:
+                    # This overrides the division already present in the data structure
+                    if isinstance(word_usages, list):
+                        if all(isinstance(u, list) for u in word_usages):
+                            concat_usages = []
+                            for u in word_usages:
+                                concat_usages.extend(u)
+                            word_usages = concat_usages
+                    elif isinstance(word_usages, dict):
+                        concat_usages = []
+                        for u in word_usages.values():
+                            concat_usages.extend(u)
+                        word_usages = concat_usages
+                    if time_period_length:
+                        sorted_usages = sorted(word_usages, key = lambda u : getattr(u, time_attr))
+                        min_t = self._parse_year(getattr(sorted_usages[0], time_attr))
+                        max_t = self._parse_year(getattr(sorted_usages[-1], time_attr))
+                        time_intervals = ([TimeInterval(LiteralTime(str(t)), LiteralTime(str(t + time_period_length))) 
+                            for t in np.arange(min_t, max_t + 1, time_period_length)])
+                    usages_by_time = self._group_by_interval(word_usages, time_intervals, time_attr=time_attr)
                 else:
-                    raise TypeError
+                    if isinstance(word_usages, list):
+                        if all(isinstance(u, list) for u in word_usages):
+                            usages_by_time = {i: u for i,u in enumerate(word_usages)}
+                        elif all(isinstance(u, TargetUsage) for u in word_usages):
+                            usages_by_time = dict()
+                            for u in word_usages:
+                                t = getattr(u, time_attr)
+                                if not t in usages_by_time:
+                                    usages_by_time[t] = []
+                                usages_by_time[t].append(u)
+                    elif isinstance(word_usages, dict):
+                        usages_by_time = word_usages
+                    else:
+                        raise TypeError
                 usages[word] = usages_by_time
         
         usages = UsageDictionary({w: u for w, u in usages.items() if u})
@@ -1045,7 +1145,9 @@ class CDPipeline(Pipeline):
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
                 for t, us in usages_by_period.items():
-                    embeddings_per_period[t] = self.usage_encoding.generate_definitions(us, encode_definitions='vectors')
+                    embeddings_per_period[t] = self.usage_encoding.generate_definitions(
+                        us, 
+                        encode_definitions='vectors')
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 for t, us in usages_by_period.items():
@@ -1074,18 +1176,6 @@ class CDPipeline(Pipeline):
                     self.metric = WiDiD(algorithm=self.clustering)
                 labels, time_labels, timeseries = self.metric.compute_scores(embeddings_list)
                 change = timeseries.series
-            
-                """elif isinstance(self.metric, BinaryChange):
-                    labels = Clustering(self.clustering).get_cluster_results(np.concatenate(embeddings_list)).labels
-                    labels_list = np.array_split(labels, np.cumsum([len(e) for e in embeddings_list[:-1]]))
-                    
-                    timeseries = TimeSeries()
-                    change, time_labels = timeseries.compute(
-                        labels_list,
-                        change_metric=self.metric,
-                        timeseries_type=timeseries_type,
-                        time_labels=sorted_periods
-                    )"""
             
             elif ((isinstance(self.metric, JSD) or isinstance(self.metric, BinaryChange)) 
                   and self.clustering is not None):
@@ -1122,7 +1212,10 @@ class CDPipeline(Pipeline):
                  random_seed=None,
                  timeseries_type="consecutive",
                  cluster_jointly=True,
-                 time_attr=None):
+                 time_attr=None,
+                 time_intervals=None,
+                 time_period_length=None
+                 ):
         """
             Runs the semantic change pipeline for two or more time-periods.
 
@@ -1136,7 +1229,13 @@ class CDPipeline(Pipeline):
                 time_attr (str, default=None): the attribute to group usages by, overriding the default ('grouping'
                     for DWUGs, 'time' otherwise).
         """
-        usages = self._find_usages(n_sampled_usages, random_seed, time_attr=time_attr)
+        usages = self._find_usages(
+            n_sampled_usages, 
+            random_seed, 
+            time_attr=time_attr, 
+            time_intervals=time_intervals,
+            time_period_length=time_period_length
+            )
         embeddings = self._encode_usages(usages)
         cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type, cluster_jointly=cluster_jointly)
         return usages, embeddings, cluster_labels, change_scores
