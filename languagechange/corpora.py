@@ -942,6 +942,8 @@ class ParquetCorpus(Corpus):
                     rename(columns={self.date_name: "time"})
                 )
 
+                chunk_targets["time"] = chunk_targets["time"].apply(LiteralTime)
+
                 # Add to usage dictionary
                 for target, group in chunk_targets.groupby("target"):
                     tul = [TargetUsage(**tu) for tu in group.to_dict("records")]
