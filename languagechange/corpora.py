@@ -205,7 +205,7 @@ class Corpus:
         self.skip_lines = skip_lines
 
     def search(self,
-               search_terms: List[str | Pattern | SearchTerm]
+               search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]]
                ) -> UsageDictionary:
         """
             Searches through the corpora by calling Line.search() on all lines.
@@ -218,13 +218,15 @@ class Corpus:
 
             Returns: A UsageDictionary containing all search results for each search term.
         """
+        if not isinstance(search_terms, list):
+            search_terms = [search_terms]
 
         usage_dictionary = UsageDictionary()
         for st in search_terms:
             if not isinstance(st, SearchTerm):
                 st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
             tul = TargetUsageList()
-            usage_dictionary["_".join(f"{k}={v}" for k, v in st.feature_value_pairs.items())] = tul
+            usage_dictionary[str(st)] = tul
             for line in self.line_iterator():
                 match: List[TargetUsage] = line.search(st, time=self.time)
                 tul.extend(match)
@@ -832,7 +834,7 @@ class ParquetCorpus(Corpus):
                     })
 
     def search(self,
-               search_terms: List[str | Pattern | SearchTerm],
+               search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]],
                chunk_size: int = 10 ** 6,
                split=None
                ):
@@ -854,6 +856,8 @@ class ParquetCorpus(Corpus):
         Returns:
             UsageDictionary: a dictionary of `TargetUsageList` objects for each search term.
         """
+        if not isinstance(search_terms, list):
+            search_terms = [search_terms]
         usages = defaultdict(list)
 
         for i, st in enumerate(search_terms):
@@ -892,7 +896,7 @@ class ParquetCorpus(Corpus):
                         else:
                             term_matches &= chunk_occurrences[self.column_names[f]] == v
                     all_matches |= term_matches
-                    chunk_occurrences.loc[term_matches,"target"] = "_".join(f"{k}={v}" for k, v in features_values)
+                    chunk_occurrences.loc[term_matches,"target"] = str(st)
 
                 chunk_occurrences = chunk_occurrences[all_matches]
                 

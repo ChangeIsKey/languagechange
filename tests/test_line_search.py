@@ -24,7 +24,7 @@ def test_tokens_by_feature_invalid(line_data):
 
 
 def test_line_search_returns_correct_offsets(line_data):
-    term = SearchTerm("beta", word_feature="token")
+    term = SearchTerm(token="beta")
     usages = line_data.search(term)
     assert len(usages) == 1
     usage = usages[0]
@@ -34,7 +34,7 @@ def test_line_search_returns_correct_offsets(line_data):
 
 
 def test_line_search_can_use_different_features(line_data):
-    term = SearchTerm("gamma", word_feature="lemma")
+    term = SearchTerm(lemma="gamma")
     usages = line_data.search(term)
     assert len(usages) == 1
     usage = usages[0]

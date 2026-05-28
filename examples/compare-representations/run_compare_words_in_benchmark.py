@@ -28,6 +28,7 @@ from languagechange.models.representation.static import StaticModel, CountModel,
 from languagechange.corpora import LinebyLineCorpus
 from languagechange.models.representation.alignment import OrthogonalProcrustes
 from languagechange.models.representation.contextualized import BERT, XL_LEXEME
+from languagechange.search import SearchTerm
 
 
 def corpus_to_static_embeddings(corpus: LinebyLineCorpus, model_type : StaticModel = SVD):
@@ -178,14 +179,16 @@ if __name__ == '__main__':
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    usages = corpus2.search(['bank'])
-    random.shuffle(usages['bank'])
-    usages['bank'] = usages['bank'][:100]
+    term = SearchTerm('bank')
+    term_str_rep = str(term)
+    usages = corpus2.search(term)
+    random.shuffle(usages[term_str_rep])
+    usages[term_str_rep] = usages[term_str_rep][:100]
 
     bert = BERT('bert-base-uncased',device=device)
-    vectors_bert = bert.encode(usages['bank'])
-    project_embeddings(vectors_bert, usages['bank'])
+    vectors_bert = bert.encode(usages[term_str_rep])
+    project_embeddings(vectors_bert, usages[term_str_rep])
 
     model = XL_LEXEME(device=device)
-    vectors_xl_lexeme = model.encode(usages['bank'])
-    project_embeddings(vectors_xl_lexeme, usages['bank'])
+    vectors_xl_lexeme = model.encode(usages[term_str_rep])
+    project_embeddings(vectors_xl_lexeme, usages[term_str_rep])
