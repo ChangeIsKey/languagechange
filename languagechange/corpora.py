@@ -219,6 +219,7 @@ class Corpus:
                     If a search term is str or Pattern it is converted
                     to a SearchTerm and matches tokens only
                     SearchTerm(word_feature = 'token').
+                parse_date (str, default='simple'): passed to `self.line_iterator`, if applicable.
 
             Returns: A UsageDictionary containing all search results for each search term.
         """
@@ -862,6 +863,9 @@ class ParquetCorpus(Corpus):
             chunk_size (int): number of rows to load per batch.
             split (str|None): dataset split to use when reading from a Hugging Face dataset. If none, all splits are 
                 searched.
+            parse_date (str, default='simple'): how to parse dates (and times). If 'none', the dates are only converted 
+                to strings. If 'simple', the dates are assumed to be in ISO format, and only YYYY-MM-DD are kept by
+                cutting the string. If 'advanced', uses pd.to_datetime to parse dates (flexible but slow).
 
         Returns:
             UsageDictionary: a dictionary of `TargetUsageList` objects for each search term.
@@ -1148,6 +1152,14 @@ class XMLCorpus(Corpus):
         return tag.attrib[attribute]
 
     def line_iterator(self, parse_date="simple"):
+        """
+        Iterates through all sentences in the XML file.
+
+        Args:
+            parse_date (str, default='simple'): how to parse dates (and times). If 'none', the dates are only converted 
+                to strings. If 'simple', the dates are assumed to be in ISO format, and only YYYY-MM-DD are kept by
+                cutting the string. If 'advanced', uses pd.to_datetime to parse dates (flexible but slow).
+        """
         if os.path.isdir(self.path):
             fnames = self.folder_iterator(self.path)
         else:
