@@ -9,6 +9,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 import lxml.etree as ET
 from sortedcontainers import SortedKeyList
+from inspect import signature
+
 import trankit
 import pandas as pd
 import pyarrow as pa
@@ -20,7 +22,7 @@ from datasets.dataset_dict import DatasetDict
 from languagechange.resource_manager import LanguageChange
 from languagechange.search import SearchTerm
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
-from languagechange.utils import LiteralTime
+from languagechange.utils import LiteralTime, PARSE_DATE_SIMPLE, PARSE_DATE_ADV
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -109,9 +111,9 @@ class Line:
         """
         time = getattr(self, 'date', time)
         tul = TargetUsageList()
-        
+
         if search_term.regex:
-            
+
             def search_func(regexp, line):
                 """
                     Finds all occurences in 'line' (possibly multiple lines) matching the 'regexp' (possibly multiple
@@ -152,7 +154,7 @@ class Line:
                     feat_acc_chars += len(feat) + 1
                     token_acc_chars += len(token) + 1
                 return token_offsets
-            
+
             token_offsets = set()
 
             no_match = False
@@ -172,16 +174,17 @@ class Line:
 
             if not no_match:
                 for offsets in sorted(token_offsets):
-                    tu = TargetUsage(self.raw_text(), list(offsets), str(pd.to_datetime(time).date()), id=getattr(self, 'id', 0))
+                    tu = TargetUsage(self.raw_text(), list(offsets), time, id=getattr(self, 'id', 0))
                     tul.append(tu)
         else:
-            for idx, values in enumerate(zip(*(self.tokens_by_feature(f) for f in search_term.feature_value_pairs.keys()))):
+            for idx, values in enumerate(
+                    zip(*(self.tokens_by_feature(f) for f in search_term.feature_value_pairs.keys()))):
                 if list(values) == list(search_term.feature_value_pairs.values()):
                     offsets = [0, 0]
                     if not idx == 0:
                         offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
                     offsets[1] = offsets[0] + len(self.tokens()[idx])
-                    tu = TargetUsage(self.raw_text(), offsets, str(pd.to_datetime(time).date()), id=getattr(self, 'id', 0))
+                    tu = TargetUsage(self.raw_text(), offsets, time, id=getattr(self, 'id', 0))
                     tul.append(tu)
 
         return tul
@@ -205,7 +208,8 @@ class Corpus:
         self.skip_lines = skip_lines
 
     def search(self,
-               search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]]
+               search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]],
+               parse_date="simple"
                ) -> UsageDictionary:
         """
             Searches through the corpora by calling Line.search() on all lines.
@@ -227,7 +231,12 @@ class Corpus:
                 st = SearchTerm(st, regex=True if isinstance(st, Pattern) else False)
             tul = TargetUsageList()
             usage_dictionary[str(st)] = tul
-            for line in self.line_iterator():
+            sig = signature(self.line_iterator)
+            if "parse_date" in sig.parameters:
+                it = self.line_iterator(parse_date=parse_date)
+            else:
+                it = self.line_iterator()
+            for line in it:
                 match: List[TargetUsage] = line.search(st, time=self.time)
                 tul.extend(match)
         n_usages = sum(map(len, usage_dictionary.values()))
@@ -644,7 +653,7 @@ class Corpus:
                         # tokenize only
                         for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
                             write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-    
+
     def __iter__(self):
         yield from self.line_iterator()
 
@@ -732,7 +741,7 @@ class LinebyLineCorpus(Corpus):
 class ParquetCorpus(Corpus):
     def __init__(self,
                  path: str,
-                 load_from_huggingface_hub: bool =False,
+                 load_from_huggingface_hub: bool = False,
                  token_level_features: set = {"token", "lemma", 'pos_tag'},
                  sentence_level_features: set = {"id", "date"},
                  column_names: dict = None,
@@ -760,12 +769,12 @@ class ParquetCorpus(Corpus):
         self.column_names = {f: f for f in token_level_features.union(sentence_level_features)}
         if column_names:
             self.column_names.update(column_names)
-        
+
         self.rev_column_names = {name: feature for feature, name in self.column_names.items()}
         if not len(self.rev_column_names) == len(self.column_names):
             logging.error("Two features have the same name.")
             raise ValueError
-        
+
         self.token_name = self.column_names["token"]
         self.id_name = self.column_names["id"]
         self.date_name = self.column_names["date"]
@@ -836,7 +845,8 @@ class ParquetCorpus(Corpus):
     def search(self,
                search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]],
                chunk_size: int = 10 ** 6,
-               split=None
+               split=None,
+               parse_date="simple"
                ):
         """
         Search the corpus for token-level matches against any of the search terms and return the target usages 
@@ -858,6 +868,19 @@ class ParquetCorpus(Corpus):
         """
         if not isinstance(search_terms, list):
             search_terms = [search_terms]
+        if parse_date is None or parse_date == "none":
+            def parse_date(d): 
+                return d.apply(str)
+        elif parse_date == "simple":
+            def parse_date(d):
+                return d.apply(str).apply(PARSE_DATE_SIMPLE)
+        elif parse_date == "advanced":
+            def parse_date(d):
+                return (pd.to_datetime(d.apply(str)).dt.tz_localize(None).dt.strftime("%Y-%m-%d"))
+        else:
+            raise ValueError("`parse_date` must be one of ['none', 'simple' and 'advanced'].")
+
+
         usages = defaultdict(list)
 
         for i, st in enumerate(search_terms):
@@ -879,7 +902,6 @@ class ParquetCorpus(Corpus):
                     chunk = batch.to_pandas()
                 else:
                     chunk = pd.DataFrame(batch)
-                chunk[self.date_name] = pd.to_datetime(chunk[self.date_name].apply(str)).dt.tz_localize(None)
 
                 chunk.index = range(start_index, start_index + len(chunk))
                 start_index += len(chunk)
@@ -896,10 +918,10 @@ class ParquetCorpus(Corpus):
                         else:
                             term_matches &= chunk_occurrences[self.column_names[f]] == v
                     all_matches |= term_matches
-                    chunk_occurrences.loc[term_matches,"target"] = str(st)
+                    chunk_occurrences.loc[term_matches, "target"] = str(st)
 
                 chunk_occurrences = chunk_occurrences[all_matches]
-                
+
                 if chunk_occurrences.empty:
                     continue
 
@@ -937,7 +959,7 @@ class ParquetCorpus(Corpus):
                 )
                 chunk_targets = chunk_targets.merge(chunk_sentences, on=self.id_name)
                 if self.date_name in chunk_targets:
-                    chunk_targets[self.date_name] = chunk_targets[self.date_name].dt.strftime("%Y-%m-%d")
+                    chunk_targets[self.date_name] = parse_date(chunk_targets[self.date_name])
                 chunk_targets['offsets'] = chunk_targets[['start', 'end']].apply(lambda row: row.values, axis=1)
 
                 chunk_targets = (
@@ -1125,11 +1147,20 @@ class XMLCorpus(Corpus):
     def get_attribute(self, tag, attribute):
         return tag.attrib[attribute]
 
-    def line_iterator(self):
+    def line_iterator(self, parse_date="simple"):
         if os.path.isdir(self.path):
             fnames = self.folder_iterator(self.path)
         else:
             fnames = [self.path]
+
+        if parse_date is None or parse_date == "none":
+            parse_date = str
+        elif parse_date == "simple":
+            parse_date = PARSE_DATE_SIMPLE
+        elif parse_date == "advanced":
+            parse_date = PARSE_DATE_ADV
+        else:
+            raise ValueError("`parse_date` must be one of ['none', 'simple' and 'advanced'].")
 
         def get_data(tokens, lemmas=[], pos_tags=[]):
             data = {}
@@ -1146,13 +1177,17 @@ class XMLCorpus(Corpus):
             lemmas = []
             pos_tags = []
             curr_id = None
-            date = None
+            curr_date = None
+            curr_time = None
             parser = ET.iterparse(source, events=('start', 'end'))
 
             for event, elem in parser:
                 if elem.sourceline >= self.skip_lines:
                     if elem.tag == self.text_tag:
-                        date = elem.get('date', None)
+                        new_date = elem.get('date', None)
+                        if new_date != curr_date:
+                            curr_date = new_date
+                            curr_time = LiteralTime(parse_date(curr_date)) if curr_date is not None else None
                     if elem.tag == self.sentence_tag:
                         if event == 'start':
                             sentence_id = elem.get('id', None)
@@ -1160,8 +1195,8 @@ class XMLCorpus(Corpus):
                             if sentence_id != curr_id:
                                 if tokens:
                                     data = get_data(tokens, lemmas, pos_tags)
-                                    if date is not None:
-                                        data['date'] = date
+                                    if curr_time is not None:
+                                        data['date'] = curr_time
                                     data['id'] = curr_id
                                     yield Line(fname=fname, **data)
                                 curr_id = sentence_id
@@ -1188,7 +1223,7 @@ class XMLCorpus(Corpus):
             # Yield the last sentence
             if tokens:
                 data = get_data(tokens, lemmas, pos_tags)
-                data['date'] = date
+                data['date'] = curr_time
                 line_id = sentence_id
                 data['id'] = line_id
                 yield Line(fname=fname, **data)
@@ -1208,7 +1243,7 @@ class XMLCorpus(Corpus):
                 raise Exception('Format not recognized')
 
     # Cast to a LineByLine corpus and save the result in the path specified in there
-    def cast_to_linebyline(self, linebyline_corpus_or_path = None):
+    def cast_to_linebyline(self, linebyline_corpus_or_path=None):
         if linebyline_corpus_or_path is None:
             basename = os.path.splitext(self.path)[0]
             linebyline_corpus = LinebyLineCorpus(basename + ".txt")
