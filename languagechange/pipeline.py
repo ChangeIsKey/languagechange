@@ -13,6 +13,8 @@ import csv
 import copy
 from pydantic import BaseModel, Field
 import numpy as np
+import pandas as pd
+
 from languagechange.models.representation.contextualized import ContextualizedModel
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
@@ -28,12 +30,8 @@ from languagechange.utils import Time, NumericalTime, LiteralTime, TimeInterval
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
 
-DATE_FORMATS = ["%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]
-
-# Utility function to update a dictionary recursively
-
-
 def deep_update(d, u):
+    # Utility function to update a dictionary recursively
     for k, v in u.items():
         if isinstance(v, dict):
             if k in d and isinstance(d[k], dict):
@@ -942,16 +940,12 @@ class CDPipeline(Pipeline):
         """
         if isinstance(time, int):
             return time
-        parsed = None
-        for f in DATE_FORMATS:
-            try:
-                parsed = datetime.strptime(str(time), f)
-                break
-            except ValueError:
-                continue
-        if parsed:
+        try:
+            parsed = pd.to_datetime(str(time))
             return parsed.year
-        return None
+        except ValueError as e:
+            logging.error(f"Could not parse the date '{str(time)}' due to {e}")
+            raise e
     
     def _group_by_interval(self, 
             usages : list[TargetUsage], 
@@ -1117,6 +1111,8 @@ class CDPipeline(Pipeline):
                             usages_by_time = dict()
                             for u in word_usages:
                                 t = getattr(u, time_attr)
+                                if isinstance(t, Time):
+                                    t = t.time
                                 if not t in usages_by_time:
                                     usages_by_time[t] = []
                                 usages_by_time[t].append(u)
@@ -1197,9 +1193,7 @@ class CDPipeline(Pipeline):
                     embeddings_list, 
                     change_metric=self.metric,
                     timeseries_type=timeseries_type,
-                    time_labels=sorted_periods,
-                    clustering_algorithm=self.clustering,
-                    cluster_jointly=cluster_jointly)
+                    time_labels=sorted_periods)
     
             if labels is not None:
                 cluster_labels[word] = labels
