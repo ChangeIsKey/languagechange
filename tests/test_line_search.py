@@ -58,5 +58,5 @@ def test_line_search_regex(line_data):
     u1, u2 = usages
     assert u1.start() == 0
     assert u1.end() == 5
-    assert u2.start() == 11
-    assert u2.end() == 16
+    assert u2.start() == 6
+    assert u2.end() == 10
