@@ -20,5 +20,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install .
           pip install pytest
+          wget https://spraakbanken.gu.se/resurser/meningsmangder/svt-2004.xml.bz2
+          test -f svt-2004.xml.bz2
       - name: Run pytest suite
         run: pytest tests

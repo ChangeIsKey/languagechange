@@ -1075,8 +1075,9 @@ class VerticalCorpus(Corpus):
                         delimiter: str = "\t",
                         **kwargs) -> None:
         if parquet_corpus_or_path is None:
-            basename = os.path.splitext(self.path)[0]
-            parquet_corpus = ParquetCorpus(Path(basename + ".parquet"), **kwargs)
+            extensions = "".join(Path(self.path).suffixes)
+            pq_name = str(self.path).replace(extensions, ".parquet")
+            parquet_corpus = ParquetCorpus(Path(pq_name), **kwargs)
         elif isinstance(parquet_corpus_or_path, str):
             parquet_corpus = ParquetCorpus(Path(parquet_corpus_or_path), **kwargs)
         elif isinstance(parquet_corpus_or_path, ParquetCorpus):
@@ -1288,9 +1289,10 @@ class XMLCorpus(Corpus):
 
     def cast_to_vertical(self, vertical_corpus_or_path=None, write_header=True):
         if vertical_corpus_or_path is None:
-            basename = os.path.splitext(self.path)[0]
+            extensions = "".join(Path(self.path).suffixes)
+            vrt_name = str(self.path).replace(extensions, ".tsv")
             vertical_corpus = VerticalCorpus(
-                basename + ".tsv",
+                vrt_name,
                 field_map={k: i for i, k in enumerate(["token", "lemma", 'pos_tag', "id", "date"])})
         elif isinstance(vertical_corpus_or_path, str):
             vertical_corpus = VerticalCorpus(
@@ -1316,7 +1318,7 @@ class XMLCorpus(Corpus):
                 'lemma': line.lemmas(),
                 'pos_tag': line.pos_tags(),
                 'id': line.id,
-                'date': line.date}
+                'date': str(line.date)}
             return field_name_to_line_feature[key]
 
         with open(savepath, 'w', newline='') as csvfile:
@@ -1333,9 +1335,10 @@ class XMLCorpus(Corpus):
                     csvfile.write(sentence_separator)
 
     def cast_to_parquet(self, parquet_corpus_or_path=None, keep_tsv=False):
-        basename = os.path.splitext(self.path)[0]
+        extensions = "".join(Path(self.path).suffixes)
+        vrt_name = str(self.path).replace(extensions, ".tsv")
         c = VerticalCorpus(
-            basename + ".tsv",
+            vrt_name,
             field_map={k: i for i, k in enumerate(["token", "lemma", 'pos_tag', "id", "date"])},
             sentence_separator=None,
             has_header=True)

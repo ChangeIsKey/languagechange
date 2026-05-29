@@ -40,3 +40,23 @@ def test_line_search_can_use_different_features(line_data):
     usage = usages[0]
     assert usage.start() == 11
     assert usage.end() == 16
+
+
+def test_line_search_can_use_multiple_features(line_data):
+    term = SearchTerm(token="gamma", lemma="gamma")
+    usages = line_data.search(term)
+    assert len(usages) == 1
+    usage = usages[0]
+    assert usage.start() == 11
+    assert usage.end() == 16
+
+
+def test_line_search_regex(line_data):
+    term = SearchTerm(token=r"(alpha|beta)", regex=True)
+    usages = line_data.search(term)
+    assert len(usages) == 2
+    u1, u2 = usages
+    assert u1.start() == 0
+    assert u1.end() == 5
+    assert u2.start() == 11
+    assert u2.end() == 16
