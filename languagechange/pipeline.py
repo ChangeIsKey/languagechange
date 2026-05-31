@@ -1196,8 +1196,11 @@ class CDPipeline(Pipeline):
                     time_labels=sorted_periods)
     
             if labels is not None:
-                cluster_labels[word] = labels
-            change_scores[word] = change
+                if cluster_jointly:
+                    cluster_labels[word] = {sorted_periods[i]: l for i, l in enumerate(labels)}
+                else:
+                    cluster_labels[word] = {time_labels[i]: l for i, l in enumerate(labels)}
+            change_scores[word] = {time_labels[i]: c for i, c in enumerate(change)}
         
         return cluster_labels, change_scores
         
@@ -1208,7 +1211,8 @@ class CDPipeline(Pipeline):
                  cluster_jointly=True,
                  time_attr=None,
                  time_intervals=None,
-                 time_period_length=None
+                 time_period_length=None,
+                 return_type="dict"
                  ):
         """
             Runs the semantic change pipeline for two or more time-periods.
@@ -1232,6 +1236,9 @@ class CDPipeline(Pipeline):
             )
         embeddings = self._encode_usages(usages)
         cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type, cluster_jointly=cluster_jointly)
+        if return_type == "list":
+            usages, embeddings, cluster_labels, change_scores = ({w: list(dd.values()) for w, dd in d.items()} 
+                for d in (usages, embeddings, cluster_labels, change_scores))
         return usages, embeddings, cluster_labels, change_scores
 
     def _evaluate_change_scores(self, change_scores, task, json_path, table_path, **kwargs):
