@@ -964,7 +964,9 @@ class ParquetCorpus(Corpus):
                 chunk_targets = chunk_targets.merge(chunk_sentences, on=self.id_name)
                 if self.date_name in chunk_targets:
                     chunk_targets[self.date_name] = parse_date(chunk_targets[self.date_name])
-                chunk_targets['offsets'] = chunk_targets[['start', 'end']].apply(lambda row: row.values, axis=1)
+                chunk_targets['offsets'] = (chunk_targets[['start', 'end']]
+                    .apply(lambda row: row.values, axis=1)
+                    .apply(lambda row: row.tolist()))
 
                 chunk_targets = (
                     chunk_targets.
@@ -1454,7 +1456,7 @@ class HistoricalCorpus(SortedKeyList):
         """
 
         if index_by_corpus:
-            usages = {}  # TODO: make this saveable
+            usages = {}
             for corpus in self:
                 try:
                     usage_dict: UsageDictionary = corpus.search(search_terms)
