@@ -3,14 +3,13 @@ import pickle
 import logging
 import os
 import re
-
-import jsonlines
-
+from collections import deque
 from pathlib import Path
 
-from languagechange.utils import Time
-
+import jsonlines
 import numpy as np
+
+from languagechange.utils import Time, LiteralTime, NumericalTime, TimeInterval, _parse_year
 
 
 class POS(enum.Enum):
@@ -57,7 +56,7 @@ class TargetUsage:
         return self.time
 
     def to_dict(self):
-        d = self.__dict__
+        d = self.__dict__.copy()
         d['time'] = str(d['time'])
         return d
 
@@ -95,9 +94,162 @@ class TargetUsageList(list):
 
     def to_dict(self):
         return [tu.to_dict() for tu in self]
+
+    def group_by_interval(self,
+            intervals : list[TimeInterval],
+            time_attr="time",
+            use_year=False):
+        """
+        Group usages by time interval.
+
+        Each usage is assigned to the interval whose boundaries contain the value of ``time_attr`` (by default, 
+        'time'). The result is returned as a UsageDictionary whose keys are string representations of the intervals.
+
+        Args:
+            intervals (list[TimeInterval]): time intervals used for grouping.
+            time_attr (str, default="time"): name of the usage attribute containing temporal information.
+            use_year (bool, default=False): if True, groups usages by year. Otherwise, exact dates are used.
+
+        Returns:
+            UsageDictionary: mapping from interval strings to TargetUsageList objects containing the usages that fall 
+                within each interval.
+        """
+        def get_time(u):
+            u_t = getattr(u, time_attr)
+            if not isinstance(u_t, Time) or use_year:
+                u_t = LiteralTime(str(_parse_year(u_t)))
+            return u_t
+
+        ins = deque(sorted(intervals))
+        us = deque(sorted(self, key = lambda u : get_time(u)))
+        usage_dict = UsageDictionary()
+        t = ins.popleft()
+        u = us.popleft()
+        u_t = get_time(u)
+        curr_u = TargetUsageList()
+
+        while u and t:
+            if u_t <= t.end:
+                if u_t >= t.start:
+                    curr_u.append(u)
+
+                if us:
+                    u = us.popleft()
+                    u_t = get_time(u)
+                else:
+                    u = None
+            else:
+                if curr_u:
+                    t_rep = str(t.start) if t.start == t.end else str(t)
+                    usage_dict[t_rep] = curr_u
+
+                if ins:
+                    t = ins.popleft()
+                    curr_u = TargetUsageList()
+                else:
+                    t = None
+        if curr_u and t:
+            t_rep = str(t.start) if t.start == t.end else str(t)
+            usage_dict[t_rep] = curr_u
+        
+        return usage_dict
+
+    def group_by_time(self, times=None, time_attr="time", use_year=True):
+        """
+        Group usages by time point.
+
+        If ``times`` is not provided, usages are grouped by year inferred from ``time_attr`` (by default, 'time'). 
+        Otherwise, usages are grouped according to the supplied time points, by exact matching.
+
+        Args:
+            times (list[Time], optional): explicit time points to group by.
+            time_attr (str, default="time"): name of the usage attribute containing temporal information.
+            use_year (bool, default=True): if True, groups usages by year. Otherwise, exact time values are used.
+
+        Returns:
+            UsageDictionary: mapping from time labels to TargetUsageList objects.
+        """
+        if times is None:
+            sorted_years = sorted(set(_parse_year(getattr(u, time_attr)) for u in self))
+            intervals = [TimeInterval(LiteralTime(str(y)), LiteralTime(str(y))) for y in sorted_years]
+        else:
+            intervals = [TimeInterval(t, t) for t in times]
+        return self.group_by_interval(intervals, time_attr=time_attr, use_year=use_year)
+
+    def _sample(self, generator, n_samples):
+        if n_samples < len(self) and n_samples != 0:
+            return generator.choice(self, size=n_samples, replace=False).tolist()
+        return self
+
+    def _group_and_sample(self, groups, grouping_fn, n_samples=0, random_seed=None, time_attr="time", use_year=False):
+        rng = np.random.default_rng(seed=random_seed)
+        sampled = TargetUsageList()
+        usages_by_group = grouping_fn(groups, time_attr=time_attr, use_year=use_year)
+        for _, g_usages in sorted(usages_by_group.items(), key = lambda i : i[0]):
+            sampled.extend(g_usages._sample(rng, n_samples))
+        return sampled
+
+    def sample_per_interval(self, intervals, n_samples=0, random_seed=None, time_attr="time", use_year=False):
+        """
+        Sample usages independently from each time interval.
+
+        Usages are first grouped by interval and then up to ``n_samples`` usages are sampled without replacement from 
+        each group.
+
+        Args:
+            intervals (list[TimeInterval]): time intervals used for grouping.
+            n_samples (int, default=0): maximum number of usages to sample per interval. If ``0`` or greater than the 
+                group size, all usages are retained.
+            random_seed (int, optional): seed used for reproducible sampling.
+            time_attr (str, default="time"): name of the usage attribute containing temporal information.
+            use_year (bool, default=True): if True, groups usages by year. Otherwise, exact time values are used.
+
+        Returns:
+            TargetUsageList: sampled usages from all intervals combined into a single list.
+        """
+        return self._group_and_sample(
+            intervals, 
+            self.group_by_interval,
+            n_samples=n_samples,
+            random_seed=random_seed,
+            time_attr=time_attr,
+            use_year=use_year)
+
+    def sample_per_time(self, times=None, n_samples=0, random_seed=None, time_attr="time", use_year=True):
+        """
+        Sample usages independently from each time point.
+
+        Usages are first grouped by time and then up to ``n_samples`` usages are sampled without replacement from each 
+        group.
+
+        Args:
+            times (list[Time], optional): explicit time points to group by. If omitted, usages are grouped by inferred 
+                years.
+            n_samples (int, default=0): maximum number of usages to sample per time point. If ``0`` or greater than the 
+                group size, all usages are retained.
+            random_seed (int, optional): seed used for reproducible sampling.
+            time_attr (str, default="time"): name of the usage attribute containing temporal information.
+            use_year (bool, default=True): if True, groups usages by year. Otherwise, exact time values are used.
+
+        Returns:
+            TargetUsageList: sampled usages from all time points combined into a single list.
+        """
+        return self._group_and_sample(
+            times, 
+            self.group_by_time,
+            n_samples=n_samples,
+            random_seed=random_seed,
+            time_attr=time_attr,
+            use_year=use_year)
                 
 
 class UsageDictionary(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+        data = dict(*args, **kwargs)
+        for k, v in data.items():
+            super().__setitem__(k, v if isinstance(v, TargetUsageList) else TargetUsageList(v))
 
     def save(self, path, words = {}):
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -132,7 +284,15 @@ class UsageDictionary(dict):
                 key = match[0]
                 if key in words or len(words) == 0:
                     with jsonlines.open(os.path.join(path, fn), 'r') as reader:
-                        self[key] = TargetUsageList(TargetUsage(**tu) for tu in reader)
+                        self[key] = TargetUsageList()
+                        for tu in reader:
+                            time = tu["time"]
+                            if time is not None:
+                                if isinstance(time, str):
+                                    tu["time"] = LiteralTime(time)
+                                elif isinstance(time, int):
+                                    tu["time"] = NumericalTime(time)
+                            self[key].append(TargetUsage(**tu))
                         logging.info(f"Loaded usages from {os.path.join(path, fn)}")
         not_loaded_words = words.difference(set(self.keys()))
         if len(not_loaded_words) != 0:

@@ -1,8 +1,9 @@
+from typing import Union
 from numbers import Number
 
 import numpy as np
 import matplotlib as mpl
-
+import pandas as pd
 class Time:
     def __init__(self):
         pass
@@ -15,17 +16,17 @@ class LiteralTime(Time):
     def __eq__(self, other):
         assert type(other) == LiteralTime
         return self.time == other.time
-    
+
     def __lt__(self, other):
         assert type(other) == LiteralTime
         return self.time < other.time
-    
+
     def __le__(self, other):
         assert type(other) == LiteralTime
         return self.time <= other.time
-    
+
     def __repr__(self):
-        return str(self.time)
+        return self.time
 
 
 class NumericalTime(Time):
@@ -44,19 +45,19 @@ class NumericalTime(Time):
             return self.time < other.time
         elif type(other) == TimeInterval:
             return self.time < other.start.time
-    
+
     def __le__(self, other):
         if type(other) == NumericalTime:
             return self.time <= other.time
         elif type(other) == TimeInterval:
             return self.time <= other.start.time
-        
+
     def __repr__(self):
         return str(self.time)
 
 
 class TimeInterval(Time):
-    def __init__(self, start: Time, end:Time):
+    def __init__(self, start: Time, end: Time):
         self.start = start
         self.end = end
         if type(self.start).__name__ == type(self.end).__name__:
@@ -64,11 +65,11 @@ class TimeInterval(Time):
                 self.duration = self.end.time - self.start.time
         else:
             raise Exception('start and end points have to be of the same type')
-        
+
     def __eq__(self, other):
         assert type(other) == TimeInterval
         return self.start == other.start and self.end == other.end
-        
+
     # todo: what if the other is a literal time?
     def __lt__(self, other):
         if type(other) == TimeInterval:
@@ -78,7 +79,7 @@ class TimeInterval(Time):
                 return self.start < other.start
         elif type(other) == NumericalTime:
             return self.start.time < other.time
-        
+
     def __le__(self, other):
         if type(other) == TimeInterval:
             if self.start == other.start:
@@ -87,9 +88,23 @@ class TimeInterval(Time):
                 return self.start <= other.start
         elif type(other) == NumericalTime:
             return self.start.time <= other.time
-        
+
     def __repr__(self):
         return f"{self.start.time} - {self.end.time}"
+
+
+def _parse_year(time : Union[str, int]):
+    """
+        Takes a string or Time describing a date and tries to parse it and return the year.
+    """
+    if isinstance(time, int):
+        return time
+    try:
+        parsed = pd.to_datetime(str(time))
+        return parsed.year
+    except ValueError as e:
+        logging.error(f"Could not parse the date '{str(time)}' due to {e}")
+        raise e
 
 
 def generate_colormap(n_classes):

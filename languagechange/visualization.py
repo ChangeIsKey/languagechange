@@ -109,13 +109,10 @@ class Visualizer():
         if embeddings is not None:
             if not isinstance(embeddings, np.ndarray):
                 embeddings, indices, time_labels = reshape(embeddings, indices, time_labels)
-            self.embeddings = embeddings
     
         if cluster_labels is not None:
             if not isinstance(cluster_labels, np.ndarray):
                 cluster_labels, indices, time_labels = reshape(cluster_labels, indices, time_labels)
-        
-            self.cluster_labels = cluster_labels
 
         for (i, j) in [(usages, embeddings), (usages, cluster_labels), (embeddings, cluster_labels)]:
             if not (i is None or j is None or len(i) == len(j)):
@@ -128,7 +125,7 @@ class Visualizer():
         elif indices is None:
             if usages is not None and isinstance(usages, list) and all(hasattr(u, self.time_attr) for u in usages):
                 # Sort usages by time, and reorder embeddings and cluster labels by the same ordering
-                new_order, sorted_usages = zip(*sorted(enumerate(usages), key = lambda u : u[1].time))
+                new_order, sorted_usages = zip(*sorted(enumerate(usages), key = lambda u : getattr(u[1], self.time_attr)))
                 usages = list(sorted_usages)
                 embeddings = embeddings[list(new_order)]
                 cluster_labels = cluster_labels[list(new_order)] if cluster_labels is not None else None
@@ -277,7 +274,7 @@ class Visualizer():
                 period_cluster_labels = self.cluster_labels[indices[t]:indices[t+1]]
         
                 for label in sorted(np.unique(period_cluster_labels)):
-                    cluster_embs = period_reduced_embs[np.where(period_cluster_labels == label)]
+                    cluster_embs = period_reduced_embs[period_cluster_labels == label]
                     x = cluster_embs[:,0]
                     y = cluster_embs[:,1]
                     if label == -1 or label == "-1":
@@ -287,20 +284,22 @@ class Visualizer():
                             legend_label = str(int(label))
                         except ValueError:
                             legend_label = str(label)
-                    ax.scatter(x,y, c=cmap(label_index[label]+1), s=marker_size, label=legend_label)
+                    ax.scatter(x,y, color=cmap(label_index[label]+1), s=marker_size, label=legend_label)
     
                 if plot_cluster_labels:
                     ax.legend(title="Clusters")
             else:
                 x = period_reduced_embs[:,0]
                 y = period_reduced_embs[:,1]
-                ax.scatter(x,y, c="blue", s=marker_size)
+                ax.scatter(x,y, color="blue", s=marker_size)
 
+            title_str = ""
             if target:
-                if one_plot or (ncols == 1 and nrows == 1) or time_labels is None:
-                    ax.set_title(f"Usages of '{target}'")
-                else:
-                    ax.set_title(f"Usages of '{target}' ({time_labels[t]})")
+                title_str += f"Usages of '{target}'"
+            if not(one_plot or (ncols == 1 and nrows == 1) or time_labels is None):
+                title_str += f" ({time_labels[t]})"
+            if title_str:
+                ax.set_title(title_str)
     
         if save_f is not None:
             plt.savefig(save_f, dpi=300)
@@ -332,7 +331,7 @@ class Visualizer():
             usage = self.usages[i]
             display(Markdown(text_formatting(usage, getattr(usage, self.time_attr))))
 
-    def display_usages(self, sort=False, max_usages = None, randomize = False):
+    def display_usages(self, clusters=None, sort=False, max_usages = None, randomize = False):
         """
             Display usages, optionally grouped by cluster, with the target word highlighted. If cluster labels exist, 
             usages are displayed cluster by cluster. Otherwise, usages are shown in a single list. Usages can be 
@@ -350,13 +349,19 @@ class Visualizer():
             logging.error("Cannot display any usages, as 'usages' was not provided when initializing.")
             raise ValueError
         
+        if isinstance(clusters, int) or isinstance(clusters, str):
+            clusters = {clusters}
+        elif clusters is None:
+            clusters = set(self.cluster_labels)
+        
         if self.cluster_labels is not None:
 
             label_usage_dict = {}
             for i, label in enumerate(self.cluster_labels):
-                if label not in label_usage_dict:
-                    label_usage_dict[label] = []
-                label_usage_dict[label].append(i)
+                if label in clusters:
+                    if label not in label_usage_dict:
+                        label_usage_dict[label] = []
+                    label_usage_dict[label].append(i)
                 
             for c in sorted(label_usage_dict):
                 print(f'Cluster {c}:')
