@@ -939,7 +939,8 @@ class CDPipeline(Pipeline):
             random_seed,
             time_attr=None, 
             time_intervals=None, 
-            time_period_length=None):
+            time_period_length=None,
+            use_year=True):
         usages = dict()
 
         if isinstance(self.dataset, SemanticChangeEvaluationDataset):
@@ -1037,16 +1038,30 @@ class CDPipeline(Pipeline):
                         sorted_usages = sorted(word_usages, key = lambda u : getattr(u, time_attr))
                         min_y = _parse_year(getattr(sorted_usages[0], time_attr))
                         max_y = _parse_year(getattr(sorted_usages[-1], time_attr))
-                        time_intervals = ([
-                            TimeInterval(LiteralTime(f"{y}-01-01"), LiteralTime(f"{y + time_period_length - 1}-12-31")) 
-                            for y in np.arange(min_y, max_y + 1, time_period_length)])
-                    usages_by_time = word_usages.group_by_interval(time_intervals, time_attr=time_attr)
+                        if use_year:
+                            time_intervals = ([
+                                TimeInterval(
+                                    LiteralTime(str(y)), 
+                                    LiteralTime(str(y + time_period_length - 1))) 
+                                for y in np.arange(min_y, max_y + 1, time_period_length)])
+                        else:
+                            time_intervals = ([
+                                TimeInterval(
+                                    LiteralTime(f"{y}-01-01"), 
+                                    LiteralTime(f"{y + time_period_length - 1}-12-31")) 
+                                for y in np.arange(min_y, max_y + 1, time_period_length)])
+                    usages_by_time = word_usages.group_by_interval(
+                        time_intervals, 
+                        time_attr=time_attr,
+                        use_year=use_year)
                 else:
                     if isinstance(word_usages, list):
                         if all(isinstance(u, list) for u in word_usages):
                             usages_by_time = {i: TargetUsageList(u) for i,u in enumerate(word_usages)}
                         elif all(isinstance(u, TargetUsage) for u in word_usages):
-                            usages_by_time = TargetUsageList(word_usages).group_by_time(time_attr=time_attr)
+                            usages_by_time = TargetUsageList(word_usages).group_by_time(
+                                time_attr=time_attr,
+                                use_year=use_year)
                     elif isinstance(word_usages, dict):
                         usages_by_time = {t: TargetUsageList(u) for t, u in word_usages.items()}
                     else:
@@ -1139,6 +1154,7 @@ class CDPipeline(Pipeline):
                  time_attr=None,
                  time_intervals=None,
                  time_period_length=None,
+                 use_year=True,
                  return_type="dict"
                  ):
         """
@@ -1159,7 +1175,8 @@ class CDPipeline(Pipeline):
             random_seed, 
             time_attr=time_attr, 
             time_intervals=time_intervals,
-            time_period_length=time_period_length
+            time_period_length=time_period_length,
+            use_year=use_year
             )
         embeddings = self._encode_usages(usages)
         cluster_labels, change_scores = self._compute_scores(embeddings, timeseries_type=timeseries_type, cluster_jointly=cluster_jointly)

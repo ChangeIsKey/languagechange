@@ -5,6 +5,7 @@ import os
 import re
 from collections import deque
 from pathlib import Path
+from typing import Union, Tuple
 
 import jsonlines
 import numpy as np
@@ -96,7 +97,7 @@ class TargetUsageList(list):
         return [tu.to_dict() for tu in self]
 
     def group_by_interval(self,
-            intervals : list[TimeInterval],
+            intervals : list[Union[TimeInterval, Tuple[str, str], Tuple[int, int]]],
             time_attr="time",
             use_year=False):
         """
@@ -106,7 +107,7 @@ class TargetUsageList(list):
         'time'). The result is returned as a UsageDictionary whose keys are string representations of the intervals.
 
         Args:
-            intervals (list[TimeInterval]): time intervals used for grouping.
+            intervals (list[Union[TimeInterval, Tuple[str, str], Tuple[int, int]]]): time intervals used for grouping.
             time_attr (str, default="time"): name of the usage attribute containing temporal information.
             use_year (bool, default=False): if True, groups usages by year. Otherwise, exact dates are used.
 
@@ -114,6 +115,16 @@ class TargetUsageList(list):
             UsageDictionary: mapping from interval strings to TargetUsageList objects containing the usages that fall 
                 within each interval.
         """
+        if not isinstance(intervals, list):
+            logging.error("`intervals` has to be a list of TimeInterval or tuples of str or int.")
+            raise TypeError
+        for i, interval in enumerate(intervals):
+            if not isinstance(interval, TimeInterval):                    
+                interval = TimeInterval(*(t if isinstance(t, Time) else LiteralTime(str(t)) for t in interval))
+            if use_year:
+                interval = TimeInterval(*(LiteralTime(str(_parse_year(t))) for t in (interval.start, interval.end)))
+            intervals[i] = interval
+
         def get_time(u):
             u_t = getattr(u, time_attr)
             if not isinstance(u_t, Time) or use_year:
@@ -154,7 +165,7 @@ class TargetUsageList(list):
         
         return usage_dict
 
-    def group_by_time(self, times=None, time_attr="time", use_year=True):
+    def group_by_time(self, times : list[Union[Time, str, int]] = None, time_attr="time", use_year=True):
         """
         Group usages by time point.
 
@@ -162,17 +173,22 @@ class TargetUsageList(list):
         Otherwise, usages are grouped according to the supplied time points, by exact matching.
 
         Args:
-            times (list[Time], optional): explicit time points to group by.
+            times (list[Union[Time, str, int]], optional): explicit time points to group by.
             time_attr (str, default="time"): name of the usage attribute containing temporal information.
             use_year (bool, default=True): if True, groups usages by year. Otherwise, exact time values are used.
 
         Returns:
             UsageDictionary: mapping from time labels to TargetUsageList objects.
         """
+        if not isinstance(times, list):
+            logging.error("`times` has to be a list of Time, str or int.")
+            raise TypeError
         if times is None:
             sorted_years = sorted(set(_parse_year(getattr(u, time_attr)) for u in self))
             intervals = [TimeInterval(LiteralTime(str(y)), LiteralTime(str(y))) for y in sorted_years]
         else:
+            if all(isinstance(t, str) or isinstance(t, int) for t in times):
+                times = [LiteralTime(str(t)) for t in times]
             intervals = [TimeInterval(t, t) for t in times]
         return self.group_by_interval(intervals, time_attr=time_attr, use_year=use_year)
 
