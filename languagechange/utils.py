@@ -1,3 +1,4 @@
+from typing import Union
 from numbers import Number
 
 import numpy as np
@@ -98,6 +99,20 @@ class TimeInterval(Time):
 
     def __repr__(self):
         return f"{self.start.time} - {self.end.time}"
+
+
+def _parse_year(time : Union[str, int]):
+    """
+        Takes a string or Time describing a date and tries to parse it and return the year.
+    """
+    if isinstance(time, int):
+        return time
+    try:
+        parsed = pd.to_datetime(str(time))
+        return parsed.year
+    except ValueError as e:
+        logging.error(f"Could not parse the date '{str(time)}' due to {e}")
+        raise e
 
 
 def generate_colormap(n_classes):

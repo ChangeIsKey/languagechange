@@ -2,7 +2,8 @@ from typing import List, Union
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from languagechange.models.change.metrics import GradedChange, APD, PRT, JSD
+from languagechange.models.change.metrics import BinaryChange, GradedChange, APD, PRT, JSD
+from languagechange.models.meaning.clustering import Clustering
 
 
 def moving_average(ts, k):
@@ -59,6 +60,8 @@ class TimeSeries:
                 self.ts = time_labels[self.series]
         else:
             self.series = np.array([])
+            self.ts = None
+        self.labels = None
 
     def compute(self,
                 embeddings_or_cluster_labels,
@@ -67,6 +70,7 @@ class TimeSeries:
                 k=1,
                 time_labels: Union[np.array, List] = None,
                 clustering_algorithm=None,
+                cluster_jointly=True,
                 distance_metric: str = 'cosine',
                 return_labels=False):
         """
@@ -99,6 +103,8 @@ class TimeSeries:
                 "'time_series_type' must be one of 'compare_to_first', 'compare_to_last', 'consecutive', and "
                 "'moving_average'")
             raise ValueError
+        
+        labels = None
 
         if isinstance(change_metric, str):
             try:
@@ -107,11 +113,11 @@ class TimeSeries:
                 logging.error("Error: if 'change_metric' is a string it must be one of 'APD','PRT' and 'JSD'.")
                 raise ValueError from e
 
-        if not isinstance(change_metric, GradedChange):
+        if not (isinstance(change_metric, GradedChange) or isinstance(change_metric, BinaryChange)):
             logging.error("Error: if 'change_metric' is an object it must be an instance of GradedChange.")
             raise TypeError
 
-        if isinstance(change_metric, JSD):
+        if isinstance(change_metric, JSD) or isinstance(change_metric, BinaryChange):
             # Compute from embeddings
             if all(isinstance(e, np.ndarray) and e.ndim == 2 for e in embeddings_or_cluster_labels):
                 if not clustering_algorithm:
@@ -119,12 +125,19 @@ class TimeSeries:
                         "For computing change scores from embeddings with JSD, `clustering_algorithm` needs to be "
                         "provided.")
                     raise ValueError
-                def compute_scores(e1, e2):
-                    return change_metric.compute_scores(e1,
-                                                        e2,
-                                                        clustering_algorithm,
-                                                        distance_metric,
-                                                        return_labels=return_labels)
+                if cluster_jointly:
+                    # Cluster all embeddings together, split the cluster labels and use those for computing JSD
+                    concat_embs = np.concatenate(embeddings_or_cluster_labels)
+                    concat_labels = Clustering(clustering_algorithm).get_cluster_results(concat_embs).labels
+                    labels = np.split(concat_labels, np.cumsum([len(e) for e in embeddings_or_cluster_labels[:-1]]))
+                    embeddings_or_cluster_labels = labels
+                    compute_scores = change_metric.compute_scores_from_labels
+                else:
+                    def compute_scores(e1, e2):
+                        return change_metric.compute_scores(e1,
+                                                            e2,
+                                                            clustering_algorithm,
+                                                            return_labels=return_labels)
             # Compute from cluster labels
             elif all((isinstance(cl, np.ndarray) and cl.ndim == 1) or
                      isinstance(cl, list) for cl in embeddings_or_cluster_labels):
@@ -135,7 +148,7 @@ class TimeSeries:
                     "* 2d np.ndarray containing embeddings, or\n"
                     "* a 1d np.ndarray or list containing cluster labels.")
                 raise ValueError
-        else:
+        elif isinstance(change_metric, GradedChange):
             if not all(isinstance(e, np.ndarray) and e.ndim == 2 for e in embeddings_or_cluster_labels):
                 logging.error(
                     f"Error: if using {type(change_metric).__name__} as change metric, 'embeddings_or_cluster_labels' "
@@ -167,7 +180,7 @@ class TimeSeries:
                       for i in range(len(embeddings_or_cluster_labels) - 1)]
             t_idx = np.array(range(k+1, len(embeddings_or_cluster_labels)-k))
 
-        if return_labels:
+        if return_labels and not cluster_jointly:
             series, labels = zip(*scores)
             series = np.array(series)
         else:
@@ -183,8 +196,9 @@ class TimeSeries:
 
         self.series = series
         self.ts = ts
+        self.labels = labels
         if return_labels:
-            return series, ts, list(labels)
+            return series, ts, list(labels) if labels is not None else labels
         return series, ts
 
     def plot(self, ymin=None, ymax=None, xlabel=None, ylabel=None, save_f=None):
