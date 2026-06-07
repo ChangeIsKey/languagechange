@@ -1,5 +1,6 @@
 from typing import Union
 from numbers import Number
+import math
 
 import numpy as np
 import matplotlib as mpl
@@ -127,7 +128,8 @@ def generate_colormap(n_classes):
             cmap (matplotlib.colors.ListedColormap): a colormap mapping 0 to grey and c to a unique color, for all c in 
                 range(1, n_classes+1).
     """
-    hues = np.linspace(0, 1, n_classes, endpoint=False)
+    num_hues = math.ceil(n_classes / 3)
+    hues = (np.arange(num_hues) / num_hues)[np.arange(n_classes) // 3]
     saturations = np.full(n_classes, 1)
     values = np.tile(np.linspace(0.6, 1, 3), n_classes // 3 + 1)[:n_classes]
     hsv = np.stack([hues, saturations, values], axis=1)

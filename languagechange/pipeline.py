@@ -887,26 +887,35 @@ class WiCPipeline(Pipeline):
 
 class CDPipeline(Pipeline):
     """
-    A pipeline for evaluating the graded/binary Change Detection (CD) task.
+    A pipeline for graded and binary lexical semantic change detection.
 
     This pipeline:
         1. loads a dataset that can be used for change detection and extracts the usages from two time periods
-        2. encodes usages (optionally sampling n usages) using either a ContextualizedModel or a DefinitionGenerator 
+        2. optionally (re-)groups usages into time periods, and/or samples n usages per time period or domain
+        2. encodes usages using either a ContextualizedModel or a DefinitionGenerator 
         producing embeddings
-        3. computes the change scores for each word using one of the standard metrics (APD, PRT, JSD, WiDiD).
-        4. evaluates the change scores using Spearman correlation
+        3. computes the change scores for each word using one of the standard metrics (APD, PRT, JSD, WiDiD), and
+        4. optionally evaluates the change scores against groun truth change scores using Spearman correlation.
+
+    The pipeline can be used both for change across time or variation between domains. For the latter, a dict {domain: 
+    usages} is expected for each target word in ``dataset``.
 
     Parameters:
-        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of 
-            sets of TargetUsage instances, describing .
-        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
-            PromptModel.
+        dataset (Union[DWUG,List[Set[TargetUsage]]]): Dataset to run the pipeline on. Supported inputs include DWUG 
+            and SemEval2020Task1 datasets, mappings from target words to usages, and raw target-usage collections that 
+            can be loaded into a SemanticChangeEvaluationDataset when ``load_sc_dataset`` is True.
+        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel or DefinitionGenerator.
         metric (Union[GradedChange,WiDiD]): The metric used to measure the change between usages. Can be a 
             GradedChange (including APD, PRT or JSD) or WiDiD instance.
         clustering: the clustering algorithm used in the case of JSD or WiDiD. Needs to be provided for JSD, 
             defaults to APosterioriaffinityPropagation for WiDiD.
         scores (List): A list of scores to use for evaluation, in the case of loading from TargetUsages.
         dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
+        load_sc_dataset (bool, default=False): If True, load ``dataset`` and ``scores`` into a
+            SemanticChangeEvaluationDataset before running the pipeline. Applies only when ``dataset`` is not already
+            an instance of this class.
+        usage_cache_dir (str or None, default="~/.cache/languagechange/usages"): Directory used to cache usages 
+            retrieved from supported SemEval corpora. Set to None or an empty value to disable usage caching.
     """
 
     def __init__(self, dataset: Union[DWUG, List[Set[TargetUsage]]],
@@ -1158,17 +1167,36 @@ class CDPipeline(Pipeline):
                  return_type="dict"
                  ):
         """
-            Runs the semantic change pipeline for two or more time-periods.
+        Runs the semantic change pipeline for two or more time-periods or domains.
 
-            Args:
-                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
-                    all usages.
-                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
-                    is used.
-                timeseries_type (str): the type of comparison to use (see languagechange.models.change.TimeSeries),
-                    in case multiple time periods are used.
-                time_attr (str, default=None): the attribute to group usages by, overriding the default ('grouping'
-                    for DWUGs, 'time' otherwise).
+        The pipeline finds or loads usages for each target word, optionally samples usages per period, encodes the
+        usages, computes change scores, and returns the intermediate results together with the final time series
+        of scores.
+
+        Args:
+            n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
+                all usages.
+            random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed is 
+                used.
+            timeseries_type (str): the type of comparison to use (see languagechange.models.change.TimeSeries), in case
+                multiple time periods are used.
+            time_attr (str, default=None): the attribute to group usages by, overriding the default ('grouping' for 
+                DWUGs, 'time' otherwise).
+            time_intervals (list[TimeInterval], optional): Explicit time intervals used to group usages. When provided, 
+                this overrides grouping by the raw time values.
+            time_period_length (int, optional): Length, in years, of automatically generated time intervals. When set, 
+                intervals are generated from the minimum to maximum year found in the usages.
+            use_year (bool, default=True): Whether grouping should compare only years instead of full date values when 
+                using time intervals.
+            return_type (str, default="dict"): Return format for usages, embeddings, and cluster labels. Use 'dict' to 
+                preserve period keys, or 'list' to return each word's period values as lists.
+        
+        Returns:
+            tuple: ``(usages, embeddings, cluster_labels, change_scores)`` where ``usages`` maps each target word to 
+                the usages selected for each time period; ``embeddings`` maps each target word to encoded usage vectors 
+                for each time period; ``cluster_labels`` maps each target word to predicted cluster labels when the 
+                selected metric produces them, and may otherwise be empty; and ``change_scores`` maps each target word 
+                to a ``TimeSeries`` object containing the computed change scores.
         """
         usages = self._find_usages(
             n_sampled_usages, 

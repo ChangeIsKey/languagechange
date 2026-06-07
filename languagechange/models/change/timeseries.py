@@ -1,7 +1,10 @@
 from typing import List, Union
 import logging
+import math
+
 import numpy as np
 import matplotlib.pyplot as plt
+
 from languagechange.models.change.metrics import BinaryChange, GradedChange, APD, PRT, JSD
 from languagechange.models.meaning.clustering import Clustering
 
@@ -201,7 +204,7 @@ class TimeSeries:
             return series, ts, list(labels) if labels is not None else labels
         return series, ts
 
-    def plot(self, ymin=None, ymax=None, xlabel=None, ylabel=None, save_f=None):
+    def plot(self, ymin=None, ymax=None, xlabel=None, ylabel=None, max_xticks=None, xstep=None, save_f=None):
         """
             Plots the time series, with the scores ('self.series') on the y axis and the time values on the x axis.
 
@@ -210,9 +213,28 @@ class TimeSeries:
                 ymax (int, optional): the maximum y value for the plot. By default, it will adjust to the time series.
                 xlabel (str, optional): the label to use underneath the x axis.
                 ylabel (str, optional): the label to use next to the y axis.
+                max_xticks (int, optional): the maximum amount of ticks on the x axis.
+                xstep (int, optional): the step between labels on the x axis.
                 save_f (str, optional): the path to save the figure to. If None, the figure is not saved.
         """
-        fig, ax = plt.subplots()
+        _, ax = plt.subplots()
+        labels = [str(t) for t in self.ts]
+        if xstep is not None or (max_xticks is not None and len(labels) > max_xticks):
+            xticks = np.zeros(len(labels), dtype=bool)
+            if xstep is None:
+                xstep = math.ceil(len(labels) / (max_xticks - 1))
+            xticks[np.arange(0, len(labels), xstep)] = 1
+            xticks[-1] = 1
+            xtick_indices = list(np.where(xticks == 1)[0])
+        else:
+            xtick_indices = range(len(self.ts))
+        labels_to_plot = [labels[i] for i in xtick_indices]
+
+        ax.set_xticks(xtick_indices)
+        ax.set_xticklabels(labels_to_plot)
+
+        if len(labels_to_plot) * max(map(len, labels_to_plot)) > 30:
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
         ax.plot(self.ts, self.series, marker='o')
         if ymin is not None and ymax is not None:
             ax.set_ylim(ymin, ymax)
