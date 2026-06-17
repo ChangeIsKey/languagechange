@@ -33,12 +33,11 @@ dependencies = [
     "peft==0.17.0",
     "pydantic==2.11.7",
     "scikit-learn==1.7.1",
-    "scipy==1.11.1",
+    "scipy>1.11.4",
     "sentence-transformers==3.1.0",
     "sortedcontainers==2.4.0",
-    "torch==2.0.1",
+    "torch",
     "transformers==4.47.1",
-    "trankit==1.1.2",
     "tqdm==4.67.1",
     "platformdirs==3.8.0",
     "mlrose_hiive==2.2.4",
@@ -46,7 +45,9 @@ dependencies = [
     "joblib==1.2.0",
     "jsonschema==4.26.0",
     "networkx==3.4.2",
-    "ipython==9.4.0"
+    "ipython==9.4.0",
+    "spacy",
+    "click"
 ]
 
 [project.urls]
@@ -72,4 +73,4 @@ filterwarnings = [
     "ignore:.*SwigPyPacked has no __module__ attribute:DeprecationWarning",
     "ignore:.*SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:.*Swigvarlink has no __module__ attribute:DeprecationWarning",
-]   
+]
