@@ -1,9 +1,6 @@
 languagechange.models.meaning package
 =====================================
 
-Submodules
-----------
-
 languagechange.models.meaning.clustering module
 -----------------------------------------------
 

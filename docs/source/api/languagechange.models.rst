@@ -1,9 +1,6 @@
 languagechange.models package
 =============================
 
-Subpackages
------------
-
 .. toctree::
    :maxdepth: 4
 

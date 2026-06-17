@@ -1,6 +1,15 @@
+"""Helper utilities for searching corpora for target terms."""
+
+from typing import List, Set
 from typing import List, Set, Union
 
+
 def expand_dictionary(words: List[str]):
+    """Placeholder for future dictionary expansion utilities.
+
+    Args:
+        words (List[str]): Words to expand into additional search terms.
+    """
     raise NotImplementedError
 
 class SearchTerm():

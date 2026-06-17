@@ -1,7 +1,6 @@
-# Cache Manager module.Provides a CacheManager class for atomic file writes and automatic cache cleaning.
+"""Cache manager with atomic write helpers for file-based caches."""
 
 import os
-import time
 from contextlib import contextmanager
 import filelock
 

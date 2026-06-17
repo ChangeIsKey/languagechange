@@ -1,3 +1,5 @@
+"""Simple time representations used across the LanguageChange toolkit."""
+
 from typing import Union
 from numbers import Number
 import math
@@ -13,12 +15,15 @@ def PARSE_DATE_SIMPLE(d): return d[:10]
 def PARSE_DATE_ADV(d): return pd.to_datetime(d).strftime("%Y-%m-%d")
 
 
+
 class Time:
     def __init__(self):
         pass
 
 
 class LiteralTime(Time):
+    """Represents a literal timestamp or label for usage references."""
+
     def __init__(self, time: str):
         self.time = time
 
@@ -39,6 +44,8 @@ class LiteralTime(Time):
 
 
 class NumericalTime(Time):
+    """Numeric timestamp (e.g., time slice) that supports comparisons."""
+
     def __init__(self, time: Number):
         self.time = time
 
@@ -66,6 +73,8 @@ class NumericalTime(Time):
 
 
 class TimeInterval(Time):
+    """Represents an interval between two Time points."""
+
     def __init__(self, start: Time, end: Time):
         self.start = start
         self.end = end

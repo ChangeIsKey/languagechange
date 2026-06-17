@@ -1,3 +1,5 @@
+"""Resource manager that downloads and caches datasets and models."""
+
 import json
 import os
 import urllib.request
@@ -8,14 +10,16 @@ import logging
 
 # Configure logging with a basic setup
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+
 class LanguageChange():
 
     def __init__(self):
+        """Initialise cache directories and load the resource hub."""
         self.cache_dir = user_cache_dir("languagechange", "Change is Key!")
         self.resources_dir = os.path.join(self.cache_dir, 'resources')
         self.models_dir = os.path.join(self.cache_dir, 'models')
@@ -27,10 +31,14 @@ class LanguageChange():
         self.load_resources_hub()
 
     def load_resources_hub(self):
-        with urllib.request.urlopen('https://raw.githubusercontent.com/pierluigic/languagechange/main/languagechange/resources_hub.json') as url:
+        """Refresh the resource hub index from GitHub."""
+        with urllib.request.urlopen(
+            'https://raw.githubusercontent.com/pierluigic/languagechange/main/languagechange/resources_hub.json'
+        ) as url:
             self.resource_hub = json.load(url)
 
     def download_ui(self):
+        """Interactive prompt for selecting and downloading resources."""
         j = 0
         list_resources = []
 
@@ -66,7 +74,7 @@ class LanguageChange():
 
         if not choice == -1:
 
-            options = {'yes':1,'y':1,'no':0,'n':0}
+            options = {'yes': 1, 'y': 1, 'no': 0, 'n': 0}
             confirm = ""
 
             while not confirm.strip().lower() in {'yes','y','no','n'}:
@@ -82,25 +90,32 @@ class LanguageChange():
                 self.download_ui()
 
     def download(self, resource_type, resource_name, dataset, version):
+        """Download and cache a resource from the resource hub."""
         try:
             url = self.resource_hub[resource_type][resource_name][dataset][version]
-            destination_path = os.path.join(self.resources_dir,resource_type,resource_name,dataset,version)
+            destination_path = os.path.join(
+                self.resources_dir, resource_type, resource_name, dataset, version
+            )
             Path(destination_path).mkdir(parents=True, exist_ok=True)
             dload.save_unzip(url, destination_path, delete_after=True)
-            return os.path.join(self.resources_dir,resource_type,resource_name,dataset,version)
-        except:
+            return destination_path
+        except Exception:
             logger.error('ERROR: Cannot download the resource.')
             return None
 
     def get_resource(self, resource_type, resource_name, dataset, version):
-        path = os.path.join(self.resources_dir,resource_type,resource_name,dataset,version)
+        """Return the path to a cached resource, downloading it if necessary."""
+        path = os.path.join(
+            self.resources_dir, resource_type, resource_name, dataset, version
+        )
         if os.path.exists(path):
             return path
-        else:
-            result = self.download(resource_type, resource_name, dataset, version)
-            return result
+        return self.download(resource_type, resource_name, dataset, version)
 
     def save_resource(self, resource_type, resource_name, dataset, version):
-        path = os.path.join(self.local_resources_dir,resource_type,resource_name,dataset,version)
+        """Create a local resource directory for persistent storage."""
+        path = os.path.join(
+            self.local_resources_dir, resource_type, resource_name, dataset, version
+        )
         Path(path).mkdir(parents=True, exist_ok=True)
         return path

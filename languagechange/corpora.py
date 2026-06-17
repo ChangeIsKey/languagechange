@@ -1,3 +1,5 @@
+"""Corpus utilities for line-level corpora and search helpers."""
+
 import bz2
 import gzip
 import logging
@@ -28,6 +30,7 @@ logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=lo
 
 
 class Line:
+    """Wraps a corpus line with token, lemma, and POS metadata."""
 
     def __init__(self,
                  raw_text=None,
@@ -194,6 +197,7 @@ class Line:
 
 
 class Corpus:
+    """Base interface for corpora that support search and tokenization."""
 
     def __init__(self, name, language=None, time=LiteralTime('no time specification'),
                  time_function=None, skip_lines=0, **args):
@@ -244,7 +248,14 @@ class Corpus:
         logging.info(f"{n_usages} usages found.")
         return usage_dictionary
 
-    def tokenize(self, tokenizer="trankit", split_sentences=False, batch_size=128):
+    def tokenize(self, tokenizer = "trankit", split_sentences=False, batch_size=128):
+        """Yield tokenized sentences using Trankit, optionally splitting sentences.
+
+        Args:
+            tokenizer (str, optional): Tokenizer backend. Defaults to "trankit".
+            split_sentences (bool, optional): Split paragraphs into sentences. Defaults to False.
+            batch_size (int, optional): Number of lines to accumulate before processing. Defaults to 128.
+        """
         if tokenizer == "trankit":
             p = trankit.Pipeline(self.language)
 
