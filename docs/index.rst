@@ -15,8 +15,8 @@ go from raw corpora to change scores and visual analyses in a single workflow. M
 - Alignment and comparison utilities (e.g. Orthogonal Procrustes) and standard change metrics such as PRT and APD.
 - Plotting helpers for DWUG graphs and embeddings to inspect model behaviour visually.
 
-To get started check out our :ref:`source/tutorials/kvinna`, which shows how to use the package to analyze the 
-semantic change of the word "kvinna" (Swedish for "woman") over more than 100 years. 
+To get started check out our tutorial on
+:ref:`source/tutorials/isle`. It shows show how to compare variation across corpora with the same pipeline.
 
 For more details on how to use the library, check our reference API:
 
@@ -26,7 +26,7 @@ For more details on how to use the library, check our reference API:
    :caption: Contents:
 
    source/api/languagechange
-   source/tutorials/kvinna
+   source/tutorials/isle
 
 Indices and tables
 ==================
@@ -43,11 +43,13 @@ The source code for this project is available on GitHub: https://github.com/Chan
 Credits
 ==================
 
-This project is maintained by the ChangeIsKey team with support from Riksbankens Jubileumsfond (grant M21-0021). 
-The library is under active development, but íf it supports your research, please cite it as:
+This project is maintained by the ChangeIsKey team with support from Riksbankens Jubileumsfond (grant M21-0021).
+The library is under active development, but if it supports your research, please cite it as:
 
-@misc{languagechange,
-  title = {LanguageChange: A Python library for studying semantic change},
-  author = {{Change is Key!}},
-  year = {n.d.}
-}
+.. code-block:: bibtex
+
+   @misc{languagechange,
+     title = {LanguageChange: A Python library for studying semantic change},
+     author = {{Change is Key!}},
+     year = {n.d.}
+   }
