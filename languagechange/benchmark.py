@@ -77,6 +77,8 @@ class Benchmark():
     def get_dataset(self, key):
         if key in self.data.keys():
             return self.data[key]
+        elif key == "all":
+            return list(np.concatenate([list(self.get_dataset(k)) for k in sorted(self.data.keys())]))
         else:
             logging.info(f"Did not find a `{key}` set. Returning []")
             return []
@@ -91,7 +93,7 @@ class Benchmark():
         return self.get_dataset('test')
 
     def get_all_data(self):
-        return self.get_dataset('all') or np.concatenate([list(self.get_dataset(k)) for k in sorted(self.data.keys())])
+        return self.get_dataset('all')
 
     def filter_by_word_frequency(self, dataset, threshold):
         data = self.get_dataset(dataset)
@@ -1246,21 +1248,21 @@ class DWUG(SemanticChangeEvaluationDataset):
             version=self.version, subset=self.subset)
         return wic
 
-    def cast_to_WSD(self, remove_outliers=True):
+    def cast_to_WSD(self, clusters_dir=None, remove_outliers=True):
         """
             Casts the DWUG to a WSD dataset.
         """
-        data = self.get_all_usage_senses(remove_outliers, include_usages=True)
+        data = self.get_all_usage_senses(clusters_dir=clusters_dir, remove_outliers=remove_outliers, include_usages=True)
         wsd = WSD(
             wsd_data=data, dataset=f'{self.dataset} WSD' if self.dataset is not None else None, language=self.language,
             version=self.version, subset=self.subset)
         return wsd
 
-    def cast_to_WSI(self, remove_outliers=True):
+    def cast_to_WSI(self, clusters_dir=None, remove_outliers=True):
         """
             Casts the DWUG to a WSI dataset.
         """
-        data = self.get_all_usage_senses(remove_outliers, include_usages=True)
+        data = self.get_all_usage_senses(clusters_dir=clusters_dir, remove_outliers=remove_outliers, include_usages=True)
         wsi = WSI(
             wsi_data=data, dataset=f'{self.dataset} WSI' if self.dataset is not None else None, language=self.language,
             version=self.version, subset=self.subset)
