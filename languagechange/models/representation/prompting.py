@@ -188,15 +188,23 @@ class PromptModel:
                      response_attribute = None
                      ):
         """
-        Takes as input two target usages and returns the degree of semantic change between them, using a chat model with structured output.
+        Return the semantic change score for two target usages using a chat
+        model with optional structured output.
+
         Args:
-            target_usages (List[TargetUsage]): a list of target usages with the same target word.
-            system_message (str): the system message to use in the prompt
-            user_prompt_template (str): template to use for the user message in the prompt.
-            response_attribute (Union[str, NoneType]): the name of the attribute of the response to return, for example
-                "change" for the SCFloat schema could be used.
+            target_usages (List[TargetUsage]): Two target usages containing the
+                same target word.
+            system_message (str): System message to use in the prompt.
+            user_prompt_template (str): Template for the user message in the
+                prompt.
+            response_attribute (Union[str, NoneType]): Name of the response
+                attribute to return. For example, ``"change"`` can be used with
+                the ``SCFloat`` schema.
+
         Returns:
-            int or float or str: the degree of semantic change between the two instances of the target word, alternatively the whole message content if the output is not structured.
+            Union[int, float, str]: The semantic change score between the two
+            target usages, or the full message content if the output is not
+            structured.
         """
         
         assert len(target_usages) == 2
