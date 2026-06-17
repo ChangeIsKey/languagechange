@@ -1,6 +1,14 @@
 languagechange.models.change package
 ====================================
 
+.. automodule:: languagechange.models.change
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+Submodules
+----------
+
 languagechange.models.change.metrics module
 -------------------------------------------
 
@@ -21,14 +29,6 @@ languagechange.models.change.widid module
 -----------------------------------------
 
 .. automodule:: languagechange.models.change.widid
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-Module contents
----------------
-
-.. automodule:: languagechange.models.change
    :members:
    :show-inheritance:
    :undoc-members:
