@@ -1,10 +1,15 @@
 from typing import List, Union
-import numpy as np
-from languagechange.models.change.metrics import GradedChange, APD, PRT, PJSD
 import logging
+import math
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from languagechange.models.change.metrics import BinaryChange, GradedChange, APD, PRT, JSD
+from languagechange.models.meaning.clustering import Clustering
 
 
-def ma(ts, k):
+def moving_average(ts, k):
     """
         Computes the moving average of a timeseries.
         Args:
@@ -19,7 +24,7 @@ def ma(ts, k):
 class TimeSeries:
     """
         Handles time series of embeddings or cluster labels and computes change scores between them. See 
-        languagechange.models.change.metrics.PJSD for change score computation from cluster labels. Change scores can
+        languagechange.models.change.metrics.JSD for change score computation from cluster labels. Change scores can
         be computed by comparing each value to the first or the last in the time series or by comparing adjacent values
         to each other with the possibility to apply a moving average.
 
@@ -28,10 +33,8 @@ class TimeSeries:
         Labels for the time axis can also be added as a list or array.
 
         Parameters:
-            embs ([np.array], default=None): a list of embeddings, each element of the list contains embeddings from 
-                one time period.
-            cluster_labels ([np.array], default=None): a list of arrays, each array contains the cluster labels for the 
-                embeddings in one time period (used only if using PJSD as change metric).
+            embeddings_or_cluster_labels ([Union[None, np.array, List]], default=None): a list of either embeddings (as 
+                a 2d array) or cluster labels (as a 1d array or list), one element for each time period.
             series (np.array, default=None): an already defined time series. If both embs and cluster_labels are None,
                 but this is not, it will be used.
             change_metric (str|object, default=None): the metric to use when comparing embeddings from different time 
@@ -40,18 +43,19 @@ class TimeSeries:
                 'compare_to_last', 'consecutive', 'moving_average'].
             k (int, default=1): window size, if moving average is applied.
             time_labels (np.array|list): labels for the x axis of the timeseries.
-            clustering_algorithm: the clustering algorithm if using PJSD as the change metric. E.g. one of the 
+            clustering_algorithm: the clustering algorithm if using JSD as the change metric. E.g. one of the 
                 algorithms in scikit-learn, or languagechange.
             distance_metric (str, default="cosine"): the distance metric to use when computing change scores.
     """
 
-    def __init__(self, embs:List[np.array]=None, cluster_labels = None, series:np.array = None, change_metric=None, timeseries_type:str = None, k=1, time_labels : Union[np.array, List] = None, clustering_algorithm = None, distance_metric='cosine'):
-        # Init from embeddings
-        if embs is not None:
-            self.compute(embs=embs, cluster_labels=None, change_metric=change_metric, timeseries_type=timeseries_type, k=k, time_labels=time_labels, clustering_algorithm=clustering_algorithm, distance_metric=distance_metric)
-        # Init from cluster labels (for PJSD)
-        elif cluster_labels is not None:
-            self.compute(embs=None, cluster_labels=cluster_labels, change_metric=change_metric, timeseries_type=timeseries_type, k=k, time_labels=time_labels, clustering_algorithm=clustering_algorithm, distance_metric=distance_metric)
+    def __init__(self, embeddings_or_cluster_labels=None, series: np.array = None, change_metric=None,
+                 timeseries_type: str = None, k=1, time_labels: Union[np.array, List] = None, 
+                 clustering_algorithm=None, distance_metric='cosine'):
+        # Init from embeddings or cluster labels
+        if embeddings_or_cluster_labels:
+            self.compute(embeddings_or_cluster_labels, change_metric=change_metric, timeseries_type=timeseries_type,
+                         k=k, time_labels=time_labels, clustering_algorithm=clustering_algorithm, 
+                         distance_metric=distance_metric)
         # Init from an already constructed timeseries
         elif series is not None:
             self.series = series
@@ -59,78 +63,134 @@ class TimeSeries:
                 self.ts = time_labels[self.series]
         else:
             self.series = np.array([])
+            self.ts = None
+        self.labels = None
 
-    def compute(self, embs : List[np.array] = None, cluster_labels = None, change_metric : Union[str, object] = None, timeseries_type : str = None, k=1, time_labels : Union[np.array, List] = None, clustering_algorithm = None, distance_metric : str = 'cosine'):
+    def compute(self,
+                embeddings_or_cluster_labels,
+                change_metric: Union[str, object],
+                timeseries_type: str,
+                k=1,
+                time_labels: Union[np.array, List] = None,
+                clustering_algorithm=None,
+                cluster_jointly=True,
+                distance_metric: str = 'cosine',
+                return_labels=False):
         """
             Computes the change scores for each point in the time series, using either embeddings or cluster labels
-            depending on the change metric (PJSD can start from embeddings or cluster labels while APD and PRT involve
+            depending on the change metric (JSD can start from embeddings or cluster labels while APD and PRT involve
             embeddings only).
 
             Args:
-                embs ([np.array], default=None): a list of embeddings, each element of the list contains embeddings 
-                    from one time period.
-                cluster_labels ([np.array], default=None): a list of arrays, each array contains the cluster labels 
-                    for the embeddings in one time period (used only if using PJSD as change metric).
-                change_metric (str|object, default=None): the metric to use when comparing embeddings from different 
+                embeddings_or_cluster_labels ([Union[np.array, List]], default=None): a list of either embeddings (as 
+                    a 2d array) or cluster labels (as a 1d array or list), one element for each time period.
+                cluster_labels ([np.ndarray], default=None): a list of arrays, each array contains the cluster labels 
+                    for the embeddings in one time period (used only if using JSD as change metric).
+                change_metric (Union[str, GradedChange], default=None): the metric to use when comparing embeddings from different 
                     time periods (should be one of the classes in languagechange.models.change.metrics).
                 timeseries_type (str, default=None): the kind of timeseries to construct. One of ['compare_to_first', 
                     'compare_to_last', 'consecutive', 'moving_average'].
                 k (int, default=1): window size, if moving average is applied.
-                time_labels (np.array|list): labels for the x axis of the timeseries.
-                clustering_algorithm: the clustering algorithm if using PJSD as the change metric. E.g. one of the 
+                time_labels (Union[np.ndarray, List]): labels for the x axis of the timeseries.
+                clustering_algorithm: the clustering algorithm if using JSD as the change metric. E.g. one of the 
                     algorithms in scikit-learn, or languagechange.
                 distance_metric (str, default="cosine"): the distance metric to use when computing change scores.
+                return_labels (bool, default=False): whether to return cluster labels (only applicable for JSD).
             Returns:
-                series (np.array): the final timeseries.
-                ts (np.array): the time values/labels for each value in the final timeseries.
+                series (np.ndarray): the final timeseries.
+                ts (np.ndarray): the time values/labels for each value in the final timeseries.
+                labels (List[tuple[np.ndarray]], optional): cluster labels, sorted by time.
         """
         if timeseries_type not in {"compare_to_first", "compare_to_last", "consecutive", "moving_average"}:
-            logging.error("'time_series' must be one of 'compare_to_first', 'compare_to_last', 'consecutive', and 'moving_average'")
+            logging.error(
+                "'time_series_type' must be one of 'compare_to_first', 'compare_to_last', 'consecutive', and "
+                "'moving_average'")
             raise ValueError
         
+        labels = None
+
         if isinstance(change_metric, str):
             try:
-                change_metric = {'apd': APD(), 'prt': PRT(), 'pjsd': PJSD()}[change_metric.lower()]
-            except:
-                logging.error("Error: if 'change_metric' is a string it must be one of 'APD','PRT' and 'PJSD'.")
-                raise ValueError
-            
-        if not isinstance(change_metric, GradedChange):
+                change_metric = {'apd': APD(), 'prt': PRT(), 'jsd': JSD()}[change_metric.lower()]
+            except KeyError as e:
+                logging.error("Error: if 'change_metric' is a string it must be one of 'APD','PRT' and 'JSD'.")
+                raise ValueError from e
+
+        if not (isinstance(change_metric, GradedChange) or isinstance(change_metric, BinaryChange)):
             logging.error("Error: if 'change_metric' is an object it must be an instance of GradedChange.")
             raise TypeError
-        
-        if isinstance(change_metric, PJSD):
-            if embs is not None:
-                compute_scores = lambda e1, e2 : change_metric.compute_scores(e1, e2, clustering_algorithm, distance_metric)
-            elif cluster_labels is not None:
+
+        if isinstance(change_metric, JSD) or isinstance(change_metric, BinaryChange):
+            # Compute from embeddings
+            if all(isinstance(e, np.ndarray) and e.ndim == 2 for e in embeddings_or_cluster_labels):
+                if not clustering_algorithm:
+                    logging.error(
+                        "For computing change scores from embeddings with JSD, `clustering_algorithm` needs to be "
+                        "provided.")
+                    raise ValueError
+                if cluster_jointly:
+                    # Cluster all embeddings together, split the cluster labels and use those for computing JSD
+                    concat_embs = np.concatenate(embeddings_or_cluster_labels)
+                    concat_labels = Clustering(clustering_algorithm).get_cluster_results(concat_embs).labels
+                    labels = np.split(concat_labels, np.cumsum([len(e) for e in embeddings_or_cluster_labels[:-1]]))
+                    embeddings_or_cluster_labels = labels
+                    compute_scores = change_metric.compute_scores_from_labels
+                else:
+                    def compute_scores(e1, e2):
+                        return change_metric.compute_scores(e1,
+                                                            e2,
+                                                            clustering_algorithm,
+                                                            return_labels=return_labels)
+            # Compute from cluster labels
+            elif all((isinstance(cl, np.ndarray) and cl.ndim == 1) or
+                     isinstance(cl, list) for cl in embeddings_or_cluster_labels):
                 compute_scores = change_metric.compute_scores_from_labels
             else:
-                logging.error("Error: if using PJSD as change metric, either 'embs' or 'cluster_labels' must be provided.")
+                logging.error(
+                    "Error: if using JSD as change metric, 'embeddings_or_cluster_labels' must be a list of \n"
+                    "* 2d np.ndarray containing embeddings, or\n"
+                    "* a 1d np.ndarray or list containing cluster labels.")
                 raise ValueError
-        else:
-            compute_scores = lambda e1, e2 : change_metric.compute_scores(e1, e2, distance_metric)
+        elif isinstance(change_metric, GradedChange):
+            if not all(isinstance(e, np.ndarray) and e.ndim == 2 for e in embeddings_or_cluster_labels):
+                logging.error(
+                    f"Error: if using {type(change_metric).__name__} as change metric, 'embeddings_or_cluster_labels' "
+                     "must be a list of 2d np.ndarray containing embeddings.")
+            def compute_scores(e1, e2):
+                return change_metric.compute_scores(e1, e2, distance_metric)
 
-        data = embs if embs is not None else cluster_labels
-        
         # Compare every time period with the first one
         if timeseries_type == "compare_to_first":
-            series = np.array([compute_scores(data[0],d) for d in data[1:]])
-            t_idx = np.array(range(1,len(data)))
+            scores = [compute_scores(embeddings_or_cluster_labels[0], d) for d in embeddings_or_cluster_labels[1:]]
+            t_idx = np.array(range(1, len(embeddings_or_cluster_labels)))
 
         # Compare every time period with the last one
         elif timeseries_type == "compare_to_last":
-            series = np.array([compute_scores(d,data[-1]) for d in data[:-1]])
-            t_idx = np.array(range(len(data)-1))
+            scores = [compute_scores(d, embeddings_or_cluster_labels[-1]) for d in embeddings_or_cluster_labels[:-1]]
+            t_idx = np.array(range(len(embeddings_or_cluster_labels)-1))
 
         # Compare consecutive time periods
         elif timeseries_type == "consecutive":
-            series = np.array([compute_scores(data[i],data[i+1]) for i in range(len(data)-1)])
-            t_idx = np.array(range(1, len(data)))
+            scores = [compute_scores(embeddings_or_cluster_labels[i],
+                                     embeddings_or_cluster_labels[i + 1])
+                      for i in range(len(embeddings_or_cluster_labels) - 1)]
+            t_idx = np.array(range(1, len(embeddings_or_cluster_labels)))
 
         # Moving average
         else:
-            series = ma(np.array([compute_scores(data[i],data[i+1]) for i in range(len(data)-1)]), k)
-            t_idx = np.array(range(k+1,len(data)-k))
+            scores = [compute_scores(embeddings_or_cluster_labels[i],
+                                     embeddings_or_cluster_labels[i + 1])
+                      for i in range(len(embeddings_or_cluster_labels) - 1)]
+            t_idx = np.array(range(k+1, len(embeddings_or_cluster_labels)-k))
+
+        if return_labels and not cluster_jointly:
+            series, labels = zip(*scores)
+            series = np.array(series)
+        else:
+            series = np.array(scores)
+
+        if timeseries_type == "moving_average":
+            series = moving_average(series, k)
 
         if time_labels is not None:
             ts = np.array(time_labels)[t_idx]
@@ -139,4 +199,53 @@ class TimeSeries:
 
         self.series = series
         self.ts = ts
+        self.labels = labels
+        if return_labels:
+            return series, ts, list(labels) if labels is not None else labels
         return series, ts
+
+    def plot(self, ymin=None, ymax=None, xlabel=None, ylabel=None, max_xticks=None, xstep=None, save_f=None):
+        """
+            Plots the time series, with the scores ('self.series') on the y axis and the time values on the x axis.
+
+            Args:
+                ymin (int, optional): the minimum y value for the plot. By default, it will adjust to the time series.
+                ymax (int, optional): the maximum y value for the plot. By default, it will adjust to the time series.
+                xlabel (str, optional): the label to use underneath the x axis.
+                ylabel (str, optional): the label to use next to the y axis.
+                max_xticks (int, optional): the maximum amount of ticks on the x axis.
+                xstep (int, optional): the step between labels on the x axis.
+                save_f (str, optional): the path to save the figure to. If None, the figure is not saved.
+        """
+        _, ax = plt.subplots()
+        labels = [str(t) for t in self.ts]
+        if xstep is not None or (max_xticks is not None and len(labels) > max_xticks):
+            xticks = np.zeros(len(labels), dtype=bool)
+            if xstep is None:
+                xstep = math.ceil(len(labels) / (max_xticks - 1))
+            xticks[np.arange(0, len(labels), xstep)] = 1
+            xticks[-1] = 1
+            xtick_indices = list(np.where(xticks == 1)[0])
+        else:
+            xtick_indices = range(len(self.ts))
+        labels_to_plot = [labels[i] for i in xtick_indices]
+
+        ax.set_xticks(xtick_indices)
+        ax.set_xticklabels(labels_to_plot)
+
+        if len(labels_to_plot) * max(map(len, labels_to_plot)) > 30:
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+        ax.plot(self.ts, self.series, marker='o')
+        if ymin is not None and ymax is not None:
+            ax.set_ylim(ymin, ymax)
+        elif ymin is not None:
+            ax.set_ylim(bottom=ymin)
+        elif ymax is not None:
+            ax.set_ylim(top=ymax)
+        if xlabel:
+            ax.set_xlabel(xlabel)
+        if ylabel:
+            ax.set_ylabel(ylabel)
+        if save_f is not None:
+            plt.savefig(save_f, dpi=300)
+        plt.show()

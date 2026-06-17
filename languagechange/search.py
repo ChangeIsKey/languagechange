@@ -1,6 +1,7 @@
 """Helper utilities for searching corpora for target terms."""
 
 from typing import List, Set
+from typing import List, Set, Union
 
 
 def expand_dictionary(words: List[str]):
@@ -11,22 +12,28 @@ def expand_dictionary(words: List[str]):
     """
     raise NotImplementedError
 
+class SearchTerm():
+    """
+        Parameters:
+            term ([str, list[str]], default=None): if this is not None, these string(s) will be interpreted as tokens
+                to search for.
+            regex (bool, default=False): if True, any feature value will be used
+            **kwargs: features and values to search for, in a conjunctive way, e.g. token="jump", pos_tag="VB".
+    """
 
-class SearchTerm:
-    """Describes a search target and the features to scan within a corpus line."""
-
-    VALID_WORD_FEATURES = ['lemma', 'token', 'pos']
-
-    def __init__(self, term: str, regex: bool = False, word_feature: str | Set = 'token'):
-        """Initialise a search term for corpus queries.
-
-        Args:
-            term (str): The string pattern to look for.
-            regex (bool, optional): Whether to treat the term as a regular expression. Defaults to False.
-            word_feature (str|Set, optional): Features to consider ('token', 'lemma', 'pos'). Defaults to 'token'.
-        """
-        self.term = term
+    def __init__(self, term : Union[str, list[str]]=None, regex : bool = False, **kwargs):
         self.regex = regex
-        self.word_feature = word_feature if isinstance(word_feature, Set) else {word_feature}
-        if not self.word_feature.issubset(self.VALID_WORD_FEATURES):
-            raise ValueError("'word_feature' must be set to one of the following values:", self.VALID_WORD_FEATURES)
+        if term is not None:    
+            if isinstance(term, str):
+                self.feature_value_pairs = {"token": term}
+            elif isinstance(term, list):
+                self.feature_value_pairs = {"token": "(" + "|".join(term) + ")"}
+                self.regex = True
+        else:
+            self.feature_value_pairs = kwargs
+
+    def __str__(self):
+        return "_".join(f"{k}={v}" for k, v in self.feature_value_pairs.items()) + ("_regex" if self.regex else "")
+
+    def __repr__(self):
+        return f"SearchTerm({self.feature_value_pairs}, regex={self.regex})"

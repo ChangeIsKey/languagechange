@@ -1,0 +1,3 @@
+# Creating a parquet corpus from an XML corpus and searching through it
+
+This directory contains the Jupyter notebook [parquet_corpora.ipynb](parquet_corpora.ipynb), which demonstrates how the parquet format can be used efficiently. It shows how to download an XML corpus from [Språkbanken text](https://spraakbanken.gu.se) and convert it to a parquet file with the same information. Both files are then searched through to demonstrate that the parquet corpus is a lot faster to search through.
