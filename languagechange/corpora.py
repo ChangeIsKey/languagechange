@@ -115,6 +115,13 @@ class Line:
         time = getattr(self, 'date', time)
         tul = TargetUsageList()
 
+        for feat in search_term.feature_value_pairs.keys():
+            values = self.tokens_by_feature(feat)
+            if values is None:
+                raise ValueError(
+                    f"Cannot search by '{feat}' because this line does not contain that feature."
+                )
+
         if search_term.regex:
 
             def search_func(regexp, line):
@@ -1471,8 +1478,8 @@ class HistoricalCorpus(SortedKeyList):
             for corpus in self:
                 try:
                     usage_dict: UsageDictionary = corpus.search(search_terms)
-                except:
-                    logging.error(f"Could not search through {corpus.name}.")
+                except Exception as e:
+                    logging.error(f"Could not search through {corpus.name}: {e}")
                     continue
                 for key in usage_dict:
                     if not key in usages:
@@ -1484,8 +1491,8 @@ class HistoricalCorpus(SortedKeyList):
             for corpus in self:
                 try:
                     usage_dict: UsageDictionary = corpus.search(search_terms)
-                except:
-                    logging.error(f"Could not search through {corpus.name}.")
+                except Exception as e:
+                    logging.error(f"Could not search through {corpus.name}: {e}")
                     continue
                 for key in usage_dict:
                     if not key in usages:
