@@ -71,11 +71,13 @@ pipeline = CDPipeline(
     clustering_algorithm,
 )
 
-# Run pipeline
+# Run the pipeline
 sampled, embeddings, cluster_labels, change_scores = (
     pipeline.run_pipeline()
 )
 
+
+# Initializes the visualizer
 visualizer = Visualizer(
     usages=sampled[term],
     embeddings=embeddings[term],
@@ -83,6 +85,7 @@ visualizer = Visualizer(
     target=term,
 )
 
+# Visualizes the usage embedding clusters
 visualizer.plot_usage_embeddings()
 
 ```
