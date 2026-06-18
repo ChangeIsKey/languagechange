@@ -53,13 +53,16 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/pierluigic/languagechange"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["languagechange*"]
 exclude = ["build*", "dist*", "examples*"]
 
 [tool.setuptools.package-data]
-languagechange = ["resources_hub.json"]
+languagechange = ["locales/**/*"]
 
 [project.optional-dependencies]
 providers = [
