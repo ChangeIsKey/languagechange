@@ -1,4 +1,3 @@
-import subprocess
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Union
@@ -15,7 +14,6 @@ from sklearn.utils.extmath import randomized_svd
 from sklearn.random_projection import SparseRandomProjection
 from scipy.sparse import csr_matrix
 env = os.environ.copy()
-import logging
 
 # Configure logging with a basic setup
 logging.basicConfig(
@@ -198,7 +196,8 @@ class CountModel(StaticModel):
         try:
             cooc_mat_sparse.update(cooc_mat)
         except NotImplementedError:
-            cooc_mat_sparse._update(cooc_mat)
+            for key, value in cooc_mat.items():
+                cooc_mat_sparse[key] = value
 
         outSpace = Space(matrix=cooc_mat_sparse, rows=vocabulary, columns=vocabulary)
 

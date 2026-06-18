@@ -27,6 +27,7 @@ from languagechange.resource_manager import LanguageChange
 from languagechange.search import SearchTerm
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
 from languagechange.utils import LiteralTime, PARSE_DATE_SIMPLE, PARSE_DATE_ADV
+from languagechange.config import SPACY_PACKAGES_PATH
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -226,7 +227,7 @@ class Corpus:
                 search_terms : List[ str | Pattern | SearchTerm ]
                     If a search term is str or Pattern it is converted
                     to a SearchTerm and matches tokens only
-                    SearchTerm(word_feature = 'token').
+                    SearchTerm(word_feature = 'token'). #TODO: change this
                 parse_date (str, default='simple'): passed to `self.line_iterator`, if applicable.
 
             Returns: A UsageDictionary containing all search results for each search term.
@@ -252,40 +253,40 @@ class Corpus:
         logging.info(f"{n_usages} usages found.")
         return usage_dictionary
 
-    def _initialize_nlp(self):
-        # Uncomment once everything is done
-        # try:
-        #     with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/spacy_package_names.json') as url:
-        #         spacy_packages = json.load(url)
-        #         if self.language is not None:
-        #             language = self.language
-        #         else:
-        #             logging.info("No language is defined for the corpus. Falling back to multilingual processing")
-        #             language = "xx"
-        # except HTTPError:
-        #     logging.info(f"Could not find spaCy packages. Falling back to multilingual processing.")
-        #     spacy_packages = {"xx": "xx_ent_wiki_sm"}
-        #     language = "xx"
+    def _initialize_nlp(self, package_name=None):
+        if package_name is None:
+            with open(SPACY_PACKAGES_PATH) as f:
+                spacy_packages = json.load(f)
+                if self.language is not None:
+                    if self.language.lower() not in spacy_packages:
+                        logging.info(f"SpaCy does not have support for {self.language}. Falling back to multilingual processing.")
+                        language = "xx"
+                    else:
+                        language = self.language.lower()
+                else:
+                    logging.info("No language is defined for the corpus. Falling back to multilingual processing.")
+                    language = "xx"
 
-        # temporary dict of NLP packages for different languages
-        if self.language is not None:
-            language = self.language
-        else:
-            language = "xx"
-        spacy_packages = {
-            "xx": "xx_ent_wiki_sm",  # multilingual
-            "en": "en_core_web_sm"}
-        package_name = spacy_packages[language]
+                package_name = spacy_packages[language]
         nlp = spacy.load(package_name)
         return nlp
 
     def _process(
-            self, nlp_model="spacy", features={"token", "lemma", "pos_tag"},
-            split_sentences=False, batch_size=128):
+            self, nlp_model="spacy", package_name=None, features={"token", "lemma", "pos_tag"},
+            split_sentences=False, sentencizer_batch_size=1024):
         if nlp_model == "spacy":
-            nlp_model = self._initialize_nlp()
+            nlp_model = self._initialize_nlp(package_name=package_name)
+            required = {
+                "lemma": "lemmatizer",
+                "pos_tag": "tagger",
+            }
+            for feat in features:
+                component = required.get(feat)
+                if component and component not in nlp_model.pipe_names:
+                    logging.error(f"SpaCy model '{nlp_model.meta.get('name')}' does not support feature '{feat}'.")
+                    raise ValueError
             if split_sentences:
-                it = self.split_sentences(sentencizer="spacy", batch_size=batch_size)
+                it = self.split_sentences(sentencizer="spacy", package_name=package_name, batch_size=sentencizer_batch_size)
             else:
                 it = self.line_iterator()
             raw_texts = filter(lambda s: isinstance(s, str) and s.strip(), (line.raw_text() for line in it))
@@ -297,13 +298,14 @@ class Corpus:
                 line_features = {"raw_text": text} | token_level_features
                 yield Line(**line_features)
 
-    def tokenize(self, nlp_model="spacy", split_sentences=False, sentencizer_batch_size=1024):
+    def tokenize(self, nlp_model="spacy", package_name=None, split_sentences=False, sentencizer_batch_size=1024):
         if nlp_model == "spacy":
             yield from self._process(
                 nlp_model=nlp_model,
+                package_name=package_name,
                 features={"token"},
                 split_sentences=split_sentences,
-                batch_size=sentencizer_batch_size)
+                sentencizer_batch_size=sentencizer_batch_size)
 
         else:
             if hasattr(nlp_model, "tokenize") and callable(getattr(nlp_model, "tokenize")):
@@ -319,13 +321,14 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use tokenizer {nlp_model} directly as a function to tokenize.")
 
-    def lemmatize(self, nlp_model="spacy", split_sentences=False, sentencizer_batch_size=1024, pretokenized=False):
+    def lemmatize(self, nlp_model="spacy", package_name=None, split_sentences=False, sentencizer_batch_size=1024, pretokenized=False):
         if nlp_model == "spacy":
             yield from self._process(
                 nlp_model=nlp_model,
+                package_name=package_name,
                 features={"lemma"},
                 split_sentences=split_sentences,
-                batch_size=sentencizer_batch_size)
+                sentencizer_batch_size=sentencizer_batch_size)
 
         else:
             if hasattr(nlp_model, "lemmatize") and callable(getattr(nlp_model, "lemmatize")):
@@ -347,13 +350,14 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use method {nlp_model} directly as a function to lemmatize.")
 
-    def pos_tagging(self, nlp_model="spacy", split_sentences=False, sentencizer_batch_size=1024, pretokenized=False):
+    def pos_tagging(self, nlp_model="spacy", package_name=None, split_sentences=False, sentencizer_batch_size=1024, pretokenized=False):
         if nlp_model == "spacy":
             yield from self._process(
                 nlp_model=nlp_model,
+                package_name=package_name,
                 features={"pos_tag"},
                 split_sentences=split_sentences,
-                batch_size=sentencizer_batch_size)
+                sentencizer_batch_size=sentencizer_batch_size)
 
         else:
             if hasattr(nlp_model, "pos_tag") and callable(getattr(nlp_model, "pos_tag")):
@@ -377,11 +381,12 @@ class Corpus:
                     logging.error(f"Could not use method {nlp_model} directly as a function to perform POS tagging.")
 
     def tokens_lemmas_pos_tags(self, nlp_model="spacy", split_sentences=False, sentencizer_batch_size=1024):
-        yield from self._process(nlp_model=nlp_model, split_sentences=split_sentences, batch_size=sentencizer_batch_size)
+        yield from self._process(nlp_model=nlp_model, split_sentences=split_sentences, sentencizer_batch_size=sentencizer_batch_size)
 
-    def split_sentences(self, sentencizer="spacy", batch_size=1024):
+    def split_sentences(self, sentencizer="spacy", package_name=None, batch_size=1024):
         if sentencizer == "spacy":
-            sentencizer = self._initialize_nlp()
+            sentencizer = self._initialize_nlp(package_name=package_name)
+            sentencizer.add_pipe('sentencizer')
             lines = []
             for line in self.line_iterator():
                 lines.append(line.raw_text())
