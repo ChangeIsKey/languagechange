@@ -271,119 +271,64 @@ class Corpus:
         nlp = spacy.load(package_name)
         return nlp
 
-    def _process(
-            self, nlp_model="spacy", package_name=None, features={"token", "lemma", "pos_tag"},
-            split_sentences=False, sentencizer_batch_size=1024):
+    def _process_text_iter(self, 
+            nlp_model="spacy",
+            package_name=None,
+            features={"token", "lemma", "pos_tag"},
+            split_sentences=False,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024):
         if nlp_model == "spacy":
-            nlp_model = self._initialize_nlp(package_name=package_name)
+            nlp = self._initialize_nlp(package_name=package_name)
             required = {
                 "lemma": "lemmatizer",
                 "pos_tag": "tagger",
             }
             for feat in features:
                 component = required.get(feat)
-                if component and component not in nlp_model.pipe_names:
-                    logging.error(f"SpaCy model '{nlp_model.meta.get('name')}' does not support feature '{feat}'.")
+                if component and component not in nlp.pipe_names:
+                    logging.error(f"SpaCy model '{nlp.meta.get('name')}' does not support feature '{feat}'.")
                     raise ValueError
-            if split_sentences:
-                it = self.split_sentences(sentencizer="spacy", package_name=package_name, batch_size=sentencizer_batch_size)
-            else:
-                it = self.line_iterator()
-            raw_texts = filter(lambda s: isinstance(s, str) and s.strip(), (line.raw_text() for line in it))
-            tokenized = nlp_model.pipe(raw_texts)
-            for text, line in zip(raw_texts, tokenized):
-                token_level_features = {
-                    feat + "s": [getattr(token, SPACY_FEATURE_NAMES[feat]) for token in line]
-                    for feat in features}
-                line_features = {"raw_text": text} | token_level_features
-                yield Line(**line_features)
-
-    def tokenize(self, nlp_model="spacy", package_name=None, split_sentences=False, sentencizer_batch_size=1024):
-        if nlp_model == "spacy":
-            yield from self._process(
-                nlp_model=nlp_model,
-                package_name=package_name,
-                features={"token"},
-                split_sentences=split_sentences,
-                sentencizer_batch_size=sentencizer_batch_size)
-
         else:
-            if hasattr(nlp_model, "tokenize") and callable(getattr(nlp_model, "tokenize")):
-                nlp_model = nlp_model.tokenize
+            nlp = nlp_model
 
-            if callable(nlp_model):
-                try:
-                    for line in self.line_iterator():
-                        text = line.raw_text()
-                        if isinstance(text, str) and text.strip():
-                            line._tokens = [str(token) for token in nlp_model(text)]
-                            yield line
-                except Exception:
-                    logging.error(f"Could not use tokenizer {nlp_model} directly as a function to tokenize.")
-
-    def lemmatize(self, nlp_model="spacy", package_name=None, split_sentences=False, sentencizer_batch_size=1024, pretokenized=False):
-        if nlp_model == "spacy":
-            yield from self._process(
-                nlp_model=nlp_model,
-                package_name=package_name,
-                features={"lemma"},
-                split_sentences=split_sentences,
-                sentencizer_batch_size=sentencizer_batch_size)
-
+        if split_sentences:
+            it = self._split_sentences_iter(sentencizer=sentencizer, package_name=package_name, batch_size=sentencizer_batch_size)
         else:
-            if hasattr(nlp_model, "lemmatize") and callable(getattr(nlp_model, "lemmatize")):
-                nlp_model = nlp_model.lemmatize
-            if callable(nlp_model):
-                try:
-                    if pretokenized:
-                        for line in self.line_iterator():
-                            tokens = line.tokens()
-                            if isinstance(tokens, list) and tokens:
-                                line._lemmas = [str(lemma) for lemma in nlp_model(tokens)]
-                                yield line
-                    else:
-                        for line in self.line_iterator():
-                            text = line.raw_text()
-                            if isinstance(text, str) and text.strip():
-                                line._lemmas = [str(lemma) for lemma in nlp_model(text)]
-                                yield line
-                except Exception:
-                    logging.error(f"Could not use method {nlp_model} directly as a function to lemmatize.")
+            it = self.line_iterator()
 
-    def pos_tagging(self, nlp_model="spacy", package_name=None, split_sentences=False, sentencizer_batch_size=1024, pretokenized=False):
+        raw_texts = filter(lambda s: isinstance(s, str) and s.strip(), (line.raw_text() for line in it))
+
         if nlp_model == "spacy":
-            yield from self._process(
-                nlp_model=nlp_model,
-                package_name=package_name,
-                features={"pos_tag"},
-                split_sentences=split_sentences,
-                sentencizer_batch_size=sentencizer_batch_size)
-
+            processed = nlp.pipe(raw_texts)
         else:
-            if hasattr(nlp_model, "pos_tag") and callable(getattr(nlp_model, "pos_tag")):
-                nlp_model = nlp_model.pos_tag
-            if callable(nlp_model):
-                try:
-                    if pretokenized:
-                        for line in self.line_iterator():
-                            tokens = line.tokens()
-                            if isinstance(tokens, list) and len(tokens) > 0:
-                                line._pos_tags = [str(pos_tag) for pos_tag in nlp_model(tokens)]
-                                yield line
+            processed = nlp(raw_texts)
 
-                    else:
-                        for line in self.line_iterator():
-                            text = line.raw_text()
-                            if isinstance(text, str) and text.strip():
-                                line._pos_tags = [str(pos_tag) for pos_tag in nlp_model(text)]
-                                yield line
-                except Exception:
-                    logging.error(f"Could not use method {nlp_model} directly as a function to perform POS tagging.")
+        for text, line in zip(raw_texts, processed):
+            token_level_features = {
+                feat + "s": [
+                    getattr(token, SPACY_FEATURE_NAMES[feat] if nlp_model == "spacy" else feat) for token in line] 
+                for feat in features}
+            line_features = {"raw_text": text} | token_level_features
+            yield Line(**line_features)
 
-    def tokens_lemmas_pos_tags(self, nlp_model="spacy", split_sentences=False, sentencizer_batch_size=1024):
-        yield from self._process(nlp_model=nlp_model, split_sentences=split_sentences, sentencizer_batch_size=sentencizer_batch_size)
+    def _split_sentences_iter(self, sentencizer="spacy", package_name=None, batch_size=1024):
+        """
+        Iterates through the corpus and splits the text into one sentence per line.
 
-    def split_sentences(self, sentencizer="spacy", package_name=None, batch_size=1024):
+        Args:
+            sentencizer (Union[str, callable], default='spacy'): the sentencizer to use, by default the one of spaCy. 
+                If not 'spacy', a function with the signature str -> [str], splitting a string into sentence strings in 
+                a list, is expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            batch_size (int, default=1024): the amount of lines to process simultaneously when iterating through the 
+                corpus and splitting into sentences.
+
+        Yields:
+            Line: a Line object containing a sentence.
+        """
         if sentencizer == "spacy":
             sentencizer = self._initialize_nlp(package_name=package_name)
             sentencizer.add_pipe('sentencizer')
@@ -416,6 +361,238 @@ class Corpus:
                     yield Line(sent)
             except:
                 logging.info(f"ERROR: Could not use method {sentencizer} directly as a function to split sentences.")
+    
+    def process(
+            self,
+            save_format='parquet',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            features=['token', 'lemma', 'pos_tag'],
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        Tokenizes, lemmatizes and POS tags the corpus using a spaCy NLP pipeline for the language of the corpus. 
+        Optionally, sentence splitting is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list has attributes `token`, 
+                `lemma` and `pos_tag`, is expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            features (list[str], default=['token', 'lemma', 'pos_tag']): the features to extract. Must be a subset of
+                {'token', 'lemma', 'pos_tag'}.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        if file_specification is None:
+            file_specification = ""
+            for feat in features:
+                file_specification += f"-{feat}s"
+        if save_format == "vertical":
+            file_ending = ".tsv"
+        elif save_format == "linebyline":
+            file_ending = ".txt"
+        elif save_format == "parquet":
+            file_ending = ".parquet"
+        else:
+            logging.error("'file_ending' must be one of 'vertical', 'parquet' and 'linebyline'")
+            raise ValueError
+
+        processed_name = os.path.splitext(self.path)[0] + file_specification + file_ending
+
+        it = self._process_text_iter(
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=features,
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size)
+
+        with open(processed_name, 'w+') as f:  # cache is probably needed here because the file might already exist.
+            if save_format == 'linebyline':
+                if not len(features) == 1:
+                    logging.error("When saving processed data to a `LinebyLineCorpus`, only one feature can be stored")
+                    raise ValueError
+                for line in it:
+                    f.write(' '.join(line.tokens_by_feature(features[0]))+'\n')
+                return LinebyLineCorpus(processed_name) #TODO: add is_tokenized etc.
+
+            elif save_format == 'vertical' or save_format == 'parquet':
+                field_separator = getattr(self, 'field_separator', '\t')
+                sentence_separator = getattr(self, 'sentence_separator', '\n')
+
+                def write_vertical_line(fields):
+                    fields = [f for f in fields if f is not None]
+                    for tup in zip(*fields):
+                        f.write(field_separator.join(tup) + sentence_separator)
+                    f.write(sentence_separator)
+                
+                for line in it:
+                    write_vertical_line([line.tokens_by_feature(feat) for feat in features])
+                
+                processed_corpus = VerticalCorpus(processed_name, field_map={feat: i for i, feat in enumerate(features)})
+
+                if save_format == 'parquet':
+                    raise NotImplementedError #TODO: implement this
+                    #parquet_corpus = ParquetCorpus(processed_name)
+                    #processed_corpus.cast_to_parquet(parquet_corpus, column_names={feat: feat for feat in features})
+                    #return parquet_corpus
+                else:
+                    return processed_corpus
+    
+    def tokenize(
+            self,
+            save_format='vertical',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        Tokenizes the corpus using a spaCy NLP pipeline for the language of the corpus. Optionally, sentence splitting 
+        is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='vertical'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list has a 'token' attribute is 
+                expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        return self.process(
+            save_format=save_format,
+            file_specification=file_specification,
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=['token'],
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size
+        )
+
+    def lemmatize(
+            self,
+            save_format='vertical',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        Lemmatizes the corpus using a spaCy NLP pipeline for the language of the corpus. Optionally, sentence splitting 
+        is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='vertical'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list a `lemma` attribute is 
+                expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        return self.process(
+            save_format=save_format,
+            file_specification=file_specification,
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=['lemma'],
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size
+        )
+    
+    def pos_tag(
+            self,
+            save_format='vertical',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        POS tags the corpus using a spaCy NLP pipeline for the language of the corpus. Optionally, sentence splitting 
+        is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='vertical'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list has a 'pos_tag' attribute is 
+                expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        return self.process(
+            save_format=save_format,
+            file_specification=file_specification,
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=['pos_tags'],
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size
+        )
 
     def folder_iterator(self, path):
 
@@ -455,88 +632,6 @@ class Corpus:
     def save(self):
         lc = LanguageChange()
         lc.save_resource('corpus', f'{self.language} corpora', self.name)
-
-    def save_tokenized_corpora(
-            corpora: Union[Self, List[Self]],
-            tokens=True,
-            lemmas=False,
-            pos_tags=False,
-            save_format='linebyline',
-            file_specification=None,
-            file_ending=".txt",
-            nlp_model="spacy",
-            split_sentences=True,
-            sentencizer_batch_size=1024
-    ):
-        if not isinstance(corpora, list):
-            corpora = [corpora]
-        if file_specification is None:
-            file_specification = ""
-            file_specification += "-tokens" if tokens else ''
-            file_specification += '-lemmas' if lemmas else ''
-            file_specification += '-pos_tags' if pos_tags else ''
-        for corpus in corpora:
-            tokenized_name = os.path.splitext(corpus.path)[0] + file_specification + file_ending
-            with open(tokenized_name, 'w+') as f:  # cache is probably needed here because the file might already exist.
-                if save_format == 'linebyline':
-                    if tokens:
-                        for line in corpus.tokenize(
-                                nlp_model=nlp_model,
-                                split_sentences=split_sentences,
-                                sentencizer_batch_size=sentencizer_batch_size):
-                            f.write(' '.join(line.tokens())+'\n')
-                    elif lemmas:
-                        for line in corpus.lemmatize(
-                                nlp_model=nlp_model,
-                                split_sentences=split_sentences,
-                                sentencizer_batch_size=sentencizer_batch_size):
-                            f.write(' '.join(line.lemmas())+'\n')
-                    elif pos_tags:
-                        for line in corpus.pos_tagging(
-                                nlp_model=nlp_model,
-                                split_sentences=split_sentences,
-                                sentencizer_batch_size=sentencizer_batch_size):
-                            f.write(' '.join(line.pos_tags())+'\n')
-                elif save_format == 'vertical':
-
-                    def write_vertical_line(fields):
-                        fields = [f for f in fields if f is not None]
-                        for tup in zip(*fields):
-                            f.write('\t'.join(tup) + '\n')
-                        f.write('\n')
-
-                    if lemmas:
-                        if pos_tags:
-                            # tokens_lemmas_pos (with or without tokens)
-                            for line in corpus.tokens_lemmas_pos_tags(
-                                    nlp_model=nlp_model,
-                                    split_sentences=split_sentences,
-                                    sentencizer_batch_size=sentencizer_batch_size):
-                                write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
-                        else:
-                            # lemmatize (with or without tokens)
-                            for line in corpus.lemmatize(
-                                    nlp_model=nlp_model,
-                                    split_sentences=split_sentences,
-                                    sentencizer_batch_size=sentencizer_batch_size):
-                                write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
-                    elif pos_tags:
-                        # pos_tagging (with or without tokens)
-                        for line in corpus.pos_tagging(
-                                nlp_model=nlp_model,
-                                split_sentences=split_sentences,
-                                sentencizer_batch_size=sentencizer_batch_size):
-                            write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
-                    elif tokens:
-                        # tokenize only
-                        for line in corpus.tokenize(
-                                nlp_model=nlp_model,
-                                split_sentences=split_sentences,
-                                sentencizer_batch_size=sentencizer_batch_size):
-                            write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
 
     def __iter__(self):
         yield from self.line_iterator()
