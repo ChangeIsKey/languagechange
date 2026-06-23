@@ -26,6 +26,7 @@ from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from languagechange.cache import CacheManager
 from languagechange.utils import Time, NumericalTime, LiteralTime, TimeInterval, _parse_year
+from languagechange.search import SearchTerm
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -985,7 +986,10 @@ class CDPipeline(Pipeline):
 
                 if search:
                     logging.info(f"Searching for usages in {corpus.name}...")
-                    corpus_usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
+                    corpus_usages = corpus.search([SearchTerm(lemma=target.target) 
+                        for target in self.dataset.graded_task.keys()])
+                    # Rename keys to keep only the target, not 'lemma=target'
+                    corpus_usages = {w.split("=")[-1] : u for w, u in corpus_usages.items()}
                     if self.cache_mgr:
                         # save the usages to a json file
                         with self.cache_mgr.atomic_write(cache_path, mode='w') as temp_path:

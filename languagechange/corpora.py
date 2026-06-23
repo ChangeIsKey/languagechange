@@ -199,6 +199,9 @@ class Line:
 
     def __str__(self):
         return self.raw_text()
+    
+    def __len__(self):
+        return len(self.tokens())
 
 
 class Corpus:
@@ -254,6 +257,9 @@ class Corpus:
         return usage_dictionary
 
     def _initialize_nlp(self, package_name=None):
+        """
+        Initializes a spaCy NLP pipeline for self.language.
+        """
         if package_name is None:
             with open(SPACY_PACKAGES_PATH) as f:
                 spacy_packages = json.load(f)
@@ -278,6 +284,9 @@ class Corpus:
             split_sentences=False,
             sentencizer="spacy",
             sentencizer_batch_size=1024):
+        """
+        Processes the corpus by streaming through it and yields tokens, lemmas and POS tags in new Line objects.
+        """
         if nlp_model == "spacy":
             nlp = self._initialize_nlp(package_name=package_name)
             required = {
@@ -404,17 +413,13 @@ class Corpus:
             file_specification = ""
             for feat in features:
                 file_specification += f"-{feat}s"
-        if save_format == "vertical":
+        if save_format == "vertical" or save_format == "parquet":
             file_ending = ".tsv"
         elif save_format == "linebyline":
             file_ending = ".txt"
-        elif save_format == "parquet":
-            file_ending = ".parquet"
         else:
-            logging.error("'file_ending' must be one of 'vertical', 'parquet' and 'linebyline'")
+            logging.error("'save_format' must be one of 'vertical', 'parquet' and 'linebyline'")
             raise ValueError
-
-        processed_name = os.path.splitext(self.path)[0] + file_specification + file_ending
 
         it = self._process_text_iter(
             nlp_model=nlp_model,
@@ -424,14 +429,17 @@ class Corpus:
             sentencizer=sentencizer,
             sentencizer_batch_size=sentencizer_batch_size)
 
-        with open(processed_name, 'w+') as f:  # cache is probably needed here because the file might already exist.
+        f_path = os.path.splitext(self.path)[0] + file_specification + file_ending
+
+        with open(f_path, 'w+') as f: # cache is probably needed here because the file might already exist.
             if save_format == 'linebyline':
                 if not len(features) == 1:
                     logging.error("When saving processed data to a `LinebyLineCorpus`, only one feature can be stored")
                     raise ValueError
+                feature = features[0]
                 for line in it:
-                    f.write(' '.join(line.tokens_by_feature(features[0]))+'\n')
-                return LinebyLineCorpus(processed_name) #TODO: add is_tokenized etc.
+                    f.write(' '.join(line.tokens_by_feature(feature))+'\n')
+                return LinebyLineCorpus(f_path, feature=feature)
 
             elif save_format == 'vertical' or save_format == 'parquet':
                 field_separator = getattr(self, 'field_separator', '\t')
@@ -446,15 +454,14 @@ class Corpus:
                 for line in it:
                     write_vertical_line([line.tokens_by_feature(feat) for feat in features])
                 
-                processed_corpus = VerticalCorpus(processed_name, field_map={feat: i for i, feat in enumerate(features)})
+                tsv_corpus = VerticalCorpus(f_path, field_map={feat: i for i, feat in enumerate(features)})
 
                 if save_format == 'parquet':
-                    raise NotImplementedError #TODO: implement this
-                    #parquet_corpus = ParquetCorpus(processed_name)
-                    #processed_corpus.cast_to_parquet(parquet_corpus, column_names={feat: feat for feat in features})
-                    #return parquet_corpus
+                    processed_corpus = tsv_corpus.cast_to_parquet()
+                    os.remove(tsv_corpus.path)
                 else:
-                    return processed_corpus
+                    processed_corpus = tsv_corpus
+                return processed_corpus
     
     def tokenize(
             self,
@@ -594,7 +601,7 @@ class Corpus:
             sentencizer_batch_size=sentencizer_batch_size
         )
 
-    def folder_iterator(self, path):
+    def folder_iterator(self, path): #TODO: integrate with the rest of the class, or remove
 
         fnames = []
 
@@ -607,7 +614,7 @@ class Corpus:
 
         return fnames
 
-    def cast_to_vertical(corpora, vertical_corpus):
+    def cast_to_vertical(corpora, vertical_corpus): #TODO: remove or change
 
         line_iterators = [corpus.line_iterator() for corpus in corpora]
         iterate = True
@@ -639,46 +646,20 @@ class Corpus:
 
 class LinebyLineCorpus(Corpus):
 
-    def __init__(self, path, **kwargs):
+    def __init__(self, 
+            path, 
+            feature=None,
+            is_sentence_split=False,
+            tokens_splitter=None,
+            **kwargs):
         if 'name' not in kwargs:
             kwargs['name'] = path
         super().__init__(**kwargs)
         self.path = path
 
-        if 'is_sentence_tokenized' in kwargs:
-            self.is_sentence_tokenized = kwargs['is_sentence_tokenized']
-        else:
-            self.is_sentence_tokenized = False
-
-        if self.is_sentence_tokenized:
-            if 'is_tokenized' in kwargs:
-                self.is_tokenized = kwargs['is_tokenized']
-        else:
-            if 'is_tokenized' in kwargs and kwargs['is_tokenized']:
-                self.is_sentence_tokenized = True
-                self.is_tokenized = True
-            else:
-                self.is_sentence_tokenized = False
-                self.is_tokenized = False
-
-        if 'is_tokenized' in kwargs and kwargs['is_tokenized']:
-            if 'is_lemmatized' in kwargs:
-                self.is_lemmatized = kwargs['is_lemmatized']
-            if 'tokens_splitter' in kwargs:
-                self.tokens_splitter = kwargs.tokens_splitter
-            else:
-                self.tokens_splitter = ' '
-        else:
-            if 'is_lemmatized' in kwargs and kwargs['is_lemmatized']:
-                self.is_sentence_tokenized = True
-                self.is_tokenized = True
-                self.is_lemmatized = True
-                if 'tokens_splitter' in kwargs:
-                    self.tokens_splitter = kwargs.tokens_splitter
-                else:
-                    self.tokens_splitter = ' '
-            else:
-                self.is_lemmatized = False
+        self.is_sentence_split = is_sentence_split or feature
+        self.feature = feature
+        self.tokens_splitter = tokens_splitter or ' '
 
     def line_iterator(self):
 
@@ -691,10 +672,7 @@ class LinebyLineCorpus(Corpus):
             line = line.replace('\n', '')
             data = {}
             data['raw_text'] = line
-            if self.is_lemmatized:
-                data['lemmas'] = line.split(self.tokens_splitter)
-            elif self.is_tokenized:
-                data['tokens'] = line.split(self.tokens_splitter)
+            data[f"{self.feature}s"] = line.split(self.tokens_splitter)
             return data
 
         for fname in fnames:
@@ -823,9 +801,9 @@ class ParquetCorpus(Corpus):
 
     def search(self,
                search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]],
+               parse_date="simple",
                chunk_size: int = 10 ** 6,
-               split=None,
-               parse_date="simple"
+               split=None
                ):
         """
         Search the corpus for token-level matches against any of the search terms and return the target usages 
@@ -838,12 +816,12 @@ class ParquetCorpus(Corpus):
         Args:
             search_terms (List[str|Pattern|SearchTerm]): search terms to apply. Strings and regex patterns are 
                 converted to `SearchTerm` instances automatically.
-            chunk_size (int): number of rows to load per batch.
-            split (str|None): dataset split to use when reading from a Hugging Face dataset. If none, all splits are 
-                searched.
             parse_date (str, default='simple'): how to parse dates (and times). If 'none', the dates are only converted 
                 to strings. If 'simple', the dates are assumed to be in ISO format, and only YYYY-MM-DD are kept by
                 cutting the string. If 'advanced', uses pd.to_datetime to parse dates (flexible but slow).
+            chunk_size (int): number of rows to load per batch.
+            split (str|None): dataset split to use when reading from a Hugging Face dataset. If none, all splits are 
+                searched.
 
         Returns:
             UsageDictionary: a dictionary of `TargetUsageList` objects for each search term.
@@ -951,7 +929,8 @@ class ParquetCorpus(Corpus):
                     rename(columns={self.date_name: "time"})
                 )
 
-                chunk_targets["time"] = chunk_targets["time"].apply(LiteralTime)
+                if "time" in chunk_targets:
+                    chunk_targets["time"] = chunk_targets["time"].apply(LiteralTime)
 
                 # Add to usage dictionary
                 for target, group in chunk_targets.groupby("target"):
@@ -1052,6 +1031,7 @@ class VerticalCorpus(Corpus):
                         block_size: int = 1 << 20,
                         compression: str = "snappy",
                         delimiter: str = "\t",
+                        add_sentence_ids: bool = True,
                         **kwargs) -> None:
         if parquet_corpus_or_path is None:
             extensions = "".join(Path(self.path).suffixes)
@@ -1065,22 +1045,36 @@ class VerticalCorpus(Corpus):
             raise TypeError("'parquet_corpus_or_path' has to be one of [None, str, ParquetCorpus].")
         parquet_path = parquet_corpus.path
 
-        read_opts = pv.ReadOptions(block_size=block_size)
+        read_opts = pv.ReadOptions(block_size=block_size, autogenerate_column_names=not self.has_header)
         parse_opts = pv.ParseOptions(delimiter=delimiter, quote_char=False)
         convert_opts = pv.ConvertOptions()
 
-        csv_reader = pv.open_csv(self.path, read_options=read_opts,
-                                 convert_options=convert_opts, parse_options=parse_opts)
-
         writer = None
-        for batch in csv_reader:
-            table = pa.Table.from_batches([batch])
-            if writer is None:
-                writer = pq.ParquetWriter(parquet_path, batch.schema, compression=compression)
-            writer.write_table(table)
+
+        if add_sentence_ids:
+            # Iterate through all sentences and add ids to separate them
+            cols = list(kv[0] for kv in sorted(self.field_map.items(), key=lambda kv: kv[1]))
+            for i, line in enumerate(self.line_iterator()):
+                table = pa.table({k: pa.array(line.tokens_by_feature(k)) for k in cols} | {"id": [i] * len(line)})
+                if writer is None:
+                    writer = pq.ParquetWriter(parquet_path, table.schema, compression=compression)
+                writer.write_table(table)
+                del line
+
+        else:
+            csv_reader = pv.open_csv(self.path, read_options=read_opts,
+                                    convert_options=convert_opts, parse_options=parse_opts)
+
+            for batch in csv_reader:
+                table = pa.Table.from_batches([batch])
+                if writer is None:
+                    writer = pq.ParquetWriter(parquet_path, batch.schema, compression=compression)
+                writer.write_table(table)
 
         if writer:
             writer.close()
+        
+        return parquet_corpus
 
 
 # Should be able to load and parse a corpus in XML format.
@@ -1266,6 +1260,8 @@ class XMLCorpus(Corpus):
                 for line in self.line_iterator():
                     f.write(line.raw_text()+'\n')  # cache needed here
 
+        return linebyline_corpus
+
     def cast_to_vertical(self, vertical_corpus_or_path=None, write_header=True):
         if vertical_corpus_or_path is None:
             extensions = "".join(Path(self.path).suffixes)
@@ -1312,6 +1308,8 @@ class XMLCorpus(Corpus):
                     csvfile.write(field_separator.join(vertical_row) + "\n")
                 if sentence_separator is not None:
                     csvfile.write(sentence_separator)
+        
+        return vertical_corpus
 
     def cast_to_parquet(self, parquet_corpus_or_path=None, keep_tsv=False):
         extensions = "".join(Path(self.path).suffixes)
@@ -1324,13 +1322,13 @@ class XMLCorpus(Corpus):
         logging.info("Casting to intermediate tsv file...")
         self.cast_to_vertical(c)
         logging.info("Casting to parquet...")
-        c.cast_to_parquet(parquet_corpus_or_path, column_names={
-            "token": self.token_tag,
-            "lemma": self.lemma_tag,
-            'pos_tag': self.pos_tag_tag})
+        parquet_corpus = c.cast_to_parquet(
+            parquet_corpus_or_path=parquet_corpus_or_path,
+            add_sentence_ids=False)
         if not keep_tsv:
             os.remove(c.path)
             logging.info(f"Removed temporary file {c.path}.")
+        return parquet_corpus
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
