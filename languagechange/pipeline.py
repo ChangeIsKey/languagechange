@@ -641,7 +641,7 @@ class WSIPipeline(Pipeline):
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
                 encoded_usages = self.usage_encoding.generate_definitions(
-                    target_usages, encode_definitions='vectors')
+                    target_usages, return_definitions=False, return_embeddings=True)
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages = self.usage_encoding.encode(target_usages)
@@ -798,7 +798,7 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions='vectors')
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, return_definitions=False, return_embeddings=True)
 
             if label_func is None:
                 if task == "graded":
@@ -1096,7 +1096,7 @@ class CDPipeline(Pipeline):
                 for t, us in usages_by_period.items():
                     embeddings_per_period[t] = self.usage_encoding.generate_definitions(
                         us, 
-                        encode_definitions='vectors')
+                        return_definitions=False, return_embeddings=True)
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 for t, us in usages_by_period.items():
