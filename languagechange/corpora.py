@@ -465,7 +465,7 @@ class Corpus:
     
     def tokenize(
             self,
-            save_format='vertical',
+            save_format='parquet',
             file_specification=None,
             nlp_model="spacy",
             package_name=None,
@@ -478,7 +478,7 @@ class Corpus:
         is also done. Saves the processed corpus to a new file and returns the corpus.
 
         Args:
-            save_format (str, default='vertical'): the format to save the resulting corpus in. One of 'parquet', 
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
                 'vertical' and 'linebyline'.
             file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
                 features to the file name. 
@@ -511,7 +511,7 @@ class Corpus:
 
     def lemmatize(
             self,
-            save_format='vertical',
+            save_format='parquet',
             file_specification=None,
             nlp_model="spacy",
             package_name=None,
@@ -524,7 +524,7 @@ class Corpus:
         is also done. Saves the processed corpus to a new file and returns the corpus.
 
         Args:
-            save_format (str, default='vertical'): the format to save the resulting corpus in. One of 'parquet', 
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
                 'vertical' and 'linebyline'.
             file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
                 features to the file name. 
@@ -557,7 +557,7 @@ class Corpus:
     
     def pos_tag(
             self,
-            save_format='vertical',
+            save_format='parquet',
             file_specification=None,
             nlp_model="spacy",
             package_name=None,
@@ -570,7 +570,7 @@ class Corpus:
         is also done. Saves the processed corpus to a new file and returns the corpus.
 
         Args:
-            save_format (str, default='vertical'): the format to save the resulting corpus in. One of 'parquet', 
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
                 'vertical' and 'linebyline'.
             file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
                 features to the file name. 
@@ -595,7 +595,7 @@ class Corpus:
             file_specification=file_specification,
             nlp_model=nlp_model,
             package_name=package_name,
-            features=['pos_tags'],
+            features=['pos_tag'],
             split_sentences=split_sentences,
             sentencizer=sentencizer,
             sentencizer_batch_size=sentencizer_batch_size
@@ -1440,8 +1440,8 @@ class HistoricalCorpus(SortedKeyList):
                     continue
                 for key in usage_dict:
                     if not key in usages:
-                        usages[key] = {corpus.name: TargetUsageList()}
-                    usages[key][corpus.name] = usage_dict[key]
+                        usages[key] = {str(corpus.name): TargetUsageList()}
+                    usages[key][str(corpus.name)] = usage_dict[key]
 
         else:
             usages = UsageDictionary()
@@ -1449,7 +1449,7 @@ class HistoricalCorpus(SortedKeyList):
                 try:
                     usage_dict: UsageDictionary = corpus.search(search_terms)
                 except:
-                    logging.error(f"Could not search through {corpus.name}.")
+                    logging.error(f"Could not search through {str(corpus.name)}.")
                     continue
                 for key in usage_dict:
                     if not key in usages:
