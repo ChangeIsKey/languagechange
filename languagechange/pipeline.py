@@ -3,8 +3,6 @@ from collections import Counter, deque
 from datetime import datetime
 import math
 import json
-import pickle
-import hashlib
 import logging
 import inspect
 import os
@@ -48,17 +46,6 @@ def get_depth(d):
     if not isinstance(d, dict):
         return 0
     return 1 + max([get_depth(v) for v in d.values()])
-
-
-def generate_cache_key(data):
-    """
-    Generate a unique cache key based on the input data.
-    """
-    try:
-        serialized = pickle.dumps(data)
-        return hashlib.sha256(serialized).hexdigest()
-    except Exception as e:
-        raise ValueError(f"Invalid input: {e}")
 
 
 class WiCBinary(BaseModel):
