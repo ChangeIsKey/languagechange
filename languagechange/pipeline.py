@@ -3,8 +3,6 @@ from collections import Counter, deque
 from datetime import datetime
 import math
 import json
-import pickle
-import hashlib
 import logging
 import inspect
 import os
@@ -47,17 +45,6 @@ def get_depth(d):
     if not isinstance(d, dict):
         return 0
     return 1 + max([get_depth(v) for v in d.values()])
-
-
-def generate_cache_key(data):
-    """
-    Generate a unique cache key based on the input data.
-    """
-    try:
-        serialized = pickle.dumps(data)
-        return hashlib.sha256(serialized).hexdigest()
-    except Exception as e:
-        raise ValueError(f"Invalid input: {e}")
 
 
 class WiCBinary(BaseModel):
@@ -958,46 +945,10 @@ class CDPipeline(Pipeline):
             all_words = set(self.dataset.keys())
 
         if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-            usage_list = []
-            for corpus in [self.dataset.corpus1_lemma, self.dataset.corpus2_lemma]:
-                search = True
-                if self.cache_mgr:
-                    # Generate cache key
-                    cache_key = generate_cache_key((self.dataset.dataset, self.dataset.language, corpus))
-                    cache_path = os.path.join(self.cache_mgr.cache_dir,
-                                              f"{self.dataset.dataset}_{self.dataset.language}_{cache_key}.json")
-
-                    # whether the cache files exist
-                    if os.path.exists(cache_path):
-                        try:
-                            logging.info(f"Loading cached usages from {cache_path}")
-                            with open(cache_path, "r") as f:
-                                corpus_usages = json.load(f)
-                                # When loading from cache, replace 'text_' with 'text'.
-                                corpus_usages = UsageDictionary(
-                                    {w: TargetUsageList(
-                                        [TargetUsage(**({"text": tu.pop("text_")} | tu)) for tu in tul])
-                                        for w, tul in corpus_usages.items()})
-                                search = False
-                        except Exception as e:
-                            logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
-                            os.remove(cache_path)
-
-                if search:
-                    logging.info(f"Searching for usages in {corpus.name}...")
-                    corpus_usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
-                    if self.cache_mgr:
-                        # save the usages to a json file
-                        with self.cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
-                            serialized = {w: corpus_usages[w].to_dict() for w in corpus_usages.keys()}
-                            json.dump(serialized, temp_path)
-                            logging.info(f"Saved usages to {cache_path}.")
-                usage_list.append(corpus_usages)
-            for t, usages_per_word in enumerate(usage_list):
-                for w, us in usages_per_word.items():
-                    if w not in usages:
-                        usages[w] = dict()
-                    usages[w][t] = us
+            usages_per_word = self.dataset.get_all_usages()
+            # Sort by time
+            for w, us in usages_per_word.items():
+                usages[w] = us.group_by_time(use_year=False)
         
         elif (isinstance(self.dataset, DWUG) or 
              (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"})):

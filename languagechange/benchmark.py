@@ -4,6 +4,7 @@ import re
 import json
 import webbrowser
 import pickle
+import hashlib
 import math
 from math import comb
 import csv
@@ -27,9 +28,10 @@ from languagechange.corpora import LinebyLineCorpus
 from languagechange.models.representation.contextualized import ContextualizedModel
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
-from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
+from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage, UsageDictionary
 from languagechange.utils import NumericalTime, LiteralTime, generate_colormap
 from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
+from languagechange.cache import CacheManager
 
 
 def purity(labels_true, cluster_labels):
@@ -67,6 +69,17 @@ def generate_index_pairs(total, n, random_seed=None):
     # Pick the second in the pair
     c2 = selected - sum_c1_indices + c1 + 1
     return np.stack([c1, c2]).astype(int).transpose()
+
+
+def generate_cache_key(data):
+    """
+    Generate a unique cache key based on the input data.
+    """
+    try:
+        serialized = pickle.dumps(data)
+        return hashlib.sha256(serialized).hexdigest()
+    except Exception as e:
+        raise ValueError(f"Invalid input: {e}")
 
 
 class Benchmark():
@@ -228,6 +241,19 @@ class SemanticChangeEvaluationDataset(Benchmark):
 class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
     def __init__(self, language, subset: int = None, config='opt'):
+        """
+        Initialize a SemEval2020Task1 dataset instance.
+
+        Depending on the selected language, this class loads one of three lexical semantic change benchmarks:
+        - SemEval 2020 Task 1 (EN, DE, SV, LA)
+        - NorDiaChange (NO)
+        - RuShiftEval (RU)
+
+        Parameters:
+            language (str): language code of the dataset to load.
+            subset (int, optional): dataset subset to use for NorDiaChange and RuShiftEval. Ignored for other languages.
+            config (str, default="opt"): Configuration of the NorDiaChange statistics to load. Ignored for other datasets.
+        """
         lc = LanguageChange()
         self.language = language
         if self.language == 'NO' or self.language == 'RU':
@@ -245,6 +271,17 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         self.load()
 
     def load(self):
+        """
+        Load corpus resources, target words, and gold semantic change labels.
+
+        For SemEval 2020 Task 1, both tokenized and lemmatized corpora are initialized together with binary and graded 
+        change annotations.
+
+        For NorDiaChange, usage statistics and change scores are loaded from the selected subset.
+
+        For RuShiftEval, graded semantic change scores are loaded from the selected annotation subset. Since 
+        RuShiftEval reports semantic relatedness (COMPARE) rather than semantic change directly, scores are negated.
+        """
         if self.dataset == "SemEval 2020 Task 1":
             self.corpus1_lemma = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus1', 'lemma'),
@@ -313,8 +350,114 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                     self.target_words.add(word)
                     word = Target(word)
                     self.graded_task[word] = float(score)
+    
+    def _search_for_usages(self,
+        words,
+        group='all', 
+        lemma=True, 
+        cache=True, 
+        usage_cache_dir="~/.cache/languagechange/usages"
+        ):
+        """
+        Search the SemEval corpora for usages of one or more target words.
 
-    def get_word_usages(self, word, group='all'):
+        This method is only applicable to the original SemEval 2020 Task 1
+        datasets (EN, DE, SV, and LA). Results may optionally be cached to
+        avoid repeated corpus searches.
+
+        Args:
+            words (Union[str, list[str]]): target word or collection of target words.
+            group (str, default="all"): the time period to use ('1','2', or 'all')
+            lemma (bool, default=True): if True, search the lemmatized corpora. Otherwise search the tokenized corpora.
+            cache (bool, default=True): whether cached search results should be used and updated.
+            usage_cache_dir (str, default="~/.cache/languagechange/usages"): directory used for storing cached search 
+                results.
+
+        Returns
+            dict[str, TargetUsageList]: Dictionary mapping each queried word to its list of usages from the corpus
+                /corpora.
+        """
+        if self.dataset != 'SemEval 2020 Task 1':
+            logging.error("Only SemEval 2020 Task 1 datasets (languages EN, DE, SV and LA) can be searched through.")
+            raise ValueError
+        if isinstance(words, str):
+            words = [words]
+        usage_list = []
+        corpora = []
+        if lemma:
+            if str(group) in ['1','all']:
+                corpora.append(self.corpus1_lemma)
+            if str(group) in ['2','all']:
+                corpora.append(self.corpus2_lemma)
+        else:
+            if str(group) in ['1','all']:
+                corpora.append(self.corpus1_token)
+            if str(group) in ['2','all']:
+                corpora.append(self.corpus2_token)
+        
+        for corpus in corpora:
+            search = True
+            if cache:
+                cache_mgr = CacheManager(cache_dir=usage_cache_dir)
+                # Generate cache key
+                cache_key = generate_cache_key((self.dataset, self.language, corpus, list(words)))
+                cache_path = os.path.join(cache_mgr.cache_dir,
+                                            f"{self.dataset}_{self.language}_{cache_key}.json")
+
+                # whether the cache files exist
+                if os.path.exists(cache_path):
+                    try:
+                        logging.info(f"Loading cached usages from {cache_path}")
+                        with open(cache_path, "r") as f:
+                            corpus_usages = json.load(f)
+                            # When loading from cache, replace 'text_' with 'text'.
+                            corpus_usages = UsageDictionary(
+                                {w: TargetUsageList(
+                                    [TargetUsage(**({"text": tu.pop("text_")} | tu)) for tu in tul])
+                                    for w, tul in corpus_usages.items()})
+                            search = False
+                    except FileNotFoundError as e:
+                        logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
+                        os.remove(cache_path)
+
+            if search:
+                logging.info(f"Searching for usages in {corpus.name}...")
+                corpus_usages = corpus.search(words)
+                # Remove 'token=' or 'lemma='
+                corpus_usages = {st.split("=")[-1]: us for st, us in corpus_usages.items()}
+                if cache_mgr:
+                    # save the usages to a json file
+                    with cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
+                        serialized = {w: corpus_usages[w].to_dict() for w in corpus_usages.keys()}
+                        json.dump(serialized, temp_path)
+                        logging.info(f"Saved usages to {cache_path}.")
+            usage_list.append(corpus_usages)
+        return {w: TargetUsageList(usage_list[0][w] + usage_list[1][w]) for w in words}
+
+
+    def get_word_usages(self, 
+            word, 
+            group='all', 
+            lemma=True, 
+            cache=True, 
+            usage_cache_dir="~/.cache/languagechange/usages"):
+        """
+        Retrieve all recorded usages of a target word.
+
+        Args:
+            word (str): target word.
+            group (str, default="all"): group (time period) to retrieve usages from. Selecting '1' and '2' returns the 
+                usages of the first and second time period, respectively. The value "all" returns every available 
+                usage.
+            lemma (bool, default=True): for SemEval datasets, search the lemmatized corpus instead of the tokenized 
+                corpus.
+            cache (bool, default=True): whether corpus search results should be cached (for SemEval datasets).
+            usage_cache_dir (str, default="~/.cache/languagechange/usages"): directory containing cached search results.
+                (for SemEval datasets).
+
+        Returns:
+            TargetUsageList: all usages corresponding to the requested target word.
+        """
         group = str(group)
         usages = TargetUsageList()
 
@@ -349,15 +492,56 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             column_ids = list(df)
             for _, row in df.iterrows():
                 u = {c: row[c] for c in column_ids}
-                u['text'] = u['context']
-                u['target'] = Target(u['lemma'])
-                u['target'].set_lemma(u['lemma'])
-                u['target'].set_pos(u['pos'])
-                u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
-                u['time'] = NumericalTime(u['date'])
-                usages.append(DWUGUsage(**u))
-
+                if group == 'all' or u['grouping'] == group:
+                    u['text'] = u['context']
+                    u['target'] = Target(u['lemma'])
+                    u['target'].set_lemma(u['lemma'])
+                    u['target'].set_pos(u['pos'])
+                    u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
+                    u['time'] = NumericalTime(u['date'])
+                    usages.append(DWUGUsage(**u))
+        
+        else:
+            usage_dict = self._search_for_usages(
+                words=[word], 
+                group=group, 
+                lemma=lemma, 
+                cache=cache, 
+                usage_cache_dir=usage_cache_dir)
+            usages = usage_dict[word]
+        
         return usages
+
+    def get_all_usages(self,
+            group='all', 
+            lemma=True, 
+            cache=True, 
+            usage_cache_dir="~/.cache/languagechange/usages"):
+        """
+        Retrieve all recorded usages of all target words in the dataset.
+
+        Args:
+            group (str, default="all"): group (time period) to retrieve usages from. Selecting '1' and '2' returns the 
+                usages of the first and second time period, respectively. The value "all" returns every available 
+                usage.
+            lemma (bool, default=True): for SemEval datasets, search the lemmatized corpus instead of the tokenized 
+                corpus.
+            cache (bool, default=True): whether corpus search results should be cached (for SemEval datasets).
+            usage_cache_dir (str, default="~/.cache/languagechange/usages"): directory containing cached search results.
+                (for SemEval datasets).
+
+        Returns:
+            TargetUsageList: all usages corresponding to the requested target word.
+        """
+        if self.dataset == "SemEval 2020 Task 1":
+            return self._search_for_usages(
+                list(self.target_words), 
+                group=group, 
+                lemma=lemma, 
+                cache=cache, 
+                usage_cache_dir=usage_cache_dir)
+        else:
+            return {w: self.get_word_usages(w) for w in self.target_words}
 
 
 class DWUG(SemanticChangeEvaluationDataset):
