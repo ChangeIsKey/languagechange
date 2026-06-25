@@ -838,14 +838,29 @@ class WiCPipeline(Pipeline):
                     response_attr = "durel"
             else:
                 template = 'Please tell me if the meaning of the word \'{target}\' is the same in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCBinary) #TODO: add binary grammar
-                response_attr = 'wic_label'
+                if self.usage_encoding.local:
+                    grammar = r'root ::= "True"|"False"'
+                    self.usage_encoding.set_grammar(grammar)
+                    response_attr = None
+                else:
+                    self.usage_encoding.set_structure(WiCBinary)
+                    response_attr = 'wic_label'
 
             for pair in self.evaluation_set:
                 target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                      TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
-                label = int(self.usage_encoding.get_response(target_usage_list,
-                            user_prompt_template=template, response_attribute=response_attr))
+                label = self.usage_encoding.get_response(target_usage_list,
+                            user_prompt_template=template, response_attribute=response_attr)
+                if self.usage_encoding.local and task == "binary":
+                    if label == 'True':
+                        label = 1
+                    elif label == 'False':
+                        label = 0
+                    else:
+                        logging.error("Could not parse prompt model output as True or False.")
+                        raise ValueError
+                else:
+                    label = int(label)
                 labels.append(label)
         
         if not evaluate:

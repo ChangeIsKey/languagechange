@@ -1,18 +1,19 @@
 from typing import List, Union
-from languagechange.usages import TargetUsage
+import logging
 import getpass
 import os
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 from jsonschema import ValidationError
-import logging
-from trankit.pipeline import Pipeline
+
 try:
     from llama_cpp import LlamaGrammar
 except ModuleNotFoundError:
     logging.info("`llama_cpp` is not installed; local prompt models cannot be used.")
 
+from languagechange.usages import TargetUsage
+from languagechange.utils import _initialize_nlp
 
 class SCFloat(BaseModel):
     change: float = Field(description='The semantic change on a scale from 0 to 1.', le=1, ge=0)
@@ -46,15 +47,17 @@ class PromptModel:
                 or "DURel"). If None, the plain LLM without structured output will be used.
             language (Union[str, NoneType], default=None): the language to use if lemmatizing the target word in the
                 prompt.
-            lemmatize (bool, default=False): whether to lemmatize the target word in the prompt. If True, uses trankit
+            lemmatize (bool, default=False): whether to lemmatize the target word in the prompt. If True, uses spaCy
                 to do this.
+            nlp_package_name (str, default=None): the name of the NLP package to use, such as 'en_core_web_sm', if
+                using a custom spaCy NLP package for lemmatization.
             **kwargs: arguments passed to the actual model, such as n_gpu_layers, temperature, etc.
     """
     _LLM_CACHE = {}
 
     def __init__(self, model_name_or_path: str, model_provider: str = None, langsmith_key: str = None,
                  provider_key_name: str = None, provider_key: str = None, structure: Union[str, BaseModel] = None,
-                 language: str = None, lemmatize=False, **kwargs):
+                 language: str = None, lemmatize=False, nlp_package_name=None, **kwargs):
         self.local = False
         self.structure = None
         self.grammar = None
@@ -176,6 +179,11 @@ class PromptModel:
 
         self.language = language
         self.lemmatize = lemmatize
+        if self.lemmatize:
+            self.nlp_processor = _initialize_nlp(self.language, package_name=nlp_package_name)
+        else:
+            self.nlp_processor = None
+
 
     def set_structure(self, structure):
         if isinstance(structure, str):
@@ -212,7 +220,8 @@ class PromptModel:
             self, target_usages: List[TargetUsage],
             system_message='You are a lexicographer',
             user_prompt_template='Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-            response_attribute=None, grammar=None):
+            response_attribute=None, 
+            grammar=None):
         """
         Takes as input two target usages and returns the degree of semantic change between them, using a chat model with structured output.
         Args:
@@ -233,21 +242,22 @@ class PromptModel:
             words.append(usage.text()[usage.offsets[0]:usage.offsets[1]])
             sentences.append(usage.text())
 
-        def get_lemma(tokenized, usage):
-            for token in tokenized['tokens']:
-                if token['span'] == tuple(usage.offsets):
-                    return (token['lemma'])
-
-        if self.lemmatize:
-            if self.language == None:
-                logging.error(
-                    "Could not lemmatize using trankit because no language is set. Please pass a value to 'language' when initializing the model.")
-                raise Exception
-            p = Pipeline(self.language)
-            lemmatized = [p.lemmatize(sentence, is_sent=True) for sentence in sentences]
-            lemmas = [get_lemma(lemmatized[i], target_usages[i]) for i in range(2)]
-
-            if lemmas[0] != lemmas[1]:
+        def get_lemma(tokenized, offsets):
+            start, _ = offsets
+            curr = 0
+            for t in list(tokenized) + ['']:
+                token = t.text
+                lemma = t.lemma_
+                if curr >= start:
+                    return lemma
+                curr += len(token) + 1
+            return None
+            
+        if self.nlp_processor:
+            tokenized = [self.nlp_processor(s) for s in sentences]
+            lemmas = [get_lemma(tok, tu.offsets) or w for tok, tu, w in zip(tokenized, target_usages, words)]
+            
+            if lemmas[0].lower() != lemmas[1].lower():
                 logging.info("Lemmas of the two target words differ, are you sure they are different forms of the same lexeme?")
             target = lemmas[0]
         else:
