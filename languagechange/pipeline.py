@@ -26,7 +26,6 @@ from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from languagechange.cache import CacheManager
 from languagechange.utils import Time, NumericalTime, LiteralTime, TimeInterval, _parse_year
-from languagechange.search import SearchTerm
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -63,10 +62,6 @@ def generate_cache_key(data):
 
 class WiCBinary(BaseModel):
     wic_label: bool = Field(description='Whether the word has the same meaning or not.')
-
-
-class WiCGraded(BaseModel):
-    wic_label: float = Field(description='How similar the two occurrences of the word are.', le=1, ge=0)
 
 
 class Pipeline:
@@ -642,7 +637,7 @@ class WSIPipeline(Pipeline):
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
                 encoded_usages = self.usage_encoding.generate_definitions(
-                    target_usages, encode_definitions='vectors')
+                    target_usages, return_definitions=False, return_embeddings=True)
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages = self.usage_encoding.encode(target_usages)
@@ -799,7 +794,7 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions='vectors')
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, return_definitions=False, return_embeddings=True)
 
             if label_func is None:
                 if task == "graded":
@@ -834,16 +829,23 @@ class WiCPipeline(Pipeline):
         elif isinstance(self.usage_encoding, PromptModel):
             if task == "graded":
                 template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCGraded)
+                if self.usage_encoding.local:
+                    grammar = r'root ::= [1-4]'
+                    self.usage_encoding.set_grammar(grammar)
+                    response_attr = None
+                else:
+                    self.usage_encoding.set_structure("DURel")
+                    response_attr = "durel"
             else:
                 template = 'Please tell me if the meaning of the word \'{target}\' is the same in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCBinary)
+                self.usage_encoding.set_structure(WiCBinary) #TODO: add binary grammar
+                response_attr = 'wic_label'
 
             for pair in self.evaluation_set:
                 target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                      TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
                 label = int(self.usage_encoding.get_response(target_usage_list,
-                            user_prompt_template=template, response_attribute="wic_label"))
+                            user_prompt_template=template, response_attribute=response_attr))
                 labels.append(label)
         
         if not evaluate:
@@ -986,10 +988,7 @@ class CDPipeline(Pipeline):
 
                 if search:
                     logging.info(f"Searching for usages in {corpus.name}...")
-                    corpus_usages = corpus.search([SearchTerm(lemma=target.target) 
-                        for target in self.dataset.graded_task.keys()])
-                    # Rename keys to keep only the target, not 'lemma=target'
-                    corpus_usages = {w.split("=")[-1] : u for w, u in corpus_usages.items()}
+                    corpus_usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
                     if self.cache_mgr:
                         # save the usages to a json file
                         with self.cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
@@ -1100,7 +1099,7 @@ class CDPipeline(Pipeline):
                 for t, us in usages_by_period.items():
                     embeddings_per_period[t] = self.usage_encoding.generate_definitions(
                         us, 
-                        encode_definitions='vectors')
+                        return_definitions=False, return_embeddings=True)
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 for t, us in usages_by_period.items():

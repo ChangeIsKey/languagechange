@@ -7,18 +7,25 @@ from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 from jsonschema import ValidationError
 import logging
+from trankit.pipeline import Pipeline
+try:
+    from llama_cpp import LlamaGrammar
+except ModuleNotFoundError:
+    logging.info("`llama_cpp` is not installed; local prompt models cannot be used.")
 
 
 class SCFloat(BaseModel):
-    change : float = Field(description='The semantic change on a scale from 0 to 1.',le=1, ge=0)
+    change: float = Field(description='The semantic change on a scale from 0 to 1.', le=1, ge=0)
 
 
 class CosSim(BaseModel):
-    sim : float = Field(description='The semantic similarity on a scale from 0 to 1.',le=1, ge=0)
+    sim: float = Field(description='The semantic similarity on a scale from 0 to 1.', le=1, ge=0)
 
 
 class DURel(BaseModel):
-    durel : int = Field(description='The semantic similary from 1 to 4, where 1 is unrelated, 2 is distantly related, 3 is closely related and 4 is identical.',le=4, ge=1)
+    durel: int = Field(
+        description='The semantic similary from 1 to 4, where 1 is unrelated, 2 is distantly related, 3 is closely related and 4 is identical.',
+        le=4, ge=1)
 
 
 class PromptModel:
@@ -44,11 +51,16 @@ class PromptModel:
             **kwargs: arguments passed to the actual model, such as n_gpu_layers, temperature, etc.
     """
     _LLM_CACHE = {}
-    
-    def __init__(self, model_name_or_path : str, model_provider : str=None, langsmith_key : str = None, 
-        provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", 
-        language : str = None, lemmatize = False, **kwargs):
-        if os.path.exists(model_name_or_path) and model_name_or_path.endswith(".gguf"):
+
+    def __init__(self, model_name_or_path: str, model_provider: str = None, langsmith_key: str = None,
+                 provider_key_name: str = None, provider_key: str = None, structure: Union[str, BaseModel] = None,
+                 language: str = None, lemmatize=False, **kwargs):
+        self.local = False
+        self.structure = None
+        self.grammar = None
+
+        if os.path.exists(model_name_or_path) and (
+                model_name_or_path.endswith(".gguf") or os.path.isdir(model_name_or_path)):
             # Load a local model using Llama cpp
             try:
                 # pip install -qU langchain-community llama-cpp-python
@@ -80,7 +92,7 @@ class PromptModel:
                         min_p=kwargs.get("min_p", 0.05),
                         penalty_repeat=kwargs.get("penalty_repeat", 1.00),
                         penalty_last_n=kwargs.get("penalty_last_n", 64),
-                        model_kwargs=kwargs.get("model_kwargs", {}), # should be {"chat_format": "llama-3"} for Llama3
+                        model_kwargs=kwargs.get("model_kwargs", {}),  # should be {"chat_format": "llama-3"} for Llama3
                         verbose=kwargs.get("verbose", False),
                     )
                 self.llm = PromptModel._LLM_CACHE[cache_key]
@@ -88,13 +100,14 @@ class PromptModel:
             except ValidationError as e:
                 logging.error(f"Could not load a local model from {model_name_or_path}.")
                 raise e
+            self.local = True
 
         else:
             # Use the Langchain API
             self.model_name = model_name_or_path
 
             os.environ["LANGSMITH_TRACING"] = "true"
-            
+
             # The keys can either be passed as arguments, stored as an environment variable or put in manually
             if langsmith_key != None:
                 os.environ["LANGSMITH_API_KEY"] = langsmith_key
@@ -102,21 +115,21 @@ class PromptModel:
                 os.environ["LANGSMITH_API_KEY"] = getpass.getpass("Enter API key for LangSmith: ")
 
             if provider_key_name is None:
-                provider_key_names = {"openai":"OPENAI_API_KEY",
-                                    "anthropic":"ANTHROPIC_API_KEY",
-                                    "azure":"AZURE_OPENAI_API_KEY",
-                                    "groq":"GROQ_API_KEY",
-                                    "cohere":"COHERE_API_KEY",
-                                    "nvidia":"NVIDIA_API_KEY",
-                                    "fireworks":"FIREWORKS_API_KEY",
-                                    "mistralai":"MISTRAL_API_KEY",
-                                    "together":"TOGETHER_API_KEY",
-                                    "ibm":"WATSONX_APIKEY",
-                                    "databricks":"DATABRICKS_TOKEN",
-                                    "xai":"XAI_API_KEY"}
+                provider_key_names = {"openai": "OPENAI_API_KEY",
+                                      "anthropic": "ANTHROPIC_API_KEY",
+                                      "azure": "AZURE_OPENAI_API_KEY",
+                                      "groq": "GROQ_API_KEY",
+                                      "cohere": "COHERE_API_KEY",
+                                      "nvidia": "NVIDIA_API_KEY",
+                                      "fireworks": "FIREWORKS_API_KEY",
+                                      "mistralai": "MISTRAL_API_KEY",
+                                      "together": "TOGETHER_API_KEY",
+                                      "ibm": "WATSONX_APIKEY",
+                                      "databricks": "DATABRICKS_TOKEN",
+                                      "xai": "XAI_API_KEY"}
                 if model_provider in provider_key_names.keys():
                     provider_key_name = provider_key_names[model_provider]
-                    
+
             if provider_key != None:
                 os.environ[provider_key_name] = provider_key
             elif provider_key_name != None and not os.environ.get(provider_key_name):
@@ -131,19 +144,19 @@ class PromptModel:
                     azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
                     openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
                 )
-    
+
             elif model_provider == "ibm":
                 if 'url' in kwargs and 'project_id' in kwargs:
                     # pip install -qU "langchain-ibm"
                     from langchain_ibm import ChatWatsonx
-                    
-                    self.llm = ChatWatsonx(model_id = model_name,
-                                  url=kwargs.get('url'),
-                                  project_id=kwargs.get('project_id')
-                                  )
+
+                    self.llm = ChatWatsonx(model_id=model_name_or_path,
+                                           url=kwargs.get('url'),
+                                           project_id=kwargs.get('project_id')
+                                           )
                 else:
                     raise Exception("Pass 'url' and 'project_id' to initialize a ChatWatsonx model.")
-                
+
             elif model_provider == "databricks":
                 if 'databricks_host_url' in kwargs:
                     os.environ["DATABRICKS_HOST"] = kwargs.get('databricks_host_url')
@@ -151,7 +164,7 @@ class PromptModel:
                     raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
                 # pip install -qU "databricks-langchain"
                 from databricks_langchain import ChatDatabricks
-                self.llm = ChatDatabricks(endpoint=model_name)
+                self.llm = ChatDatabricks(endpoint=model_name_or_path)
             else:
                 try:
                     self.llm = init_chat_model(model_name_or_path, model_provider=model_provider)
@@ -159,13 +172,6 @@ class PromptModel:
                     logging.error("Could not initialize chat model.")
                     raise Exception
 
-        if not isinstance(structure,str) and issubclass(structure, BaseModel):
-            if 'change' in structure.model_fields:
-                self.structure = structure
-            else:
-                logging.error("A custom BaseModel needs to have a field named 'change'.")
-                raise Exception
-        
         self.set_structure(structure)
 
         self.language = language
@@ -180,12 +186,33 @@ class PromptModel:
         else:
             self.model = self.llm
             self.name = self.model_name
+        self.structure = structure
 
-    def get_response(self, target_usages : List[TargetUsage], 
-                     system_message = 'You are a lexicographer',
-                     user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-                     response_attribute = None
-                     ):
+    def set_grammar(self, grammar):
+        self.grammar = grammar if isinstance(grammar, LlamaGrammar) else LlamaGrammar.from_string(grammar)
+
+    def _invoke_with_grammar(self, system_message, user_message, grammar=None):
+        if grammar is not None:
+            grammar = LlamaGrammar.from_string(grammar)
+        elif self.grammar:
+            grammar = self.grammar
+        else:
+            logging.error("No grammar provided.")
+            raise ValueError
+
+        out = self.model.client.create_chat_completion(
+            messages=[{"role": "system", "content": system_message},
+                      {"role": "user", "content": user_message}],
+            grammar=grammar
+        )
+
+        return out["choices"][0]["message"]["content"]
+
+    def get_response(
+            self, target_usages: List[TargetUsage],
+            system_message='You are a lexicographer',
+            user_prompt_template='Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+            response_attribute=None, grammar=None):
         """
         Takes as input two target usages and returns the degree of semantic change between them, using a chat model with structured output.
         Args:
@@ -197,7 +224,7 @@ class PromptModel:
         Returns:
             int or float or str: the degree of semantic change between the two instances of the target word, alternatively the whole message content if the output is not structured.
         """
-        
+
         assert len(target_usages) == 2
 
         words = []
@@ -209,34 +236,40 @@ class PromptModel:
         def get_lemma(tokenized, usage):
             for token in tokenized['tokens']:
                 if token['span'] == tuple(usage.offsets):
-                    return(token['lemma'])
-                
+                    return (token['lemma'])
+
         if self.lemmatize:
             if self.language == None:
-                logging.error("Could not lemmatize using trankit because no language is set. Please pass a value to 'language' when initializing the model.")
+                logging.error(
+                    "Could not lemmatize using trankit because no language is set. Please pass a value to 'language' when initializing the model.")
                 raise Exception
             p = Pipeline(self.language)
-            lemmatized = [p.lemmatize(sentence, is_sent = True) for sentence in sentences]
+            lemmatized = [p.lemmatize(sentence, is_sent=True) for sentence in sentences]
             lemmas = [get_lemma(lemmatized[i], target_usages[i]) for i in range(2)]
-            
+
             if lemmas[0] != lemmas[1]:
                 logging.info("Lemmas of the two target words differ, are you sure they are different forms of the same lexeme?")
             target = lemmas[0]
         else:
             target = words[0]
 
-        prompt_template = ChatPromptTemplate.from_messages(
-        [("system", system_message), ("user", user_prompt_template)]
-        )
-            
-        prompt = prompt_template.invoke({"target": target, "usage_1": sentences[0], "usage_2": sentences[1]})
-        
-        try:
-            response = self.model.invoke(prompt)
-        except:
-            logging.error("Could not run chat completion.")
-            raise Exception
-        
-        if response_attribute is not None:
-            return getattr(response, response_attribute) or response
-        return response
+        if not self.local:
+            prompt_template = ChatPromptTemplate.from_messages(
+                [("system", system_message), ("user", user_prompt_template)]
+            )
+
+            prompt = prompt_template.invoke({"target": target, "usage_1": sentences[0], "usage_2": sentences[1]})
+
+            try:
+                response = self.model.invoke(prompt)
+            except:
+                logging.error("Could not run chat completion.")
+                raise Exception
+
+            if response_attribute is not None:
+                return getattr(response, response_attribute) or response
+            return response
+
+        else:
+            user_message = user_prompt_template.format(target=target, usage_1=sentences[0], usage_2=sentences[1])
+            return self._invoke_with_grammar(system_message, user_message, grammar=grammar)
