@@ -142,7 +142,7 @@ class TargetUsageList(list):
             return u_t
 
         ins = deque(sorted(intervals))
-        us = deque(sorted(self, key = get_time))
+        us = deque(sorted(self, key = lambda u : get_time(u)))
         usage_dict = UsageDictionary()
         t = ins.popleft()
         u = us.popleft()
@@ -190,15 +190,12 @@ class TargetUsageList(list):
         Returns:
             UsageDictionary: mapping from time labels to TargetUsageList objects.
         """
-        if times and not isinstance(times, list):
+        if not isinstance(times, list):
             logging.error("`times` has to be a list of Time, str or int.")
             raise TypeError
         if times is None:
-            if use_year:
-                sorted_times = sorted(set(_parse_year(getattr(u, time_attr)) for u in self))
-            else:
-                sorted_times = sorted(set(str(getattr(u, time_attr)) for u in self))
-            intervals = [TimeInterval(LiteralTime(str(y)), LiteralTime(str(y))) for y in sorted_times]
+            sorted_years = sorted(set(_parse_year(getattr(u, time_attr)) for u in self))
+            intervals = [TimeInterval(LiteralTime(str(y)), LiteralTime(str(y))) for y in sorted_years]
         else:
             if all(isinstance(t, str) or isinstance(t, int) for t in times):
                 times = [LiteralTime(str(t)) for t in times]

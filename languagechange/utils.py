@@ -7,7 +7,6 @@ import math
 import numpy as np
 import matplotlib as mpl
 import pandas as pd
-import logging
 
 
 def PARSE_DATE_SIMPLE(d): return d[:10]
