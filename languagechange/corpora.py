@@ -13,7 +13,6 @@ import lxml.etree as ET
 from sortedcontainers import SortedKeyList
 from inspect import signature
 
-import trankit
 import pandas as pd
 import pyarrow as pa
 import pyarrow.csv as pv
@@ -1447,7 +1446,7 @@ class HistoricalCorpus(SortedKeyList):
                 for line in corpus.line_iterator():
                     yield line
             except:
-                logging.error(f"Could not get lines from {corpus.name}.")
+                logging.error(f"Could not get lines from {str(corpus.name)}.")
 
     def search(self, search_terms: List[str | Pattern | SearchTerm], index_by_corpus=False):
         """
@@ -1476,8 +1475,8 @@ class HistoricalCorpus(SortedKeyList):
                     continue
                 for key in usage_dict:
                     if not key in usages:
-                        usages[key] = {corpus.name: TargetUsageList()}
-                    usages[key][corpus.name] = usage_dict[key]
+                        usages[key] = {str(corpus.name): TargetUsageList()}
+                    usages[key][str(corpus.name)] = usage_dict[key]
 
         else:
             usages = UsageDictionary()
@@ -1485,7 +1484,7 @@ class HistoricalCorpus(SortedKeyList):
                 try:
                     usage_dict: UsageDictionary = corpus.search(search_terms)
                 except:
-                    logging.error(f"Could not search through {corpus.name}.")
+                    logging.error(f"Could not search through {str(corpus.name)}.")
                     continue
                 for key in usage_dict:
                     if not key in usages:
