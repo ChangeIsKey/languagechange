@@ -87,6 +87,11 @@ class DWUGUsage(TargetUsage):
         self.identifier = identifier
         self.description = description
 
+    def to_dict(self):
+        d = self.__dict__.copy()
+        d['time'] = str(d['time'])
+        d['target'] = str(d['target'])
+        return d
 
 class TargetUsageList(list):
     """List of TargetUsage instances with serialization helpers."""
