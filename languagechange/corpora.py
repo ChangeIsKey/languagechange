@@ -201,7 +201,7 @@ class Line:
         return self.raw_text()
     
     def __len__(self):
-        return len(self.tokens())
+        return len(self.tokens() or self.lemmas() or self.pos_tags())
 
 
 class Corpus:
