@@ -7,7 +7,6 @@ from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 from jsonschema import ValidationError
 import logging
-from trankit.pipeline import Pipeline
 
 
 class SCFloat(BaseModel):

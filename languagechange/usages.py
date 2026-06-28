@@ -46,10 +46,20 @@ class Target:
 class TargetUsage:
     """Represents an individual usage with offsets and optional time metadata."""
 
-    def __init__(self, text: str, offsets: str, time: Time = None, **kwargs):
+    def __init__(self, text: str, offsets: str, time: Union[Time, str, int] = None, **kwargs):
         self.text_ = text
         self.offsets = offsets
-        self.time = time
+        if isinstance(time, str):
+            self.time = LiteralTime(time)
+        elif isinstance(time, int):
+            self.time = NumericalTime(time)
+        elif isinstance(time, Time):
+            self.time = time
+        elif time is not None:
+            logging.error("'time' has to be a NumericalTime, LiteralTime, str, int or None.")
+            raise TypeError
+        else:
+            time = self.time
         self.__dict__.update(kwargs)
 
     def text(self):
@@ -130,6 +140,9 @@ class TargetUsageList(list):
             UsageDictionary: mapping from interval strings to TargetUsageList objects containing the usages that fall 
                 within each interval.
         """
+        if not all(getattr(u, time_attr, None) for u in self):
+            logging.error(f"In order to sort by '{time_attr}', all usages need to have a '{time_attr}' attribute.")
+            raise AttributeError
         if not isinstance(intervals, list):
             logging.error("`intervals` has to be a list of TimeInterval or tuples of str or int.")
             raise TypeError

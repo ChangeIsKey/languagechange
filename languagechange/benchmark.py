@@ -400,7 +400,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             if cache:
                 cache_mgr = CacheManager(cache_dir=usage_cache_dir)
                 # Generate cache key
-                cache_key = generate_cache_key((self.dataset, self.language, corpus, list(words)))
+                cache_key = generate_cache_key((self.dataset, self.language, corpus.name, sorted(words)))
                 cache_path = os.path.join(cache_mgr.cache_dir,
                                             f"{self.dataset}_{self.language}_{cache_key}.json")
 
