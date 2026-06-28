@@ -1347,21 +1347,31 @@ class DWUG(SemanticChangeEvaluationDataset):
 
 class WiC(Benchmark):
     """
-        Dataset handling for the Word-in-Context (WiC) task.
-        Parameters:
-            path (str) : a path to the dataset, if it is not stored by the resource hub.
-            dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 
-                'AM2iCo'] if using a dataset in the language change resource hub, or a list or a dict if loading from a
-                datastructure already describing a WiC dataset.
-            version (str) : the version of the dataset if using a dataset from the resource hub.
-            language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
-            linguality (str) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
-            name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
+    Dataset handling for the Word-in-Context (WiC) task.
+    
+    Parameters:
+        path (str, default=None) : a path to the dataset, if it is not stored by the resource hub.
+        wic_data (Union[list[dict], list[tuple(TargetUsage)]], default=None): already loaded WiC data to use. Can be 
+            either 
+                1. a list of dictionaries with the keys 'text1', 'start1', 'end1', 'text2', 'start2', 'end2', 'label'
+                2. a list of pairs of TargetUsage. For this, `labels` also need to be provided. 
+        labels (list[Union[int, float]], default=None): labels for each example pair, if initializing from target
+            usages.
+        dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 
+            'AM2iCo'] if using a dataset in the language change resource hub, or a list or a dict if loading from a
+            datastructure already describing a WiC dataset.
+        version (str, default=None) : the version of the dataset if using a dataset from the resource hub.
+        language (str, default=None) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
+        linguality (str, default=None) : whether to use the crosslingual or multilingual dataset, in the case of 
+            MCL-WiC.
+        name (str, default=None) : the name of the dataset (in case no values for dataset, language and version are 
+            specified).
     """
 
     def __init__(self,
                  path: str = None,
                  wic_data: dict | list = None,
+                 labels : list = None,
                  dataset: str = None,
                  version: str = None,
                  language: str = None,
@@ -1420,11 +1430,18 @@ class WiC(Benchmark):
 
         # Loads from a dictionary or list
         elif wic_data is not None:
-            try:
-                self.load_from_data(wic_data)
-            except Exception as e:
-                logging.error('Could not load from dataset.')
-                raise e
+            if (isinstance(wic_data, list) and
+                all(len(e) == 2 and all(isinstance(tu, TargetUsage) for tu in e) for e in wic_data)):
+                if labels is None:
+                    logging.error("When loading from a list of pairs of TargetUsage, `labels` needs to be provided.")
+                    raise ValueError
+                self.load_from_target_usages(wic_data, labels)
+            else:
+                try:
+                    self.load_from_data(wic_data)
+                except Exception as e:
+                    logging.error('Could not load from dataset.')
+                    raise e
 
         else:
             logging.info("No data examples have been loaded.")
@@ -1815,6 +1832,7 @@ class WSD(Benchmark):
     def __init__(self,
                  path: str = None,
                  wsd_data: list | dict = None,
+                 labels: list = None,
                  dataset: str = None,
                  language: str = None,
                  version: str = None,
@@ -1847,11 +1865,17 @@ class WSD(Benchmark):
 
         # Loads from a dictionary or list already containing a WSD dataset
         elif wsd_data != None:
-            try:
-                self.load_from_data(wsd_data)
-            except Exception as e:
-                logging.error('Could not load from dataset.')
-                raise e
+            if isinstance(wsd_data, list) and all(isinstance(e, TargetUsage) for e in wsd_data):
+                if labels is None:
+                    logging.error("When loading from a list of pairs of TargetUsage, `labels` needs to be provided.")
+                    raise ValueError
+                self.load_from_target_usages(wsd_data, labels)
+            else:
+                try:
+                    self.load_from_data(wsd_data)
+                except Exception as e:
+                    logging.error('Could not load from dataset.')
+                    raise e
 
         else:
             logging.info("No data examples have been loaded.")
@@ -2075,9 +2099,9 @@ class WSD(Benchmark):
             if not word in self.target_words:
                 logging.error(f'Word {word} was not found.')
                 raise ValueError
-            dataset = filter(lambda d: d['word'] == word, dataset)
+            dataset = list(filter(lambda d: d['word'] == word, dataset))
 
-        if type(predictions) == dict and 'id' in predictions.keys():
+        if type(predictions) == dict:
             for d in dataset:
                 if not 'id' in d.keys():
                     logging.error('Could not find id:s for all examples in the dataset.')
@@ -2118,6 +2142,7 @@ class WSI(Benchmark):
 
     def __init__(self,
                  wsi_data: list | dict = None,
+                 labels: list = None,
                  dataset: str = None,
                  version: str = None,
                  language: str = None,
@@ -2131,12 +2156,18 @@ class WSI(Benchmark):
         self.target_words = set()
         if name is not None:
             self.name = name
-        if wsi_data is not None:
-            try:
-                self.load_from_data(wsi_data)
-            except Exception as e:
-                logging.error('Could not load from dataset.')
-                raise e
+        if wsi_data != None:
+            if isinstance(wsi_data, list) and all(isinstance(e, TargetUsage) for e in wsi_data):
+                if labels is None:
+                    logging.error("When loading from a list of pairs of TargetUsage, `labels` needs to be provided.")
+                    raise ValueError
+                self.load_from_target_usages(wsi_data, labels)
+            else:
+                try:
+                    self.load_from_data(wsi_data)
+                except Exception as e:
+                    logging.error('Could not load from dataset.')
+                    raise e
         else:
             logging.info("No data examples have been loaded.")
 

@@ -37,14 +37,14 @@ class Visualizer():
         domain. It can also display usages grouped by cluster and sorted by time period or domain.
 
         Parameters:
-            embeddings (Union[np.ndarray, list[np.ndarray], dict[np.ndarray]]):
-                Embedding vectors of shape (n_samples, n_features). If a list of arrays is provided, each array
-                is treated as a separate time period and concatenated internally.
             usages (Union[list[TargetUsage], dict], default=None):
                 List of TargetUsage objects with a '.time' attribute that can be used for sorting, alt. a dictionary 
                 where the keys correspond to time periods or domains and the values are lists of target usages. 
                 If a flat list, it is used to automatically derive time period boundaries if 'counts_per_time_period' 
                 is not provided.
+            embeddings (Union[np.ndarray, list[np.ndarray], dict[np.ndarray]]):
+                Embedding vectors of shape (n_samples, n_features). If a list of arrays is provided, each array
+                is treated as a separate time period and concatenated internally.
             cluster_labels (Union[np.ndarray, list[np.ndarray], dict[np.ndarray]]):
                 Cluster label per embedding (shape: (n_samples,)). If a list is provided, it must mirror the
                 structure of 'embeddings' when embeddings are provided as a list. Label -1 is treated as
