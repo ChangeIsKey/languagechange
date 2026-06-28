@@ -226,8 +226,23 @@ class SemanticChangeEvaluationDataset(Benchmark):
 
 
 class SemEval2020Task1(SemanticChangeEvaluationDataset):
+    """
+    Handles dataloading and evaluation for datasets belonging to the SemEval 2020: Task 1 tasks: binary and graded 
+    unsupervised lexical semantic change detection.
+    """
 
-    def __init__(self, language, subset: int = None, config='opt'):
+    def __init__(self, language, subset: int = None):
+        """
+        Loads a dataset for SemEval 2020: Task 1.
+
+        Parameters:
+            language (str): the language of the dataset, one of 'DE', 'EN', 'NO' 'LA', 'RU' and 'SV'. If 'NO', the 
+                NorDiaChange (https://github.com/ltgoslo/nor_dia_change) dataset is loaded. If 'RU', the RuShiftEval 
+                (https://github.com/akutuzov/rushifteval_public) dataset is loaded. Otherwise, one of the original
+                datasets belonging to SemEval 2020: Task 1 (https://zenodo.org/records/3931969) is loaded.
+            subset (int, default=None): the subset of the dataset to use. Only applicable for languages 'NO' and 'RU'.
+                For 'RU', must be one of 1, 2 and 3. For 'NO', must be one of 1 and 2.
+        """
         lc = LanguageChange()
         self.language = language
         if self.language == 'NO' or self.language == 'RU':
@@ -241,7 +256,6 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         home_path = lc.get_resource('benchmarks', self.dataset, self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path, semeval_folder)
-        self.config = config
         self.load()
 
     def load(self):
@@ -269,11 +283,11 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
         if self.language == 'NO':
             matches = list(
-                Path(os.path.join(self.home_path, f'subset{self.subset}', 'stats', self.config)).glob(
+                Path(os.path.join(self.home_path, f'subset{self.subset}', 'stats', 'opt')).glob(
                     'stats_groupings.[ct]sv'))
             if not matches:
                 logging.error(
-                    f"Path does not exist: {os.path.join(self.home_path, f'subset{self.subset}','stats',self.config)}/stats_groupings.[ct]sv")
+                    f"Path does not exist: {os.path.join(self.home_path, f'subset{self.subset}','stats/opt/stats_groupings.[ct]sv')}")
                 raise FileNotFoundError
             df = pd.read_csv(matches[0], sep="\t", quoting=csv.QUOTE_NONE)
             for _, row in df.iterrows():
