@@ -93,7 +93,7 @@ class TimeInterval(Time):
     def __lt__(self, other):
         if type(other) == TimeInterval:
             if self.start == other.start:
-                return self.duration < other.duration
+                return self.end < other.end
             else:
                 return self.start < other.start
         elif type(other) == NumericalTime:
@@ -102,7 +102,7 @@ class TimeInterval(Time):
     def __le__(self, other):
         if type(other) == TimeInterval:
             if self.start == other.start:
-                return self.duration <= other.duration
+                return self.end <= other.end
             else:
                 return self.start <= other.start
         elif type(other) == NumericalTime:
