@@ -621,21 +621,21 @@ class DWUG(SemanticChangeEvaluationDataset):
             n_clusters = len(unique_labels)
 
             # Generate a colormap with colors that are distinguishable from each other
-            cmap = generate_colormap(n_classes)
+            cmap = generate_colormap(n_clusters)
 
             nx.draw_networkx_nodes(
-                judgments_graph, 
+                graph, 
                 pos, 
                 node_size=node_size, 
-                node_color=classes, 
+                node_color=clusters, 
                 cmap=cmap, 
                 vmin=-1, 
-                vmax=n_classes)
+                vmax=n_clusters)
 
             if plot_cluster_labels:
-                for v in unique_classes:
+                for v in unique_labels:
                     plt.scatter([],[], c=cmap(v+1), label=str(rev_mapping[v]))
-                if -1 in classes:
+                if -1 in clusters:
                     plt.scatter([],[], c=cmap(0), label='No cluster')
                 plt.legend(title="Clusters")
         else:
