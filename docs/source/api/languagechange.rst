@@ -1,7 +1,10 @@
-.. _source/api:
-
 languagechange package
 ======================
+
+.. automodule:: languagechange
+   :members:
+   :show-inheritance:
+   :undoc-members:
 
 Subpackages
 -----------
@@ -38,10 +41,10 @@ languagechange.corpora module
    :show-inheritance:
    :undoc-members:
 
-languagechange.evaluation module
---------------------------------
+languagechange.pipeline module
+------------------------------
 
-.. automodule:: languagechange.evaluation
+.. automodule:: languagechange.pipeline
    :members:
    :show-inheritance:
    :undoc-members:
@@ -78,10 +81,10 @@ languagechange.utils module
    :show-inheritance:
    :undoc-members:
 
-Module contents
----------------
+languagechange.visualization module
+-----------------------------------
 
-.. automodule:: languagechange
+.. automodule:: languagechange.visualization
    :members:
    :show-inheritance:
    :undoc-members:

@@ -741,19 +741,20 @@ class DWUG(SemanticChangeEvaluationDataset):
                    plot_id_labels=False,
                    plot_cluster_labels=False):
         """
-            Plots the nodes corresponding to usages and edges corresponding to judgments.
-            If clusters are provided, nodes are colored according to their respective class.
-            Args:
-                word_or_graph (Union[str, networkx.Graph]): a networkx graph containing usage ids and 
-                    similarity scores between them, or the target word to build such a graph for
-                clusters (Union[List[int], None], default=None): a list of clusters (labels), each entry corresponding 
-                    to the id in G.nodes
-                threshold (int, default=2.5): the threshold for distinguishing between positive and negative edges
-                save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
-                outfile (Union[str, None], default=None): if not None and save_to_file=True, saves the file to the 
-                    string specified
-                plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
-                plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster labels
+        Plots the nodes corresponding to usages and edges corresponding to judgments.
+        If clusters are provided, nodes are colored according to their respective class.
+
+        Args:
+            word_or_graph (Union[str, networkx.Graph]): a networkx graph containing usage ids and
+                similarity scores between them, or the target word to build such a graph for
+            clusters (Union[List[int], None], default=None): a list of clusters (labels), each entry corresponding
+                to the id in G.nodes
+            threshold (int, default=2.5): the threshold for distinguishing between positive and negative edges
+            save_to_file (bool, default=False): if True, saves the plot to a file if outfile is specified
+            outfile (Union[str, None], default=None): if not None and save_to_file=True, saves the file to the
+                string specified
+            plot_id_labels (bool, default=False): whether or not to plot the ids next to the nodes they belong to
+            plot_cluster_labels (bool, default=False): whether or not to make a legend of the cluster labels
         """
         if isinstance(word_or_graph, str):
             graph, clusters = self.load_graph_from_csv(
@@ -1021,35 +1022,38 @@ class DWUG(SemanticChangeEvaluationDataset):
 
     def get_usage_senses(self, word, clusters_file_or_dir=None, remove_outliers=True, include_usages=False):
         """
-            Loads sense/cluster assignments for the usages of a target word and returns them as a dictionary keyed by 
-            usage identifier. Optionally, the usages (texts and offsets) are also included.
+        Loads sense/cluster assignments for the usages of a target word and returns them as a dictionary keyed by
+        usage identifier. Optionally, the usages (texts and offsets) are also included.
 
-            Args:
-                word (str): the target word whose usage senses/clusters should be loaded.
-                clusters_file_or_dir (str | None, default=None): path to a clusters/senses file or to a directory 
-                    containing such a file. If a directory is provided, the method looks for an appropriate file either
-                    directly in that directory or in a word-specific subdirectory. If not provided, the default 
-                    location is determined by `self.dataset`:
+        Args:
+            word (str): the target word whose usage senses/clusters should be loaded.
+            clusters_file_or_dir (str | None, default=None): path to a clusters/senses file or to a directory
+                containing such a file. If a directory is provided, the method looks for an appropriate file either
+                directly in that directory or in a word-specific subdirectory. If not provided, the default
+                location is determined by `self.dataset`:
 
-                    - for `"DWUG Sense"`:
-                    `{self.home_path}/labels/{word}/{self.config}/labels_senses.[ct]sv`
-                    - otherwise:
-                    `{self.home_path}/clusters/{self.config}/{word}.[ct]sv`
-                remove_outliers (bool, default=True): whether to exclude usages whose cluster label is `-1`.
-                include_usages (bool, default=False): whether to additionally load usage information from 
-                    `{self.home_path}/data/{word}/uses.[ct]sv` and include it in the returned entries.
+                - for `"DWUG Sense"`:
+                  `{self.home_path}/labels/{word}/{self.config}/labels_senses.[ct]sv`
+                - otherwise:
+                  `{self.home_path}/clusters/{self.config}/{word}.[ct]sv`
 
-            Returns:
-                dict[str, dict]:
-                    A dictionary mapping usage identifiers to dictionaries containing at least:
-                    - `"id"`: the usage identifier
-                    - `"label"`: the sense or cluster label
+            remove_outliers (bool, default=True): whether to exclude usages whose cluster label is `-1`.
+            include_usages (bool, default=False): whether to additionally load usage information from
+                `{self.home_path}/data/{word}/uses.[ct]sv` and include it in the returned entries.
 
-                    If `include_usages=True`, each entry additionally contains:
-                    - `"word"`: the target lemma
-                    - `"text"`: the usage context
-                    - `"start"`: start character offset of the target word
-                    - `"end"`: end character offset of the target word
+        Returns:
+            dict[str, dict]:
+                A dictionary mapping usage identifiers to dictionaries containing at least:
+
+                - `"id"`: the usage identifier
+                - `"label"`: the sense or cluster label
+
+                If `include_usages=True`, each entry additionally contains:
+
+                - `"word"`: the target lemma
+                - `"text"`: the usage context
+                - `"start"`: start character offset of the target word
+                - `"end"`: end character offset of the target word
         """
         usages_by_id = dict()
         matches = self._find_clusters_path(word, clusters_file_or_dir)
@@ -1143,31 +1147,32 @@ class DWUG(SemanticChangeEvaluationDataset):
                       save_path=None,
                       save_dir=None):
         """
-            Compares all usages of the target word in question and uses a model to compute 
-                judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
-            Args:
-                word (str): the target word to annotate.
-                model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to 
-                    use to annotate the usages.
-                metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used, 
-                    the metric to use to compute similarity between two vectors. Supported string 
-                    values are 'cosine' and 'binary'. Alternatively, a function taking two vectors 
-                    as input and returning a similarity score can be passed. If a PromptModel is 
-                    used, this argument is ignored.
-                n_usages (Union[int, str], default="all"): the amount of usages to select
-                n_judgments (Union[int, str], default="all"): the amount of judgments to perform
-                random_seed (int, default=42): the seed to use for random selection of usages and 
-                    judgments.
-                prompt_template (str): if a PromptModel is used, the template to use for the user 
-                    message in the prompt. The template must contain the placeholders '{target}', 
-                    '{usage_1}' and '{usage_2}'.
-                structure (Union[str, pydantic.BaseModel], default="cosine"): the structure to 
-                    use, if a PromptModel is used.
-                save_path (Union[str, None], default=None): full path to the output judgments file. If provided, this takes 
-                    precedence over `save_dir`.
-                save_dir (Union[str, None], default=None): directory in which to save the judgments file as `judgments.csv`. 
-                    If neither `save_path` nor `save_dir` is provided, the default location is 
-                    `{self.home_path}/data/{word}judgments.csv`.
+        Compares all usages of the target word in question and uses a model to compute
+        judgments of their pairwise similarities, and saves the judgments to data/word/judgments.csv.
+
+        Args:
+            word (str): the target word to annotate.
+            model (Union[ContextualizedModel, DefinitionGenerator, PromptModel]): the model to
+                use to annotate the usages.
+            metric (str or Callable): if a ContextualizedModel or DefinitionGenerator is used,
+                the metric to use to compute similarity between two vectors. Supported string
+                values are 'cosine' and 'binary'. Alternatively, a function taking two vectors
+                as input and returning a similarity score can be passed. If a PromptModel is
+                used, this argument is ignored.
+            n_usages (Union[int, str], default="all"): the amount of usages to select
+            n_judgments (Union[int, str], default="all"): the amount of judgments to perform
+            random_seed (int, default=42): the seed to use for random selection of usages and
+                judgments.
+            prompt_template (str): if a PromptModel is used, the template to use for the user
+                message in the prompt. The template must contain the placeholders '{target}',
+                '{usage_1}' and '{usage_2}'.
+            structure (Union[str, pydantic.BaseModel], default="cosine"): the structure to
+                use, if a PromptModel is used.
+            save_path (Union[str, None], default=None): full path to the output judgments file. If provided, this takes
+                precedence over `save_dir`.
+            save_dir (Union[str, None], default=None): directory in which to save the judgments file as `judgments.csv`.
+                If neither `save_path` nor `save_dir` is provided, the default location is
+                `{self.home_path}/data/{word}judgments.csv`.
         """
 
         usages = self.get_word_usages(word)
@@ -1382,15 +1387,16 @@ class DWUG(SemanticChangeEvaluationDataset):
 
     def annotate_and_cluster_all(self, annotator, judgments_dir=None, clusters_dir=None, plot_dir=None, **kwargs):
         """
-            Annotates and clusters all words. 
-            Args:
-                annotator: see self.annotate_word
-                judgments_dir (Union[str, None], default=None): if specified, a subfolder of this directory named 
-                    '[word]' will be used to store the judgments of each word. If not specified, the default directory 
-                    will be used (see `self.annotate_word`).
-                clusters_dir (Union[str, None], default=None): if specified, a subfolder of this directory named 
-                    '[word]' will be used to store the clusters of each word. If not specified, the default directory 
-                    will be used (see `self.cluster`).
+        Annotates and clusters all words.
+
+        Args:
+            annotator: see self.annotate_word
+            judgments_dir (Union[str, None], default=None): if specified, a subfolder of this directory named
+                '[word]' will be used to store the judgments of each word. If not specified, the default directory
+                will be used (see `self.annotate_word`).
+            clusters_dir (Union[str, None], default=None): if specified, a subfolder of this directory named
+                '[word]' will be used to store the clusters of each word. If not specified, the default directory
+                will be used (see `self.cluster`).
         """
         for word in self.target_words:
             word_judgments_dir = os.path.join(judgments_dir, word) if judgments_dir else None
@@ -1949,12 +1955,13 @@ class WiC(Benchmark):
 
     def evaluate(self, predictions: Union[List[Dict], Dict], dataset, metric: Callable, word=None):
         """
-            Evaluates predictions by comparing them to the true labels of the dataset.
-            Args:
-                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict
-                    and the dataset to compare against.
-                dataset (str) : one of ['train','dev','test','dev_larger',...]
-                metric (Callable) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions.
+        Evaluates predictions by comparing them to the true labels of the dataset.
+
+        Args:
+            predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict
+                and the dataset to compare against.
+            dataset (str) : one of ['train','dev','test','dev_larger',...]
+            metric (Callable) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions.
         """
         dataset = self.get_dataset(dataset)
 
@@ -1991,14 +1998,15 @@ class WiC(Benchmark):
 
 class WSD(Benchmark):
     """
-        Dataset handling for the Word Sense Disambiguation (WSD) task.
-        Parameters:
-            path (str) : a path to the dataset, if it is not stored by the resource hub in the cache folder.
-            dataset (str|list|dict) : the dataset to be loaded. 'XL-WSD' if using a dataset from the language change 
-                resource hub, or a list or a dict if loading from a datastructure already describing a WSD dataset.
-            version (str) : the version of the dataset if using a dataset in the resource hub.
-            language (str) : the language code (e.g. BG).
-            name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
+    Dataset handling for the Word Sense Disambiguation (WSD) task.
+
+    Parameters:
+        path (str) : a path to the dataset, if it is not stored by the resource hub in the cache folder.
+        dataset (str|list|dict) : the dataset to be loaded. 'XL-WSD' if using a dataset from the language change
+            resource hub, or a list or a dict if loading from a datastructure already describing a WSD dataset.
+        version (str) : the version of the dataset if using a dataset in the resource hub.
+        language (str) : the language code (e.g. BG).
+        name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
     """
 
     def __init__(self,
@@ -2257,13 +2265,14 @@ class WSD(Benchmark):
 
     def evaluate(self, predictions: Union[List[Dict], Dict], dataset, metric, word=None):
         """
-            Evaluates predictions by comparing them to the true labels of the dataset.
-            Args:
-                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict
-                    and the dataset to compare against.
-                dataset (str) : one of ['train','dev','test','dev_larger',...]
-                metric (Union[Callable, str]) : a metric such as scipy.stats.spearmanr, that can be used to compare the
-                    predictions. Either a function or a string to which there is a function associated.
+        Evaluates predictions by comparing them to the true labels of the dataset.
+
+        Args:
+            predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict
+                and the dataset to compare against.
+            dataset (str) : one of ['train','dev','test','dev_larger',...]
+            metric (Union[Callable, str]) : a metric such as scipy.stats.spearmanr, that can be used to compare the
+                predictions. Either a function or a string to which there is a function associated.
         """
         dataset = self.get_dataset(dataset)
 

@@ -672,33 +672,37 @@ class WSIPipeline(Pipeline):
 
 class WiCPipeline(Pipeline):
     """
-        A pipeline for evaluating the Word-in-Context (WiC) task.
+    A pipeline for evaluating the Word-in-Context (WiC) task.
 
-        This pipeline:
-            1. loads a dataset that can be used for the WiC task
-            2. either
-                a) encodes usages of the dataset using either a ContextualizedModel or a DefinitionGenerator producing 
-                embeddings, and then compute similarities within embedding pairs corresponding to the WiC examples, or
-                b) uses a PromptModel to directly make pairwise similarity judgments
-            3. evaluates the similarity judgments using accuracy and F1 or Spearman correlation, depending on the kind
-            of task.
+    This pipeline:
 
-        Parameters:
-            dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of 
-                sets of TargetUsage instances, describing .
-            usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or 
-                PromptModel.
-            partition (str, default="test"): Dataset split to evaluate on: commonly "train", "dev", 
+        1. loads a dataset that can be used for the WiC task
+        2. either
+
+           a) encodes usages of the dataset using either a ContextualizedModel or a DefinitionGenerator producing
+           embeddings, and then compute similarities within embedding pairs corresponding to the WiC examples, or
+
+           b) uses a PromptModel to directly make pairwise similarity judgments
+
+        3. evaluates the similarity judgments using accuracy and F1 or Spearman correlation, depending on the kind
+           of task.
+
+    Parameters:
+        dataset (Union[DWUG,List[Set[TargetUsage]]]): The dataset to evaluate on. Can be a DWUG instance or a list of
+            sets of TargetUsage instances, describing .
+        usage_encoding: The model used to encode the usages. Can be a ContextualizedModel, DefinitionGenerator or
+            PromptModel.
+        partition (str, default="test"): Dataset split to evaluate on: commonly "train", "dev",
             or "test".
-            split (bool, default=False): whether to split the dataset into train, dev and test.
-            train_prop (float, default=0.8): the train proportion, if splitting the dataset.
-            dev_prop (float, default=0.1): the development proportion, if splitting the dataset.
-            test_prop (float, default=0.1): the test proportion, if splitting the dataset.
-            shuffle (bool, default=True): Whether to shuffle when splitting the dataset if it is 
+        split (bool, default=False): whether to split the dataset into train, dev and test.
+        train_prop (float, default=0.8): the train proportion, if splitting the dataset.
+        dev_prop (float, default=0.1): the development proportion, if splitting the dataset.
+        test_prop (float, default=0.1): the test proportion, if splitting the dataset.
+        shuffle (bool, default=True): Whether to shuffle when splitting the dataset if it is
             loaded from raw usages.
-            labels (List): A list of labels to use for evaluation, in the case of loading from 
+        labels (List): A list of labels to use for evaluation, in the case of loading from
             TargetUsages.
-            dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
+        dataset_name (str): The name of the dataset, in the case of loading from TargetUsages.
     """
 
     def __init__(self, dataset, usage_encoding, partition='test', split=False, train_prop=0.8, dev_prop=0.1,
@@ -738,23 +742,24 @@ class WiCPipeline(Pipeline):
             evaluate=True,
             **kwargs):
         """
-            Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if 
-            task='graded'.
+        Evaluates on the WiC task. Returns accuracy and f1 scores if task='binary', Spearman correlation if
+        task='graded'.
 
-            Args:
-                task (str): the kind of Word-in-Context task ('binary' or 'graded')
-                label_func (Callable, default=None): an optional function to use for pairwise similarity judgments of
-                    embeddings. By default, cosine similarity is used if task='graded', and a binary threshold at 0.5
-                    if task='binary'.
-                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
-                    results to this json file.
-                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
-                    json_path is also specified, add the results to a table in this file.
+        Args:
+            task (str): the kind of Word-in-Context task ('binary' or 'graded')
+            label_func (Callable, default=None): an optional function to use for pairwise similarity judgments of
+                embeddings. By default, cosine similarity is used if task='graded', and a binary threshold at 0.5
+                if task='binary'.
+            json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the
+                results to this json file.
+            table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and
+                json_path is also specified, add the results to a table in this file.
 
-            Returns:
-                scores (dict): a dictionary of scores (accuracy and f1 or Spearman correlation)
-                labels (list[Union[int, float]], optional): the predicted similarity labels, in the order of the
-                    examples in the dataset.
+        Returns:
+            scores (dict): a dictionary of scores (accuracy and f1 or Spearman correlation)
+
+            labels (list[Union[int, float]], optional): the predicted similarity labels, in the order of the
+                examples in the dataset.
         """
         if task not in {'binary', 'graded'}:
             logging.error(f"Invalid argument for 'task', should be one of ['binary', 'graded']")
@@ -896,10 +901,12 @@ class CDPipeline(Pipeline):
     A pipeline for graded and binary lexical semantic change detection.
 
     This pipeline:
+
         1. loads a dataset that can be used for change detection and extracts the usages from two time periods
         2. optionally (re-)groups usages into time periods, and/or samples n usages per time period or domain
-        2. encodes usages using either a ContextualizedModel or a DefinitionGenerator 
-        producing embeddings
+
+        2. encodes usages using either a ContextualizedModel or a DefinitionGenerator producing embeddings
+
         3. computes the change scores for each word using one of the standard metrics (APD, PRT, JSD, WiDiD), and
         4. optionally evaluates the change scores against groun truth change scores using Spearman correlation.
 
@@ -1226,28 +1233,33 @@ class CDPipeline(Pipeline):
                  return_predictions=False,
                  **kwargs):
         """
-            Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the 
-            predicted and ground truth change scores, and optionally.
+        Evaluates on the graded/binary change detection (CD) task. Returns the Spearman correlation between the
+        predicted and ground truth change scores, and optionally.
 
-            Args:
-                task (str): the task to evaluate on, 'graded' or 'binary'.
-                n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use 
-                    all usages.
-                random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed 
-                    is used.
-                json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the 
-                    results to this json file.
-                table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and 
-                    json_path is also specified, add the results to a table in this file.
-                return_predictions (bool: default=False): if True, return usages, embeddings, and predicted cluster
-                    labels and change scores along with the evaluation scores.
-            Returns:
-                scores (dict): A dictionary containing the Spearman correlation score (rho).
-                usages (dict, optional): the usages used for every word, divided into the two time periods.
-                embeddings (dict, optional): the embeddings corresponding to each returned usage.
-                cluster_labels (dict, optional): the predicted cluster labels for every word, divided into the two time
-                    periods.
-                change_scores (dict, optional): the predicted change score between t1 and t2 for every word.
+        Args:
+            task (str): the task to evaluate on, 'graded' or 'binary'.
+            n_sampled_usages (int): the amount of usages to sample for each target word and time period. If 0, use
+                all usages.
+            random_seed (int): the seed for numpy.random.default_rng, used when sampling usages. If None, no seed
+                is used.
+            json_path (Union[str, NoneType], default=None): if a file path (.json) is specified, try to save the
+                results to this json file.
+            table_path (Union[str, NoneType], default=None): if a file path (.tex or .tsv). is specified and
+                json_path is also specified, add the results to a table in this file.
+            return_predictions (bool: default=False): if True, return usages, embeddings, and predicted cluster
+                labels and change scores along with the evaluation scores.
+
+        Returns:
+            scores (dict): A dictionary containing the Spearman correlation score (rho).
+
+            usages (dict, optional): the usages used for every word, divided into the two time periods.
+
+            embeddings (dict, optional): the embeddings corresponding to each returned usage.
+
+            cluster_labels (dict, optional): the predicted cluster labels for every word, divided into the two time
+                periods.
+
+            change_scores (dict, optional): the predicted change score between t1 and t2 for every word.
         """
         if task.lower() not in {"graded", "binary"}:
             logging.error("'task' has to be one of 'graded' and 'binary'.")

@@ -19,25 +19,25 @@ class WiDiD:
             self, embs_list: List[np.array],
             timeseries_type='consecutive', k=1, change_metric='apd', time_labels: Union[np.array, List] = None):
         """
-            Performs a-posteriori affinity propagation (APP) clustering and computes the semantic change as the APD 
-            (or another metric) between the prototype embeddings in clusters of different time periods.
+        Perform a-posteriori affinity propagation clustering and compute
+        semantic change between prototype embeddings across time periods.
 
-            Args: 
-                embs_list ([np.array]): a list of embeddings for a target word, where each element is embeddings of one 
-                    time period.
-                timeseries_type (str): the type of timeseries (see usage in languagechange.models.change.timeseries).
-                k (int): the window size, if moving average (see usage in languagechange.models.change.timeseries).
-                change_metric (str): the change metric (e.g. 'apd') to use (see usage in languagechange.models.change
-                    .timeseries).
-                time_labels (np.array|list): labels for the x axis of the timeseries (see usage in languagechange
-                    .models.change.timeseries).
+        Args:
+            embs_list (List[np.array]): Embeddings for one target word, where
+                each list element contains the embeddings for one time period.
+            timeseries_type (str): Time-series comparison mode as used by
+                ``languagechange.models.change.timeseries``.
+            k (int): Window size for moving-average comparisons.
+            change_metric (str): Change metric to use, for example ``"apd"``.
+            time_labels (Union[np.array, List], optional): Labels for the
+                x-axis of the resulting time series.
 
-            Returns:
-                labels ([np.array]): the labels for each embedding in each time period.
-                prot_embs ([np.array]): a list of matrices encoding the prototype (average) embedding of each cluster 
-                    in each time period.
-                change_scores (TimeSeries): a timeseries (languagechange.models.change.timeseries.TimeSeries) 
-                    containing the degree of change between the embeddings in different time periods.
+        Returns:
+            tuple: ``(labels, prot_embs, change_scores)`` where ``labels`` is
+            the cluster label array for each time period, ``prot_embs`` is the
+            list of prototype embedding matrices per period, and
+            ``change_scores`` is a ``TimeSeries`` object describing the degree
+            of change across periods.
         """
         self.clustering = Clustering(self.algorithm(**self.clustering_parameters))
         self.clustering.get_cluster_results(embs_list)

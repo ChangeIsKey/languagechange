@@ -1,6 +1,14 @@
 languagechange.models.representation package
 ============================================
 
+.. automodule:: languagechange.models.representation
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+Submodules
+----------
+
 languagechange.models.representation.alignment module
 -----------------------------------------------------
 
@@ -37,14 +45,6 @@ languagechange.models.representation.static module
 --------------------------------------------------
 
 .. automodule:: languagechange.models.representation.static
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-Module contents
----------------
-
-.. automodule:: languagechange.models.representation
    :members:
    :show-inheritance:
    :undoc-members:
