@@ -46,10 +46,20 @@ class Target:
 class TargetUsage:
     """Represents an individual usage with offsets and optional time metadata."""
 
-    def __init__(self, text: str, offsets: str, time: Time = None, **kwargs):
+    def __init__(self, text: str, offsets: str, time: Union[Time, str, int] = None, **kwargs):
         self.text_ = text
         self.offsets = offsets
-        self.time = time
+        if isinstance(time, str):
+            self.time = LiteralTime(time)
+        elif isinstance(time, int):
+            self.time = NumericalTime(time)
+        elif isinstance(time, Time):
+            self.time = time
+        elif time is not None:
+            logging.error("'time' has to be a NumericalTime, LiteralTime, str, int or None.")
+            raise TypeError
+        else:
+            time = self.time
         self.__dict__.update(kwargs)
 
     def text(self):
@@ -93,6 +103,7 @@ class DWUGUsage(TargetUsage):
         d['target'] = str(d['target'])
         return d
 
+
 class TargetUsageList(list):
     """List of TargetUsage instances with serialization helpers."""
 
@@ -130,6 +141,9 @@ class TargetUsageList(list):
             UsageDictionary: mapping from interval strings to TargetUsageList objects containing the usages that fall 
                 within each interval.
         """
+        if not all(getattr(u, time_attr, None) for u in self):
+            logging.error(f"In order to sort by '{time_attr}', all usages need to have a '{time_attr}' attribute.")
+            raise AttributeError
         if not isinstance(intervals, list):
             logging.error("`intervals` has to be a list of TimeInterval or tuples of str or int.")
             raise TypeError
@@ -196,12 +210,16 @@ class TargetUsageList(list):
             UsageDictionary: mapping from time labels to TargetUsageList objects.
         """
         if times and not isinstance(times, list):
-            logging.error("`times` has to be a list of Time, str or int.")
+            logging.error("If not None, `times` has to be a list of Time, str or int.")
             raise TypeError
         if times is None:
             if use_year:
-                sorted_times = sorted(set(_parse_year(getattr(u, time_attr)) for u in self))
-            else:
+                try:
+                    sorted_times = sorted(set(_parse_year(getattr(u, time_attr)) for u in self))
+                except ValueError:
+                    logging.info(f"Could not parse the '{time_attr}' attributes as years. Falling back to using '{time_attr}' directly.")
+                    use_year = False
+            if not use_year:
                 sorted_times = sorted(set(str(getattr(u, time_attr)) for u in self))
             intervals = [TimeInterval(LiteralTime(str(y)), LiteralTime(str(y))) for y in sorted_times]
         else:
@@ -210,17 +228,24 @@ class TargetUsageList(list):
             intervals = [TimeInterval(t, t) for t in times]
         return self.group_by_interval(intervals, time_attr=time_attr, use_year=use_year)
 
-    def _sample(self, generator, n_samples):
+    def sample(self, n_samples, random_seed=None):
+        """
+        Sample N usages randomly from the list of usages.
+
+        Args:
+            n_samples (int): the amount of usages to sample
+            random_seed (Union[int, NoneType], default=None): the random seed to use. Set one for reproducibility.
+        """
+        rng = np.random.default_rng(seed=random_seed)
         if n_samples < len(self) and n_samples != 0:
-            return generator.choice(self, size=n_samples, replace=False).tolist()
+            return rng.choice(self, size=n_samples, replace=False).tolist()
         return self
 
     def _group_and_sample(self, groups, grouping_fn, n_samples=0, random_seed=None, time_attr="time", use_year=False):
-        rng = np.random.default_rng(seed=random_seed)
         sampled = TargetUsageList()
         usages_by_group = grouping_fn(groups, time_attr=time_attr, use_year=use_year)
         for _, g_usages in sorted(usages_by_group.items(), key = lambda i : i[0]):
-            sampled.extend(g_usages._sample(rng, n_samples))
+            sampled.extend(g_usages.sample(n_samples, random_seed=random_seed))
         return sampled
 
     def sample_per_interval(self, intervals, n_samples=0, random_seed=None, time_attr="time", use_year=False):
