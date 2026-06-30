@@ -4,6 +4,7 @@ import re
 import json
 import webbrowser
 import pickle
+import hashlib
 import math
 from math import comb
 import csv
@@ -27,9 +28,10 @@ from languagechange.corpora import LinebyLineCorpus
 from languagechange.models.representation.contextualized import ContextualizedModel
 from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
-from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
+from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage, UsageDictionary
 from languagechange.utils import NumericalTime, LiteralTime, generate_colormap
 from languagechange.models.meaning.clustering import Clustering, CorrelationClustering
+from languagechange.cache import CacheManager
 
 
 def purity(labels_true, cluster_labels):
@@ -69,6 +71,17 @@ def generate_index_pairs(total, n, random_seed=None):
     return np.stack([c1, c2]).astype(int).transpose()
 
 
+def generate_cache_key(data):
+    """
+    Generate a unique cache key based on the input data.
+    """
+    try:
+        serialized = pickle.dumps(data)
+        return hashlib.sha256(serialized).hexdigest()
+    except Exception as e:
+        raise ValueError(f"Invalid input: {e}")
+
+
 class Benchmark():
 
     def __init__(self):
@@ -77,6 +90,8 @@ class Benchmark():
     def get_dataset(self, key):
         if key in self.data.keys():
             return self.data[key]
+        elif key == "all":
+            return list(np.concatenate([list(self.get_dataset(k)) for k in sorted(self.data.keys())]))
         else:
             logging.info(f"Did not find a `{key}` set. Returning []")
             return []
@@ -91,7 +106,7 @@ class Benchmark():
         return self.get_dataset('test')
 
     def get_all_data(self):
-        return self.get_dataset('all') or np.concatenate([list(self.get_dataset(k)) for k in sorted(self.data.keys())])
+        return self.get_dataset('all')
 
     def filter_by_word_frequency(self, dataset, threshold):
         data = self.get_dataset(dataset)
@@ -224,8 +239,28 @@ class SemanticChangeEvaluationDataset(Benchmark):
 
 
 class SemEval2020Task1(SemanticChangeEvaluationDataset):
+    """
+    Handles dataloading and evaluation for datasets belonging to the SemEval 2020: Task 1 tasks: binary and graded 
+    unsupervised lexical semantic change detection.
+    """
 
-    def __init__(self, language, subset: int = None, config='opt'):
+    def __init__(self, language, subset: int = None):
+        """
+        Loads a dataset for SemEval 2020: Task 1.
+
+        Depending on the selected language, this class loads one of three lexical semantic change benchmarks:
+        - SemEval 2020 Task 1 (EN, DE, SV, LA)
+        - NorDiaChange (NO)
+        - RuShiftEval (RU)
+
+        Parameters:
+            language (str): the language of the dataset, one of 'DE', 'EN', 'NO' 'LA', 'RU' and 'SV'. If 'NO', the 
+                NorDiaChange (https://github.com/ltgoslo/nor_dia_change) dataset is loaded. If 'RU', the RuShiftEval 
+                (https://github.com/akutuzov/rushifteval_public) dataset is loaded. Otherwise, one of the original
+                datasets belonging to SemEval 2020: Task 1 (https://zenodo.org/records/3931969) is loaded.
+            subset (int, default=None): the subset of the dataset to use. Only applicable for languages 'NO' and 'RU'.
+                For 'RU', must be one of 1, 2 and 3. For 'NO', must be one of 1 and 2.
+        """
         lc = LanguageChange()
         self.language = language
         if self.language == 'NO' or self.language == 'RU':
@@ -239,27 +274,33 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         home_path = lc.get_resource('benchmarks', self.dataset, self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path, semeval_folder)
-        self.config = config
         self.load()
 
     def load(self):
+        """
+        Load corpus resources, target words, and gold semantic change labels.
+
+        For SemEval 2020 Task 1, both tokenized and lemmatized corpora are initialized together with binary and graded 
+        change annotations.
+
+        For NorDiaChange, usage statistics and change scores are loaded from the selected subset.
+
+        For RuShiftEval, graded semantic change scores are loaded from the selected annotation subset. Since 
+        RuShiftEval reports semantic relatedness (COMPARE) rather than semantic change directly, scores are negated.
+        """
         if self.dataset == "SemEval 2020 Task 1":
             self.corpus1_lemma = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus1', 'lemma'),
-                name='corpus1_lemma', language=self.language, time=NumericalTime(1),
-                is_lemmatized=True)
+                name='corpus1_lemma', language=self.language, time=NumericalTime(1), feature="lemma")
             self.corpus2_lemma = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus2', 'lemma'),
-                name='corpus2_lemma', language=self.language, time=NumericalTime(2),
-                is_lemmatized=True)
+                name='corpus2_lemma', language=self.language, time=NumericalTime(2), feature="lemma")
             self.corpus1_token = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus1', 'token'),
-                name='corpus1_token', language=self.language, time=NumericalTime(1),
-                is_tokenized=True)
+                name='corpus1_token', language=self.language, time=NumericalTime(1), feature="token")
             self.corpus2_token = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus2', 'token'),
-                name='corpus2_token', language=self.language, time=NumericalTime(2),
-                is_tokenized=True)
+                name='corpus2_token', language=self.language, time=NumericalTime(2), feature="token")
 
         self.binary_task = {}
         self.graded_task = {}
@@ -267,11 +308,11 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
         if self.language == 'NO':
             matches = list(
-                Path(os.path.join(self.home_path, f'subset{self.subset}', 'stats', self.config)).glob(
+                Path(os.path.join(self.home_path, f'subset{self.subset}', 'stats', 'opt')).glob(
                     'stats_groupings.[ct]sv'))
             if not matches:
                 logging.error(
-                    f"Path does not exist: {os.path.join(self.home_path, f'subset{self.subset}','stats',self.config)}/stats_groupings.[ct]sv")
+                    f"Path does not exist: {os.path.join(self.home_path, f'subset{self.subset}','stats/opt/stats_groupings.[ct]sv')}")
                 raise FileNotFoundError
             df = pd.read_csv(matches[0], sep="\t", quoting=csv.QUOTE_NONE)
             for _, row in df.iterrows():
@@ -311,8 +352,114 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                     self.target_words.add(word)
                     word = Target(word)
                     self.graded_task[word] = float(score)
+    
+    def _search_for_usages(self,
+        words,
+        group='all', 
+        lemma=True, 
+        cache=True, 
+        usage_cache_dir="~/.cache/languagechange/usages"
+        ):
+        """
+        Search the SemEval corpora for usages of one or more target words.
 
-    def get_word_usages(self, word, group='all'):
+        This method is only applicable to the original SemEval 2020 Task 1
+        datasets (EN, DE, SV, and LA). Results may optionally be cached to
+        avoid repeated corpus searches.
+
+        Args:
+            words (Union[str, list[str]]): target word or collection of target words.
+            group (str, default="all"): the time period to use ('1','2', or 'all')
+            lemma (bool, default=True): if True, search the lemmatized corpora. Otherwise search the tokenized corpora.
+            cache (bool, default=True): whether cached search results should be used and updated.
+            usage_cache_dir (str, default="~/.cache/languagechange/usages"): directory used for storing cached search 
+                results.
+
+        Returns
+            dict[str, TargetUsageList]: Dictionary mapping each queried word to its list of usages from the corpus
+                /corpora.
+        """
+        if self.dataset != 'SemEval 2020 Task 1':
+            logging.error("Only SemEval 2020 Task 1 datasets (languages EN, DE, SV and LA) can be searched through.")
+            raise ValueError
+        if isinstance(words, str):
+            words = [words]
+        usage_list = []
+        corpora = []
+        if lemma:
+            if str(group) in ['1','all']:
+                corpora.append(self.corpus1_lemma)
+            if str(group) in ['2','all']:
+                corpora.append(self.corpus2_lemma)
+        else:
+            if str(group) in ['1','all']:
+                corpora.append(self.corpus1_token)
+            if str(group) in ['2','all']:
+                corpora.append(self.corpus2_token)
+        
+        for corpus in corpora:
+            search = True
+            if cache:
+                cache_mgr = CacheManager(cache_dir=usage_cache_dir)
+                # Generate cache key
+                cache_key = generate_cache_key((self.dataset, self.language, corpus.name, sorted(words)))
+                cache_path = os.path.join(cache_mgr.cache_dir,
+                                            f"{self.dataset}_{self.language}_{cache_key}.json")
+
+                # whether the cache files exist
+                if os.path.exists(cache_path):
+                    try:
+                        logging.info(f"Loading cached usages from {cache_path}")
+                        with open(cache_path, "r") as f:
+                            corpus_usages = json.load(f)
+                            # When loading from cache, replace 'text_' with 'text'.
+                            corpus_usages = UsageDictionary(
+                                {w: TargetUsageList(
+                                    [TargetUsage(**({"text": tu.pop("text_")} | tu)) for tu in tul])
+                                    for w, tul in corpus_usages.items()})
+                            search = False
+                    except FileNotFoundError as e:
+                        logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
+                        os.remove(cache_path)
+
+            if search:
+                logging.info(f"Searching for usages in {corpus.name}...")
+                corpus_usages = corpus.search(words)
+                # Remove 'token=' or 'lemma='
+                corpus_usages = {st.split("=")[-1]: us for st, us in corpus_usages.items()}
+                if cache_mgr:
+                    # save the usages to a json file
+                    with cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
+                        serialized = {w: corpus_usages[w].to_dict() for w in corpus_usages.keys()}
+                        json.dump(serialized, temp_path)
+                        logging.info(f"Saved usages to {cache_path}.")
+            usage_list.append(corpus_usages)
+        return {w: TargetUsageList(usage_list[0][w] + usage_list[1][w]) for w in words}
+
+
+    def get_word_usages(self, 
+            word, 
+            group='all', 
+            lemma=True, 
+            cache=True, 
+            usage_cache_dir="~/.cache/languagechange/usages"):
+        """
+        Retrieve all recorded usages of a target word.
+
+        Args:
+            word (str): target word.
+            group (str, default="all"): group (time period) to retrieve usages from. Selecting '1' and '2' returns the 
+                usages of the first and second time period, respectively. The value "all" returns every available 
+                usage.
+            lemma (bool, default=True): for SemEval datasets, search the lemmatized corpus instead of the tokenized 
+                corpus.
+            cache (bool, default=True): whether corpus search results should be cached (for SemEval datasets).
+            usage_cache_dir (str, default="~/.cache/languagechange/usages"): directory containing cached search results.
+                (for SemEval datasets).
+
+        Returns:
+            TargetUsageList: all usages corresponding to the requested target word.
+        """
         group = str(group)
         usages = TargetUsageList()
 
@@ -347,15 +494,56 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
             column_ids = list(df)
             for _, row in df.iterrows():
                 u = {c: row[c] for c in column_ids}
-                u['text'] = u['context']
-                u['target'] = Target(u['lemma'])
-                u['target'].set_lemma(u['lemma'])
-                u['target'].set_pos(u['pos'])
-                u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
-                u['time'] = NumericalTime(u['date'])
-                usages.append(DWUGUsage(**u))
-
+                if group == 'all' or u['grouping'] == group:
+                    u['text'] = u['context']
+                    u['target'] = Target(u['lemma'])
+                    u['target'].set_lemma(u['lemma'])
+                    u['target'].set_pos(u['pos'])
+                    u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
+                    u['time'] = NumericalTime(u['date'])
+                    usages.append(DWUGUsage(**u))
+        
+        else:
+            usage_dict = self._search_for_usages(
+                words=[word], 
+                group=group, 
+                lemma=lemma, 
+                cache=cache, 
+                usage_cache_dir=usage_cache_dir)
+            usages = usage_dict[word]
+        
         return usages
+
+    def get_all_usages(self,
+            group='all', 
+            lemma=True, 
+            cache=True, 
+            usage_cache_dir="~/.cache/languagechange/usages"):
+        """
+        Retrieve all recorded usages of all target words in the dataset.
+
+        Args:
+            group (str, default="all"): group (time period) to retrieve usages from. Selecting '1' and '2' returns the 
+                usages of the first and second time period, respectively. The value "all" returns every available 
+                usage.
+            lemma (bool, default=True): for SemEval datasets, search the lemmatized corpus instead of the tokenized 
+                corpus.
+            cache (bool, default=True): whether corpus search results should be cached (for SemEval datasets).
+            usage_cache_dir (str, default="~/.cache/languagechange/usages"): directory containing cached search results.
+                (for SemEval datasets).
+
+        Returns:
+            TargetUsageList: all usages corresponding to the requested target word.
+        """
+        if self.dataset == "SemEval 2020 Task 1":
+            return self._search_for_usages(
+                list(self.target_words), 
+                group=group, 
+                lemma=lemma, 
+                cache=cache, 
+                usage_cache_dir=usage_cache_dir)
+        else:
+            return {w: self.get_word_usages(w) for w in self.target_words}
 
 
 class DWUG(SemanticChangeEvaluationDataset):
@@ -606,21 +794,21 @@ class DWUG(SemanticChangeEvaluationDataset):
             n_clusters = len(unique_labels)
 
             # Generate a colormap with colors that are distinguishable from each other
-            cmap = generate_colormap(n_classes)
+            cmap = generate_colormap(n_clusters)
 
             nx.draw_networkx_nodes(
-                judgments_graph, 
+                graph, 
                 pos, 
                 node_size=node_size, 
-                node_color=classes, 
+                node_color=clusters, 
                 cmap=cmap, 
                 vmin=-1, 
-                vmax=n_classes)
+                vmax=n_clusters)
 
             if plot_cluster_labels:
-                for v in unique_classes:
+                for v in unique_labels:
                     plt.scatter([],[], c=cmap(v+1), label=str(rev_mapping[v]))
-                if -1 in classes:
+                if -1 in clusters:
                     plt.scatter([],[], c=cmap(0), label='No cluster')
                 plt.legend(title="Clusters")
         else:
@@ -1252,21 +1440,21 @@ class DWUG(SemanticChangeEvaluationDataset):
             version=self.version, subset=self.subset)
         return wic
 
-    def cast_to_WSD(self, remove_outliers=True):
+    def cast_to_WSD(self, clusters_dir=None, remove_outliers=True):
         """
             Casts the DWUG to a WSD dataset.
         """
-        data = self.get_all_usage_senses(remove_outliers, include_usages=True)
+        data = self.get_all_usage_senses(clusters_dir=clusters_dir, remove_outliers=remove_outliers, include_usages=True)
         wsd = WSD(
             wsd_data=data, dataset=f'{self.dataset} WSD' if self.dataset is not None else None, language=self.language,
             version=self.version, subset=self.subset)
         return wsd
 
-    def cast_to_WSI(self, remove_outliers=True):
+    def cast_to_WSI(self, clusters_dir=None, remove_outliers=True):
         """
             Casts the DWUG to a WSI dataset.
         """
-        data = self.get_all_usage_senses(remove_outliers, include_usages=True)
+        data = self.get_all_usage_senses(clusters_dir=clusters_dir, remove_outliers=remove_outliers, include_usages=True)
         wsi = WSI(
             wsi_data=data, dataset=f'{self.dataset} WSI' if self.dataset is not None else None, language=self.language,
             version=self.version, subset=self.subset)
@@ -1338,21 +1526,30 @@ class DWUG(SemanticChangeEvaluationDataset):
 class WiC(Benchmark):
     """
     Dataset handling for the Word-in-Context (WiC) task.
-
+    
     Parameters:
-        path (str) : a path to the dataset, if it is not stored by the resource hub.
-        dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC',
+        path (str, default=None) : a path to the dataset, if it is not stored by the resource hub.
+        wic_data (Union[list[dict], list[tuple(TargetUsage)]], default=None): already loaded WiC data to use. Can be 
+            either 
+                1. a list of dictionaries with the keys 'text1', 'start1', 'end1', 'text2', 'start2', 'end2', 'label'
+                2. a list of pairs of TargetUsage. For this, `labels` also need to be provided. 
+        labels (list[Union[int, float]], default=None): labels for each example pair, if initializing from target
+            usages.
+        dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 
             'AM2iCo'] if using a dataset in the language change resource hub, or a list or a dict if loading from a
             datastructure already describing a WiC dataset.
-        version (str) : the version of the dataset if using a dataset from the resource hub.
-        language (str) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
-        linguality (str) : whether to use the crosslingual or multilingual dataset, in the case of MCL-WiC.
-        name (str) : the name of the dataset (in case no values for dataset, language and version are specified).
+        version (str, default=None) : the version of the dataset if using a dataset from the resource hub.
+        language (str, default=None) : the language code (e.g. AR), if loading a multi- or crosslingual dataset.
+        linguality (str, default=None) : whether to use the crosslingual or multilingual dataset, in the case of 
+            MCL-WiC.
+        name (str, default=None) : the name of the dataset (in case no values for dataset, language and version are 
+            specified).
     """
 
     def __init__(self,
                  path: str = None,
                  wic_data: dict | list = None,
+                 labels : list = None,
                  dataset: str = None,
                  version: str = None,
                  language: str = None,
@@ -1411,11 +1608,18 @@ class WiC(Benchmark):
 
         # Loads from a dictionary or list
         elif wic_data is not None:
-            try:
-                self.load_from_data(wic_data)
-            except Exception as e:
-                logging.error('Could not load from dataset.')
-                raise e
+            if (isinstance(wic_data, list) and
+                all(len(e) == 2 and all(isinstance(tu, TargetUsage) for tu in e) for e in wic_data)):
+                if labels is None:
+                    logging.error("When loading from a list of pairs of TargetUsage, `labels` needs to be provided.")
+                    raise ValueError
+                self.load_from_target_usages(wic_data, labels)
+            else:
+                try:
+                    self.load_from_data(wic_data)
+                except Exception as e:
+                    logging.error('Could not load from dataset.')
+                    raise e
 
         else:
             logging.info("No data examples have been loaded.")
@@ -1808,6 +2012,7 @@ class WSD(Benchmark):
     def __init__(self,
                  path: str = None,
                  wsd_data: list | dict = None,
+                 labels: list = None,
                  dataset: str = None,
                  language: str = None,
                  version: str = None,
@@ -1840,11 +2045,17 @@ class WSD(Benchmark):
 
         # Loads from a dictionary or list already containing a WSD dataset
         elif wsd_data != None:
-            try:
-                self.load_from_data(wsd_data)
-            except Exception as e:
-                logging.error('Could not load from dataset.')
-                raise e
+            if isinstance(wsd_data, list) and all(isinstance(e, TargetUsage) for e in wsd_data):
+                if labels is None:
+                    logging.error("When loading from a list of pairs of TargetUsage, `labels` needs to be provided.")
+                    raise ValueError
+                self.load_from_target_usages(wsd_data, labels)
+            else:
+                try:
+                    self.load_from_data(wsd_data)
+                except Exception as e:
+                    logging.error('Could not load from dataset.')
+                    raise e
 
         else:
             logging.info("No data examples have been loaded.")
@@ -2069,9 +2280,9 @@ class WSD(Benchmark):
             if not word in self.target_words:
                 logging.error(f'Word {word} was not found.')
                 raise ValueError
-            dataset = filter(lambda d: d['word'] == word, dataset)
+            dataset = list(filter(lambda d: d['word'] == word, dataset))
 
-        if type(predictions) == dict and 'id' in predictions.keys():
+        if type(predictions) == dict:
             for d in dataset:
                 if not 'id' in d.keys():
                     logging.error('Could not find id:s for all examples in the dataset.')
@@ -2112,6 +2323,7 @@ class WSI(Benchmark):
 
     def __init__(self,
                  wsi_data: list | dict = None,
+                 labels: list = None,
                  dataset: str = None,
                  version: str = None,
                  language: str = None,
@@ -2125,12 +2337,18 @@ class WSI(Benchmark):
         self.target_words = set()
         if name is not None:
             self.name = name
-        if wsi_data is not None:
-            try:
-                self.load_from_data(wsi_data)
-            except Exception as e:
-                logging.error('Could not load from dataset.')
-                raise e
+        if wsi_data != None:
+            if isinstance(wsi_data, list) and all(isinstance(e, TargetUsage) for e in wsi_data):
+                if labels is None:
+                    logging.error("When loading from a list of pairs of TargetUsage, `labels` needs to be provided.")
+                    raise ValueError
+                self.load_from_target_usages(wsi_data, labels)
+            else:
+                try:
+                    self.load_from_data(wsi_data)
+                except Exception as e:
+                    logging.error('Could not load from dataset.')
+                    raise e
         else:
             logging.info("No data examples have been loaded.")
 

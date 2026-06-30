@@ -2,8 +2,6 @@ import os
 import csv
 from os import path
 import warnings
-import urllib.request
-from urllib.error import HTTPError
 import json
 import hashlib
 from typing import Literal, Sequence, TypedDict, Tuple, List, Union, Any
@@ -24,6 +22,7 @@ import numpy as np
 
 from languagechange.usages import TargetUsage, TargetUsageList
 from languagechange.cache import CacheManager
+from languagechange.config import DEFINITION_TEMPLATE_PATH
 
 # Define types for chat dialog outside the class for clarity
 Role = Literal["system", "user"]
@@ -452,12 +451,12 @@ class LlamaDefinitionGenerator(DefinitionGenerator):
 
         if not system_message or not user_message_template:
             try:
-                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/{language.lower()}.json') as url:
-                    messages = json.load(url)
-            except HTTPError:
+                with open(os.path.join(DEFINITION_TEMPLATE_PATH, f"{language.lower()}.json")) as f:
+                    messages = json.load(f)
+            except FileNotFoundError:
                 logging.info(f"Could not load system and user messages for {language}. Falling back to English.")
-                with urllib.request.urlopen(f'https://raw.githubusercontent.com/ChangeIsKey/languagechange/main/languagechange/locales/en.json') as url:
-                    messages = json.load(url)
+                with open(os.path.join(DEFINITION_TEMPLATE_PATH, "en.json")) as f:
+                    messages = json.load(f)
                     
             if not system_message:
                 system_message = messages["llama_definition_messages"]["system_message"]

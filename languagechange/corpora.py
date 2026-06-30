@@ -12,8 +12,10 @@ from pathlib import Path
 import lxml.etree as ET
 from sortedcontainers import SortedKeyList
 from inspect import signature
+import json
+import urllib
 
-import trankit
+import spacy
 import pandas as pd
 import pyarrow as pa
 import pyarrow.csv as pv
@@ -25,8 +27,11 @@ from languagechange.resource_manager import LanguageChange
 from languagechange.search import SearchTerm
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
 from languagechange.utils import LiteralTime, PARSE_DATE_SIMPLE, PARSE_DATE_ADV
+from languagechange.utils import _initialize_nlp
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
+
+SPACY_FEATURE_NAMES = {"token": "text", "lemma": "lemma_", "pos_tag": "pos_"}
 
 
 class Line:
@@ -201,6 +206,9 @@ class Line:
 
     def __str__(self):
         return self.raw_text()
+    
+    def __len__(self):
+        return len(self.tokens() or self.lemmas() or self.pos_tags())
 
 
 class Corpus:
@@ -229,7 +237,7 @@ class Corpus:
                 search_terms : List[ str | Pattern | SearchTerm ]
                     If a search term is str or Pattern it is converted
                     to a SearchTerm and matches tokens only
-                    SearchTerm(word_feature = 'token').
+                    SearchTerm(word_feature = 'token'). #TODO: change this
                 parse_date (str, default='simple'): passed to `self.line_iterator`, if applicable.
 
             Returns: A UsageDictionary containing all search results for each search term.
@@ -255,319 +263,331 @@ class Corpus:
         logging.info(f"{n_usages} usages found.")
         return usage_dictionary
 
-    def tokenize(self, tokenizer = "trankit", split_sentences=False, batch_size=128):
-        """Yield tokenized sentences using Trankit, optionally splitting sentences.
+    def _process_text_iter(self, 
+            nlp_model="spacy",
+            package_name=None,
+            features={"token", "lemma", "pos_tag"},
+            split_sentences=False,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024):
+        """
+        Processes the corpus by streaming through it and yields tokens, lemmas and POS tags in new Line objects.
+        """
+        if nlp_model == "spacy":
+            nlp = _initialize_nlp(self.language, package_name=package_name)
+            required = {
+                "lemma": "lemmatizer",
+                "pos_tag": "tagger",
+            }
+            for feat in features:
+                component = required.get(feat)
+                if component and component not in nlp.pipe_names:
+                    logging.error(f"SpaCy model '{nlp.meta.get('name')}' does not support feature '{feat}'.")
+                    raise ValueError
+        else:
+            nlp = nlp_model
+
+        if split_sentences:
+            it = self._split_sentences_iter(sentencizer=sentencizer, package_name=package_name, batch_size=sentencizer_batch_size)
+        else:
+            it = self.line_iterator()
+
+        raw_texts = filter(lambda s: isinstance(s, str) and s.strip(), (line.raw_text() for line in it))
+
+        if nlp_model == "spacy":
+            processed = nlp.pipe(raw_texts)
+        else:
+            processed = nlp(raw_texts)
+
+        for text, line in zip(raw_texts, processed):
+            token_level_features = {
+                feat + "s": [
+                    getattr(token, SPACY_FEATURE_NAMES[feat] if nlp_model == "spacy" else feat) for token in line] 
+                for feat in features}
+            line_features = {"raw_text": text} | token_level_features
+            yield Line(**line_features)
+
+    def _split_sentences_iter(self, sentencizer="spacy", package_name=None, batch_size=1024):
+        """
+        Iterates through the corpus and splits the text into one sentence per line.
 
         Args:
-            tokenizer (str, optional): Tokenizer backend. Defaults to "trankit".
-            split_sentences (bool, optional): Split paragraphs into sentences. Defaults to False.
-            batch_size (int, optional): Number of lines to accumulate before processing. Defaults to 128.
+            sentencizer (Union[str, callable], default='spacy'): the sentencizer to use, by default the one of spaCy. 
+                If not 'spacy', a function with the signature str -> [str], splitting a string into sentence strings in 
+                a list, is expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            batch_size (int, default=1024): the amount of lines to process simultaneously when iterating through the 
+                corpus and splitting into sentences.
+
+        Yields:
+            Line: a Line object containing a sentence.
         """
-        if tokenizer == "trankit":
-            p = trankit.Pipeline(self.language)
-
-            if split_sentences:
-
-                def process_lines(texts):
-                    tokenized = p.tokenize(' '.join(texts))
-                    for sentence in tokenized['sentences']:
-                        yield Line(raw_text=sentence['text'], tokens=[token['text'] for token in sentence['tokens']])
-
-                texts = []
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        texts.append(text)
-                    if len(texts) == batch_size:
-                        for line in process_lines(texts):
-                            yield line
-                        texts = []
-                if texts != []:
-                    for line in process_lines(texts):
-                        yield line
-
-            else:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        tokenized_sentence = p.tokenize(text, is_sent=True)
-                        line._tokens = [token['text'] for token in tokenized_sentence['tokens']]
-                        yield line
-
-        else:
-            if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer, "tokenize")):
-                tokenizer = tokenizer.tokenize
-
-            if callable(tokenizer):
-                try:
-                    for line in self.line_iterator():
-                        text = line.raw_text()
-                        if type(text) == str and len(text.strip()) > 0:
-                            line._tokens = [str(token) for token in tokenizer(text)]
-                            yield line
-                except Exception:
-                    logging.error(f"Could not use tokenizer {tokenizer} directly as a function to tokenize.")
-
-    def lemmatize(self, lemmatizer="trankit", pretokenized=False, tokenize=False, split_sentences=False, batch_size=128):
-        if lemmatizer == "trankit":
-            p = trankit.Pipeline(self.language)
-
-            # input which is not sentence split
-            if split_sentences:
-
-                def process_texts(texts):
-                    lemmatized = p.lemmatize(' '.join(texts))
-                    lines = []
-                    for sentence in lemmatized['sentences']:
-                        lines.append(
-                            Line(
-                                raw_text=sentence['text'],
-                                lemmas=[token['lemma'] for token in sentence['tokens']],
-                                tokens=[token['text'] for token in sentence['tokens']] if tokenize else None))
-                    return lines
-
-                texts = []
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        texts.append(text)
-                    if len(texts) == batch_size:
-                        for line in process_texts(texts):
-                            yield line
-                        texts = []
-
-                if texts != []:
-                    for line in process_texts(texts):
-                        yield line
-
-            # input which is not pretokenized, but each line is its own sentence
-            elif not pretokenized:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        lemmatized_sentence = p.lemmatize(text, is_sent=True)
-                        line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
-                        yield line
-
-            # pretokenized input, one or more sentences at a time
-            else:
-
-                def modify_lines(lines):
-                    lemmatized = p.lemmatize([line.tokens() for line in lines])
-                    lemmatized_sentences = lemmatized['sentences']
-                    for i, line in enumerate(lines):
-                        line._lemmas = [token['lemma'] for token in lemmatized_sentences[i]['tokens']]
-                        yield line
-
-                lines = []
-                for line in self.line_iterator():
-                    tokens = line.tokens()
-                    if type(tokens) == list and len(tokens) > 0:
-                        lines.append(line)
-                    if len(lines) == batch_size:
-                        for line in modify_lines(lines):
-                            yield line
-                        lines = []
-                if lines != []:
-                    for line in modify_lines(lines):
-                        yield line
-
-        # todo: add other lemmatizers if needed
-        else:
-
-            if hasattr(lemmatizer, "lemmatize") and callable(getattr(lemmatizer, "lemmatize")):
-                lemmatizer = lemmatizer.lemmatize
-
-            if callable(lemmatizer):
-                try:
-                    if pretokenized:
-                        for line in self.line_iterator():
-                            tokens = line.tokens()
-                            if type(tokens) == list and len(tokens) != 0:
-                                line._lemmas = [str(lemma) for lemma in lemmatizer(tokens)]
-                                yield line
-                    else:
-                        for line in self.line_iterator():
-                            text = line.raw_text()
-                            if type(text) == str and len(text.strip()) > 0:
-                                line._lemmas = [str(lemma) for lemma in lemmatizer(text)]
-                                yield line
-                except Exception:
-                    logging.error(f"Could not use method {lemmatizer} directly as a function to lemmatize.")
-
-    def pos_tagging(self,
-                    pos_tagger="trankit",
-                    pretokenized=False,
-                    tokenize=False,
-                    split_sentences=False,
-                    batch_size=128):
-        if pos_tagger == "trankit":
-            p = trankit.Pipeline(self.language)
-
-            # input which is not sentence split
-            if split_sentences:
-
-                def process_texts(texts):
-                    pos_tagged = p.posdep(' '.join(texts))
-                    for sentence in pos_tagged['sentences']:
-                        yield Line(
-                            raw_text=sentence['text'],
-                            pos_tags=[token['upos'] for token in sentence['tokens']],
-                            tokens=[token['text'] for token in sentence['tokens']] if tokenize else None
-                        )
-
-                texts = []
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        texts.append(text)
-                    if len(texts) == batch_size:
-                        for line in process_texts(texts):
-                            yield line
-                        texts = []
-
-                if texts != []:
-                    for line in process_texts(texts):
-                        yield line
-
-            # input which is not pretokenized, but each line is its own sentence
-            elif not pretokenized:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        pos_tagged_sentence = p.posdep(text, is_sent=True)
-                        line._pos_tags = [token['upos'] for token in pos_tagged_sentence['tokens']]
-                        if tokenize:
-                            line._tokens = [token['text'] for token in pos_tagged_sentence['tokens']]
-                        yield line
-
-            # pretokenized input, one or more sentences at a time
-            else:
-
-                def modify_lines(lines):
-                    pos_tagged = p.posdep([line.tokens() for line in lines])
-                    pos_tagged_sentences = pos_tagged['sentences']
-                    for i, line in enumerate(lines):
-                        line._pos_tags = [token['upos'] for token in pos_tagged_sentences[i]['tokens']]
-                        yield line
-
-                lines = []
-                for line in self.line_iterator():
-                    tokens = line.tokens()
-                    if type(tokens) == list and len(tokens) > 0:
-                        lines.append(line)
-                    if len(lines) == batch_size:
-                        for line in modify_lines(lines):
-                            yield line
-                        lines = []
-
-                if lines != []:
-                    for line in modify_lines(lines):
-                        yield line
-
-        else:
-            if hasattr(pos_tagger, "pos_tag") and callable(getattr(pos_tagger, "pos_tag")):
-                pos_tagger = pos_tagger.pos_tag
-            if callable(pos_tagger):
-                try:
-                    if pretokenized:
-                        for line in self.line_iterator():
-                            tokens = line.tokens()
-                            if type(tokens) == list and len(tokens) > 0:
-                                line._pos_tags = [str(pos_tag) for pos_tag in pos_tagger(tokens)]
-                                yield line
-
-                    else:
-                        for line in self.line_iterator():
-                            text = line.raw_text()
-                            if type(text) == str and len(text.strip()) > 0:
-                                line._pos_tags = [str(pos_tag) for pos_tag in pos_tagger(text)]
-                                yield line
-                except Exception:
-                    logging.error(f"Could not use method {pos_tagger} directly as a function to perform POS tagging.")
-
-    def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences=False, batch_size=128):
-        if nlp_model == "trankit":
-            p = trankit.Pipeline(self.language)
-
-            if not split_sentences:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        lemmatized_sentence = p.lemmatize(text, is_sent=True)
-                        line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
-                        if tokens:
-                            line._tokens = [token['text'] for token in lemmatized_sentence['tokens']]
-                            pos_tagged = p.posdep(line.tokens(), is_sent=True)
-                        else:
-                            pos_tagged = p.posdep(line.raw_text(), is_sent=True)
-                        line._pos_tags = [token['upos'] for token in pos_tagged['tokens']]
-                        yield line
-
-            else:
-
-                def process_texts(texts):
-                    lemmatized_sentences = p.lemmatize(' '.join(texts))
-                    tokens = []
-                    for sentence in lemmatized_sentences['sentences']:
-                        tokens.append([token['text'] for token in sentence['tokens']])
-                    pos_tagged_sentences = p.posdep(tokens)
-                    for i, sentence in enumerate(lemmatized_sentences['sentences']):
-                        yield Line(
-                            raw_text=sentence['text'],
-                            tokens=[token['text'] for token in sentence['tokens']] if tokens else None,
-                            lemmas=[token['lemma'] for token in sentence['tokens']],
-                            pos_tags=[token['upos'] for token in pos_tagged_sentences['sentences'][i]['tokens']])
-
-                texts = []
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        texts.append(text)
-                    if len(texts) == batch_size:
-                        for line in process_texts(texts):
-                            yield line
-                        texts = []
-                if len(texts) != 0:
-                    for line in process_texts(texts):
-                        yield line
-
-    # preliminary function
-    def segment_sentences(self, segmentizer="trankit", batch_size=128):
-        if segmentizer == "trankit":
-            p = trankit.Pipeline(self.language)
-
+        if sentencizer == "spacy":
+            sentencizer = _initialize_nlp(self.language, package_name=package_name)
+            sentencizer.add_pipe('sentencizer')
             lines = []
             for line in self.line_iterator():
                 lines.append(line.raw_text())
-                if len(lines) == batch_size:
-                    sentences = p.ssplit(' '.join(lines))
-                    for sent in sentences['sentences']:
-                        yield Line(sent['text'])
-                    lines = []
-            if len(lines) != 0:
-                sentences = p.ssplit(' '.join(lines))
-                for sent in sentences['sentences']:
-                    yield Line(sent['text'])
+                if len(lines) >= batch_size:
+                    sentences = list(sentencizer(' '.join(lines)).sents)
+                    # Do not yield the last sentence since it might be cut off
+                    for sent in sentences[:-1]:
+                        yield Line(sent.text)
+                    lines = [sentences[-1].text]
+            sentences = sentencizer(' '.join(lines)).sents
+            for sent in sentences:
+                yield Line(sent.text)
 
-        elif callable(segmentizer):
+        elif callable(sentencizer):
             try:
                 lines = []
                 for line in self.line_iterator():
                     lines.append(line.raw_text())
-                    if len(lines) == batch_size:
-                        sentences = segmentizer(' '.join(lines))
-                        for sent in sentences:
+                    if len(lines) >= batch_size:
+                        sentences = list(sentencizer(' '.join(lines)))
+                        # Do not yield the last sentence since it might be cut off
+                        for sent in sentences[:-1]:
                             yield Line(sent)
-                        lines = []
-                if len(lines) != 0:
-                    sentences = segmentizer(' '.join(lines))
-                    for sent in sentences:
-                        yield Line(sent)
+                        lines = [sentences[-1]]
+                sentences = sentencizer(' '.join(lines))
+                for sent in sentences:
+                    yield Line(sent)
             except:
-                logging.info(f"ERROR: Could not use method {segmentizer} directly as a function to split sentences.")
+                logging.info(f"ERROR: Could not use method {sentencizer} directly as a function to split sentences.")
+    
+    def process(
+            self,
+            save_format='parquet',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            features=['token', 'lemma', 'pos_tag'],
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        Tokenizes, lemmatizes and POS tags the corpus using a spaCy NLP pipeline for the language of the corpus. 
+        Optionally, sentence splitting is also done. Saves the processed corpus to a new file and returns the corpus.
 
-    def folder_iterator(self, path):
+        Args:
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list has attributes `token`, 
+                `lemma` and `pos_tag`, is expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            features (list[str], default=['token', 'lemma', 'pos_tag']): the features to extract. Must be a subset of
+                {'token', 'lemma', 'pos_tag'}.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        if file_specification is None:
+            file_specification = ""
+            for feat in features:
+                file_specification += f"-{feat}s"
+        if save_format == "vertical" or save_format == "parquet":
+            file_ending = ".tsv"
+        elif save_format == "linebyline":
+            file_ending = ".txt"
+        else:
+            logging.error("'save_format' must be one of 'vertical', 'parquet' and 'linebyline'")
+            raise ValueError
+
+        it = self._process_text_iter(
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=features,
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size)
+
+        f_path = os.path.splitext(self.path)[0] + file_specification + file_ending
+
+        with open(f_path, 'w+') as f: # cache is probably needed here because the file might already exist.
+            if save_format == 'linebyline':
+                if not len(features) == 1:
+                    logging.error("When saving processed data to a `LinebyLineCorpus`, only one feature can be stored")
+                    raise ValueError
+                feature = features[0]
+                for line in it:
+                    f.write(' '.join(line.tokens_by_feature(feature))+'\n')
+                return LinebyLineCorpus(f_path, feature=feature)
+
+            elif save_format == 'vertical' or save_format == 'parquet':
+                field_separator = getattr(self, 'field_separator', '\t')
+                sentence_separator = getattr(self, 'sentence_separator', '\n')
+
+                def write_vertical_line(fields):
+                    fields = [f for f in fields if f is not None]
+                    for tup in zip(*fields):
+                        f.write(field_separator.join(tup) + sentence_separator)
+                    f.write(sentence_separator)
+                
+                for line in it:
+                    write_vertical_line([line.tokens_by_feature(feat) for feat in features])
+                
+                tsv_corpus = VerticalCorpus(f_path, field_map={feat: i for i, feat in enumerate(features)})
+
+                if save_format == 'parquet':
+                    processed_corpus = tsv_corpus.cast_to_parquet()
+                    os.remove(tsv_corpus.path)
+                else:
+                    processed_corpus = tsv_corpus
+                return processed_corpus
+    
+    def tokenize(
+            self,
+            save_format='parquet',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        Tokenizes the corpus using a spaCy NLP pipeline for the language of the corpus. Optionally, sentence splitting 
+        is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list has a 'token' attribute is 
+                expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        return self.process(
+            save_format=save_format,
+            file_specification=file_specification,
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=['token'],
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size
+        )
+
+    def lemmatize(
+            self,
+            save_format='parquet',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        Lemmatizes the corpus using a spaCy NLP pipeline for the language of the corpus. Optionally, sentence splitting 
+        is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list a `lemma` attribute is 
+                expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        return self.process(
+            save_format=save_format,
+            file_specification=file_specification,
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=['lemma'],
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size
+        )
+    
+    def pos_tag(
+            self,
+            save_format='parquet',
+            file_specification=None,
+            nlp_model="spacy",
+            package_name=None,
+            split_sentences=True,
+            sentencizer="spacy",
+            sentencizer_batch_size=1024
+        ):
+        """
+        POS tags the corpus using a spaCy NLP pipeline for the language of the corpus. Optionally, sentence splitting 
+        is also done. Saves the processed corpus to a new file and returns the corpus.
+
+        Args:
+            save_format (str, default='parquet'): the format to save the resulting corpus in. One of 'parquet', 
+                'vertical' and 'linebyline'.
+            file_specification (str, default=None): suffix to add to the files, by default adding each of the added 
+                features to the file name. 
+            nlp_model (Union[str, callable], default="spacy"): the NLP model to use for processing, by default spaCy.
+                A custom model can also be used. In this case, a function taking a Iterable[str] (the sentences) and 
+                returning an Iterable[List[object]], where each object in the inner list has a 'pos_tag' attribute is 
+                expected.
+            package_name (str, default=None): a spaCy package name, such as 'en_core_web_sm', that allows using a 
+                specific spaCy NLP model. If not defined, the default model for the language of the corpus will be
+                used.
+            split_sentences (bool, default=False): whether to perform sentence splitting or not.
+            sentencizer (Union[str, callable], default="spacy"): the sentencizer to use if sentence splitting (see 
+                ``self._split_sentences_iter``).
+            sentencizer_batch_size (int, default=1024): batch size for sentence splitting, passed to
+                ``self._split_sentences_iter``.
+        
+        Returns:
+            Corpus: the processed corpus.
+        """
+        return self.process(
+            save_format=save_format,
+            file_specification=file_specification,
+            nlp_model=nlp_model,
+            package_name=package_name,
+            features=['pos_tag'],
+            split_sentences=split_sentences,
+            sentencizer=sentencizer,
+            sentencizer_batch_size=sentencizer_batch_size
+        )
+
+    def folder_iterator(self, path): #TODO: integrate with the rest of the class, or remove
 
         fnames = []
 
@@ -580,7 +600,7 @@ class Corpus:
 
         return fnames
 
-    def cast_to_vertical(corpora, vertical_corpus):
+    def cast_to_vertical(corpora, vertical_corpus): #TODO: remove or change
 
         line_iterators = [corpus.line_iterator() for corpus in corpora]
         iterate = True
@@ -606,119 +626,26 @@ class Corpus:
         lc = LanguageChange()
         lc.save_resource('corpus', f'{self.language} corpora', self.name)
 
-    def save_tokenized_corpora(
-            corpora: Union[Self, List[Self]],
-            tokens=True,
-            lemmas=False,
-            pos_tags=False,
-            save_format='linebyline',
-            file_specification=None,
-            file_ending=".txt",
-            tokenizer="trankit",
-            lemmatizer="trankit",
-            pos_tagger="trankit",
-            split_sentences=True,
-            batch_size=128):
-        if not type(corpora) is list:
-            corpora = [corpora]
-        if file_specification == None:
-            file_specification = ""
-            file_specification += "-tokens" if tokens else ''
-            file_specification += '-lemmas' if lemmas else ''
-            file_specification += '-pos_tags' if pos_tags else ''
-        for corpus in corpora:
-            tokenized_name = os.path.splitext(corpus.path)[0]+file_specification+file_ending
-            with open(tokenized_name, 'w+') as f:  # cache is probably needed here because the file might already exist.
-                if save_format == 'linebyline':
-                    if tokens:
-                        for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
-                            f.write(' '.join(line.tokens())+'\n')
-                    elif lemmas:
-                        for line in corpus.lemmatize(
-                                lemmatizer, split_sentences=split_sentences, batch_size=batch_size):
-                            f.write(' '.join(line.lemmas())+'\n')
-                    elif pos_tags:
-                        for line in corpus.pos_tagging(
-                                pos_tagger, split_sentences=split_sentences, batch_size=batch_size):
-                            f.write(' '.join(line.pos_tags())+'\n')
-                elif save_format == 'vertical':
-
-                    def write_vertical_line(fields):
-                        fields = [f for f in fields if f is not None]
-                        for tup in zip(*fields):
-                            f.write('\t'.join(tup) + '\n')
-                        f.write('\n')
-
-                    if lemmas:
-                        if pos_tags:
-                            # tokens_lemmas_pos (with or without tokens)
-                            for line in corpus.tokens_lemmas_pos_tags(
-                                    tokenizer, tokens=tokens, split_sentences=split_sentences, batch_size=batch_size):
-                                write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
-                        else:
-                            # lemmatize (with or without tokens)
-                            for line in corpus.lemmatize(
-                                    lemmatizer, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
-                                write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
-                    elif pos_tags:
-                        # pos_tagging (with or without tokens)
-                        for line in corpus.pos_tagging(
-                                pos_tagger, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
-                            write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
-                    elif tokens:
-                        # tokenize only
-                        for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
-                            write_vertical_line([line.tokens(), line.lemmas(), line.pos_tags()])
-
     def __iter__(self):
         yield from self.line_iterator()
 
 
 class LinebyLineCorpus(Corpus):
 
-    def __init__(self, path, **kwargs):
+    def __init__(self, 
+            path, 
+            feature=None,
+            is_sentence_split=False,
+            tokens_splitter=None,
+            **kwargs):
         if 'name' not in kwargs:
             kwargs['name'] = path
         super().__init__(**kwargs)
         self.path = path
 
-        if 'is_sentence_tokenized' in kwargs:
-            self.is_sentence_tokenized = kwargs['is_sentence_tokenized']
-        else:
-            self.is_sentence_tokenized = False
-
-        if self.is_sentence_tokenized:
-            if 'is_tokenized' in kwargs:
-                self.is_tokenized = kwargs['is_tokenized']
-        else:
-            if 'is_tokenized' in kwargs and kwargs['is_tokenized']:
-                self.is_sentence_tokenized = True
-                self.is_tokenized = True
-            else:
-                self.is_sentence_tokenized = False
-                self.is_tokenized = False
-
-        if 'is_tokenized' in kwargs and kwargs['is_tokenized']:
-            if 'is_lemmatized' in kwargs:
-                self.is_lemmatized = kwargs['is_lemmatized']
-            if 'tokens_splitter' in kwargs:
-                self.tokens_splitter = kwargs.tokens_splitter
-            else:
-                self.tokens_splitter = ' '
-        else:
-            if 'is_lemmatized' in kwargs and kwargs['is_lemmatized']:
-                self.is_sentence_tokenized = True
-                self.is_tokenized = True
-                self.is_lemmatized = True
-                if 'tokens_splitter' in kwargs:
-                    self.tokens_splitter = kwargs.tokens_splitter
-                else:
-                    self.tokens_splitter = ' '
-            else:
-                self.is_lemmatized = False
+        self.is_sentence_split = is_sentence_split or feature
+        self.feature = feature
+        self.tokens_splitter = tokens_splitter or ' '
 
     def line_iterator(self):
 
@@ -731,10 +658,7 @@ class LinebyLineCorpus(Corpus):
             line = line.replace('\n', '')
             data = {}
             data['raw_text'] = line
-            if self.is_lemmatized:
-                data['lemmas'] = line.split(self.tokens_splitter)
-            elif self.is_tokenized:
-                data['tokens'] = line.split(self.tokens_splitter)
+            data[f"{self.feature}s"] = line.split(self.tokens_splitter)
             return data
 
         for fname in fnames:
@@ -863,9 +787,9 @@ class ParquetCorpus(Corpus):
 
     def search(self,
                search_terms: Union[str, Pattern, SearchTerm, List[Union[str, Pattern, SearchTerm]]],
+               parse_date="simple",
                chunk_size: int = 10 ** 6,
-               split=None,
-               parse_date="simple"
+               split=None
                ):
         """
         Search the corpus for token-level matches against any of the search terms and return the target usages 
@@ -878,12 +802,12 @@ class ParquetCorpus(Corpus):
         Args:
             search_terms (List[str|Pattern|SearchTerm]): search terms to apply. Strings and regex patterns are 
                 converted to `SearchTerm` instances automatically.
-            chunk_size (int): number of rows to load per batch.
-            split (str|None): dataset split to use when reading from a Hugging Face dataset. If none, all splits are 
-                searched.
             parse_date (str, default='simple'): how to parse dates (and times). If 'none', the dates are only converted 
                 to strings. If 'simple', the dates are assumed to be in ISO format, and only YYYY-MM-DD are kept by
                 cutting the string. If 'advanced', uses pd.to_datetime to parse dates (flexible but slow).
+            chunk_size (int): number of rows to load per batch.
+            split (str|None): dataset split to use when reading from a Hugging Face dataset. If none, all splits are 
+                searched.
 
         Returns:
             UsageDictionary: a dictionary of `TargetUsageList` objects for each search term.
@@ -891,7 +815,7 @@ class ParquetCorpus(Corpus):
         if not isinstance(search_terms, list):
             search_terms = [search_terms]
         if parse_date is None or parse_date == "none":
-            def parse_date(d): 
+            def parse_date(d):
                 return d.apply(str)
         elif parse_date == "simple":
             def parse_date(d):
@@ -901,7 +825,6 @@ class ParquetCorpus(Corpus):
                 return (pd.to_datetime(d.apply(str)).dt.tz_localize(None).dt.strftime("%Y-%m-%d"))
         else:
             raise ValueError("`parse_date` must be one of ['none', 'simple' and 'advanced'].")
-
 
         usages = defaultdict(list)
 
@@ -983,8 +906,8 @@ class ParquetCorpus(Corpus):
                 if self.date_name in chunk_targets:
                     chunk_targets[self.date_name] = parse_date(chunk_targets[self.date_name])
                 chunk_targets['offsets'] = (chunk_targets[['start', 'end']]
-                    .apply(lambda row: row.values, axis=1)
-                    .apply(lambda row: row.tolist()))
+                                            .apply(lambda row: row.values, axis=1)
+                                            .apply(lambda row: row.tolist()))
 
                 chunk_targets = (
                     chunk_targets.
@@ -992,7 +915,8 @@ class ParquetCorpus(Corpus):
                     rename(columns={self.date_name: "time"})
                 )
 
-                chunk_targets["time"] = chunk_targets["time"].apply(LiteralTime)
+                if "time" in chunk_targets:
+                    chunk_targets["time"] = chunk_targets["time"].apply(LiteralTime)
 
                 # Add to usage dictionary
                 for target, group in chunk_targets.groupby("target"):
@@ -1093,6 +1017,7 @@ class VerticalCorpus(Corpus):
                         block_size: int = 1 << 20,
                         compression: str = "snappy",
                         delimiter: str = "\t",
+                        add_sentence_ids: bool = True,
                         **kwargs) -> None:
         if parquet_corpus_or_path is None:
             extensions = "".join(Path(self.path).suffixes)
@@ -1106,22 +1031,36 @@ class VerticalCorpus(Corpus):
             raise TypeError("'parquet_corpus_or_path' has to be one of [None, str, ParquetCorpus].")
         parquet_path = parquet_corpus.path
 
-        read_opts = pv.ReadOptions(block_size=block_size)
+        read_opts = pv.ReadOptions(block_size=block_size, autogenerate_column_names=not self.has_header)
         parse_opts = pv.ParseOptions(delimiter=delimiter, quote_char=False)
         convert_opts = pv.ConvertOptions()
 
-        csv_reader = pv.open_csv(self.path, read_options=read_opts,
-                                 convert_options=convert_opts, parse_options=parse_opts)
-
         writer = None
-        for batch in csv_reader:
-            table = pa.Table.from_batches([batch])
-            if writer is None:
-                writer = pq.ParquetWriter(parquet_path, batch.schema, compression=compression)
-            writer.write_table(table)
+
+        if add_sentence_ids:
+            # Iterate through all sentences and add ids to separate them
+            cols = list(kv[0] for kv in sorted(self.field_map.items(), key=lambda kv: kv[1]))
+            for i, line in enumerate(self.line_iterator()):
+                table = pa.table({k: pa.array(line.tokens_by_feature(k)) for k in cols} | {"id": [i] * len(line)})
+                if writer is None:
+                    writer = pq.ParquetWriter(parquet_path, table.schema, compression=compression)
+                writer.write_table(table)
+                del line
+
+        else:
+            csv_reader = pv.open_csv(self.path, read_options=read_opts,
+                                    convert_options=convert_opts, parse_options=parse_opts)
+
+            for batch in csv_reader:
+                table = pa.Table.from_batches([batch])
+                if writer is None:
+                    writer = pq.ParquetWriter(parquet_path, batch.schema, compression=compression)
+                writer.write_table(table)
 
         if writer:
             writer.close()
+        
+        return parquet_corpus
 
 
 # Should be able to load and parse a corpus in XML format.
@@ -1307,6 +1246,8 @@ class XMLCorpus(Corpus):
                 for line in self.line_iterator():
                     f.write(line.raw_text()+'\n')  # cache needed here
 
+        return linebyline_corpus
+
     def cast_to_vertical(self, vertical_corpus_or_path=None, write_header=True):
         if vertical_corpus_or_path is None:
             extensions = "".join(Path(self.path).suffixes)
@@ -1353,6 +1294,8 @@ class XMLCorpus(Corpus):
                     csvfile.write(field_separator.join(vertical_row) + "\n")
                 if sentence_separator is not None:
                     csvfile.write(sentence_separator)
+        
+        return vertical_corpus
 
     def cast_to_parquet(self, parquet_corpus_or_path=None, keep_tsv=False):
         extensions = "".join(Path(self.path).suffixes)
@@ -1365,13 +1308,13 @@ class XMLCorpus(Corpus):
         logging.info("Casting to intermediate tsv file...")
         self.cast_to_vertical(c)
         logging.info("Casting to parquet...")
-        c.cast_to_parquet(parquet_corpus_or_path, column_names={
-            "token": self.token_tag,
-            "lemma": self.lemma_tag,
-            'pos_tag': self.pos_tag_tag})
+        parquet_corpus = c.cast_to_parquet(
+            parquet_corpus_or_path=parquet_corpus_or_path,
+            add_sentence_ids=False)
         if not keep_tsv:
             os.remove(c.path)
             logging.info(f"Removed temporary file {c.path}.")
+        return parquet_corpus
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
@@ -1454,7 +1397,7 @@ class HistoricalCorpus(SortedKeyList):
                 for line in corpus.line_iterator():
                     yield line
             except:
-                logging.error(f"Could not get lines from {corpus.name}.")
+                logging.error(f"Could not get lines from {str(corpus.name)}.")
 
     def search(self, search_terms: List[str | Pattern | SearchTerm], index_by_corpus=False):
         """
@@ -1483,16 +1426,16 @@ class HistoricalCorpus(SortedKeyList):
                     continue
                 for key in usage_dict:
                     if not key in usages:
-                        usages[key] = {corpus.name: TargetUsageList()}
-                    usages[key][corpus.name] = usage_dict[key]
+                        usages[key] = {str(corpus.name): TargetUsageList()}
+                    usages[key][str(corpus.name)] = usage_dict[key]
 
         else:
             usages = UsageDictionary()
             for corpus in self:
                 try:
                     usage_dict: UsageDictionary = corpus.search(search_terms)
-                except Exception as e:
-                    logging.error(f"Could not search through {corpus.name}: {e}")
+                except:
+                    logging.error(f"Could not search through {str(corpus.name)}.")
                     continue
                 for key in usage_dict:
                     if not key in usages:

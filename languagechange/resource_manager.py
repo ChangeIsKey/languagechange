@@ -8,6 +8,8 @@ from platformdirs import user_cache_dir
 import dload
 import logging
 
+from languagechange.config import RESOURCES_HUB_PATH
+
 # Configure logging with a basic setup
 logging.basicConfig(
     level=logging.INFO,
@@ -31,11 +33,8 @@ class LanguageChange():
         self.load_resources_hub()
 
     def load_resources_hub(self):
-        """Refresh the resource hub index from GitHub."""
-        with urllib.request.urlopen(
-            'https://raw.githubusercontent.com/pierluigic/languagechange/main/languagechange/resources_hub.json'
-        ) as url:
-            self.resource_hub = json.load(url)
+        with open(RESOURCES_HUB_PATH) as f:
+            self.resource_hub = json.load(f)
 
     def download_ui(self):
         """Interactive prompt for selecting and downloading resources."""

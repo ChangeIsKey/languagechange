@@ -3,8 +3,6 @@ from collections import Counter, deque
 from datetime import datetime
 import math
 import json
-import pickle
-import hashlib
 import logging
 import inspect
 import os
@@ -26,6 +24,7 @@ from languagechange.models.change.widid import WiDiD
 from languagechange.benchmark import WiC, WSD, WSI, SemanticChangeEvaluationDataset, SemEval2020Task1, DWUG
 from languagechange.cache import CacheManager
 from languagechange.utils import Time, NumericalTime, LiteralTime, TimeInterval, _parse_year
+from languagechange.search import SearchTerm
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -49,23 +48,8 @@ def get_depth(d):
     return 1 + max([get_depth(v) for v in d.values()])
 
 
-def generate_cache_key(data):
-    """
-    Generate a unique cache key based on the input data.
-    """
-    try:
-        serialized = pickle.dumps(data)
-        return hashlib.sha256(serialized).hexdigest()
-    except Exception as e:
-        raise ValueError(f"Invalid input: {e}")
-
-
 class WiCBinary(BaseModel):
     wic_label: bool = Field(description='Whether the word has the same meaning or not.')
-
-
-class WiCGraded(BaseModel):
-    wic_label: float = Field(description='How similar the two occurrences of the word are.', le=1, ge=0)
 
 
 class Pipeline:
@@ -641,7 +625,7 @@ class WSIPipeline(Pipeline):
 
             if isinstance(self.usage_encoding, DefinitionGenerator):
                 encoded_usages = self.usage_encoding.generate_definitions(
-                    target_usages, encode_definitions='vectors')
+                    target_usages, return_definitions=False, return_embeddings=True)
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 encoded_usages = self.usage_encoding.encode(target_usages)
@@ -803,7 +787,7 @@ class WiCPipeline(Pipeline):
                 encoded_usages = self.usage_encoding.encode(usage_list)
 
             elif isinstance(self.usage_encoding, DefinitionGenerator):
-                encoded_usages = self.usage_encoding.generate_definitions(usage_list, encode_definitions='vectors')
+                encoded_usages = self.usage_encoding.generate_definitions(usage_list, return_definitions=False, return_embeddings=True)
 
             if label_func is None:
                 if task == "graded":
@@ -838,16 +822,38 @@ class WiCPipeline(Pipeline):
         elif isinstance(self.usage_encoding, PromptModel):
             if task == "graded":
                 template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCGraded)
+                if self.usage_encoding.local:
+                    grammar = r'root ::= [1-4]'
+                    self.usage_encoding.set_grammar(grammar)
+                    response_attr = None
+                else:
+                    self.usage_encoding.set_structure("DURel")
+                    response_attr = "durel"
             else:
                 template = 'Please tell me if the meaning of the word \'{target}\' is the same in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCBinary)
+                if self.usage_encoding.local:
+                    grammar = r'root ::= "True"|"False"'
+                    self.usage_encoding.set_grammar(grammar)
+                    response_attr = None
+                else:
+                    self.usage_encoding.set_structure(WiCBinary)
+                    response_attr = 'wic_label'
 
             for pair in self.evaluation_set:
                 target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                      TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
-                label = int(self.usage_encoding.get_response(target_usage_list,
-                            user_prompt_template=template, response_attribute="wic_label"))
+                label = self.usage_encoding.get_response(target_usage_list,
+                            user_prompt_template=template, response_attribute=response_attr)
+                if self.usage_encoding.local and task == "binary":
+                    if label == 'True':
+                        label = 1
+                    elif label == 'False':
+                        label = 0
+                    else:
+                        logging.error("Could not parse prompt model output as True or False.")
+                        raise ValueError
+                else:
+                    label = int(label)
                 labels.append(label)
         
         if not evaluate:
@@ -965,46 +971,10 @@ class CDPipeline(Pipeline):
             all_words = set(self.dataset.keys())
 
         if isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset not in {"NorDiaChange", "RuShiftEval"}:
-            usage_list = []
-            for corpus in [self.dataset.corpus1_lemma, self.dataset.corpus2_lemma]:
-                search = True
-                if self.cache_mgr:
-                    # Generate cache key
-                    cache_key = generate_cache_key((self.dataset.dataset, self.dataset.language, corpus))
-                    cache_path = os.path.join(self.cache_mgr.cache_dir,
-                                              f"{self.dataset.dataset}_{self.dataset.language}_{cache_key}.json")
-
-                    # whether the cache files exist
-                    if os.path.exists(cache_path):
-                        try:
-                            logging.info(f"Loading cached usages from {cache_path}")
-                            with open(cache_path, "r") as f:
-                                corpus_usages = json.load(f)
-                                # When loading from cache, replace 'text_' with 'text'.
-                                corpus_usages = UsageDictionary(
-                                    {w: TargetUsageList(
-                                        [TargetUsage(**({"text": tu.pop("text_")} | tu)) for tu in tul])
-                                        for w, tul in corpus_usages.items()})
-                                search = False
-                        except Exception as e:
-                            logging.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
-                            os.remove(cache_path)
-
-                if search:
-                    logging.info(f"Searching for usages in {corpus.name}...")
-                    corpus_usages = corpus.search([target.target for target in self.dataset.graded_task.keys()])
-                    if self.cache_mgr:
-                        # save the usages to a json file
-                        with self.cache_mgr.atomic_write(cache_path, mode='w') as temp_path:
-                            serialized = {w: corpus_usages[w].to_dict() for w in corpus_usages.keys()}
-                            json.dump(serialized, temp_path)
-                            logging.info(f"Saved usages to {cache_path}.")
-                usage_list.append(corpus_usages)
-            for t, usages_per_word in enumerate(usage_list):
-                for w, us in usages_per_word.items():
-                    if w not in usages:
-                        usages[w] = dict()
-                    usages[w][t] = us
+            usages_per_word = self.dataset.get_all_usages()
+            # Sort by time
+            for w, us in usages_per_word.items():
+                usages[w] = us.group_by_time(use_year=False)
         
         elif (isinstance(self.dataset, DWUG) or 
              (isinstance(self.dataset, SemEval2020Task1) and self.dataset.dataset in {"NorDiaChange", "RuShiftEval"})):
@@ -1103,7 +1073,7 @@ class CDPipeline(Pipeline):
                 for t, us in usages_by_period.items():
                     embeddings_per_period[t] = self.usage_encoding.generate_definitions(
                         us, 
-                        encode_definitions='vectors')
+                        return_definitions=False, return_embeddings=True)
 
             elif isinstance(self.usage_encoding, ContextualizedModel):
                 for t, us in usages_by_period.items():

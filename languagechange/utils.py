@@ -3,10 +3,16 @@
 from typing import Union
 from numbers import Number
 import math
+import json
+import logging
 
 import numpy as np
 import matplotlib as mpl
 import pandas as pd
+import logging
+import spacy
+
+from languagechange.config import SPACY_PACKAGES_PATH
 
 
 def PARSE_DATE_SIMPLE(d): return d[:10]
@@ -92,7 +98,7 @@ class TimeInterval(Time):
     def __lt__(self, other):
         if type(other) == TimeInterval:
             if self.start == other.start:
-                return self.duration < other.duration
+                return self.end < other.end
             else:
                 return self.start < other.start
         elif type(other) == NumericalTime:
@@ -101,7 +107,7 @@ class TimeInterval(Time):
     def __le__(self, other):
         if type(other) == TimeInterval:
             if self.start == other.start:
-                return self.duration <= other.duration
+                return self.end <= other.end
             else:
                 return self.start <= other.start
         elif type(other) == NumericalTime:
@@ -145,3 +151,25 @@ def generate_colormap(n_classes):
     including_grey = np.vstack(([(0.7, 0.7, 0.7)], mpl.colors.hsv_to_rgb(hsv)))
     cmap = mpl.colors.ListedColormap(including_grey)
     return cmap
+
+
+def _initialize_nlp(language, package_name=None):
+        """
+        Initializes a spaCy NLP pipeline for language.
+        """
+        if package_name is None:
+            with open(SPACY_PACKAGES_PATH) as f:
+                spacy_packages = json.load(f)
+                if language is not None:
+                    if language.lower() not in spacy_packages:
+                        logging.info(f"SpaCy does not have support for {language}. Falling back to multilingual processing.")
+                        language = "xx"
+                    else:
+                        language = language.lower()
+                else:
+                    logging.info("No language is defined for the corpus. Falling back to multilingual processing.")
+                    language = "xx"
+
+                package_name = spacy_packages[language]
+        nlp = spacy.load(package_name)
+        return nlp

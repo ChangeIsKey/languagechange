@@ -13,12 +13,12 @@ def xml_corpus():
 
 @pytest.fixture(scope="module")
 def parquet_corpus(xml_corpus):
-    xml_corpus.cast_to_parquet()
+    pq_corpus = xml_corpus.cast_to_parquet()
 
     parquet_path = Path("svt-2004.parquet")
     assert parquet_path.exists(), f"Expected parquet file was not created: {parquet_path}"
 
-    return ParquetCorpus(str(parquet_path))
+    return pq_corpus
 
 
 def test_xml_and_parquet_search_results_match(xml_corpus, parquet_corpus):
