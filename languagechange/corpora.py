@@ -27,7 +27,7 @@ from languagechange.resource_manager import LanguageChange
 from languagechange.search import SearchTerm
 from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
 from languagechange.utils import LiteralTime, PARSE_DATE_SIMPLE, PARSE_DATE_ADV
-from languagechange.config import SPACY_PACKAGES_PATH
+from languagechange.utils import _initialize_nlp
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -256,27 +256,6 @@ class Corpus:
         logging.info(f"{n_usages} usages found.")
         return usage_dictionary
 
-    def _initialize_nlp(self, package_name=None):
-        """
-        Initializes a spaCy NLP pipeline for self.language.
-        """
-        if package_name is None:
-            with open(SPACY_PACKAGES_PATH) as f:
-                spacy_packages = json.load(f)
-                if self.language is not None:
-                    if self.language.lower() not in spacy_packages:
-                        logging.info(f"SpaCy does not have support for {self.language}. Falling back to multilingual processing.")
-                        language = "xx"
-                    else:
-                        language = self.language.lower()
-                else:
-                    logging.info("No language is defined for the corpus. Falling back to multilingual processing.")
-                    language = "xx"
-
-                package_name = spacy_packages[language]
-        nlp = spacy.load(package_name)
-        return nlp
-
     def _process_text_iter(self, 
             nlp_model="spacy",
             package_name=None,
@@ -288,7 +267,7 @@ class Corpus:
         Processes the corpus by streaming through it and yields tokens, lemmas and POS tags in new Line objects.
         """
         if nlp_model == "spacy":
-            nlp = self._initialize_nlp(package_name=package_name)
+            nlp = _initialize_nlp(self.language, package_name=package_name)
             required = {
                 "lemma": "lemmatizer",
                 "pos_tag": "tagger",
@@ -339,7 +318,7 @@ class Corpus:
             Line: a Line object containing a sentence.
         """
         if sentencizer == "spacy":
-            sentencizer = self._initialize_nlp(package_name=package_name)
+            sentencizer = _initialize_nlp(self.language, package_name=package_name)
             sentencizer.add_pipe('sentencizer')
             lines = []
             for line in self.line_iterator():

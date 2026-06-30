@@ -65,10 +65,6 @@ class WiCBinary(BaseModel):
     wic_label: bool = Field(description='Whether the word has the same meaning or not.')
 
 
-class WiCGraded(BaseModel):
-    wic_label: float = Field(description='How similar the two occurrences of the word are.', le=1, ge=0)
-
-
 class Pipeline:
     """
         A general class for evaluation pipelines, containing methods common to WSIPipeline, WiCPipeline and
@@ -834,16 +830,38 @@ class WiCPipeline(Pipeline):
         elif isinstance(self.usage_encoding, PromptModel):
             if task == "graded":
                 template = 'Please tell me how similar the meaning of the word \'{target}\' is in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCGraded)
+                if self.usage_encoding.local:
+                    grammar = r'root ::= [1-4]'
+                    self.usage_encoding.set_grammar(grammar)
+                    response_attr = None
+                else:
+                    self.usage_encoding.set_structure("DURel")
+                    response_attr = "durel"
             else:
                 template = 'Please tell me if the meaning of the word \'{target}\' is the same in the following example sentences: \n1. {usage_1}\n2. {usage_2}'
-                self.usage_encoding.set_structure(WiCBinary)
+                if self.usage_encoding.local:
+                    grammar = r'root ::= "True"|"False"'
+                    self.usage_encoding.set_grammar(grammar)
+                    response_attr = None
+                else:
+                    self.usage_encoding.set_structure(WiCBinary)
+                    response_attr = 'wic_label'
 
             for pair in self.evaluation_set:
                 target_usage_list = TargetUsageList([TargetUsage(pair['text1'], [pair['start1'], pair['end1']]),
                                                      TargetUsage(pair['text2'], [pair['start2'], pair['end2']])])
-                label = int(self.usage_encoding.get_response(target_usage_list,
-                            user_prompt_template=template, response_attribute="wic_label"))
+                label = self.usage_encoding.get_response(target_usage_list,
+                            user_prompt_template=template, response_attribute=response_attr)
+                if self.usage_encoding.local and task == "binary":
+                    if label == 'True':
+                        label = 1
+                    elif label == 'False':
+                        label = 0
+                    else:
+                        logging.error("Could not parse prompt model output as True or False.")
+                        raise ValueError
+                else:
+                    label = int(label)
                 labels.append(label)
         
         if not evaluate:
