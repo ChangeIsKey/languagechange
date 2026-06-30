@@ -262,20 +262,16 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         if self.dataset == "SemEval 2020 Task 1":
             self.corpus1_lemma = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus1', 'lemma'),
-                name='corpus1_lemma', language=self.language, time=NumericalTime(1),
-                is_lemmatized=True)
+                name='corpus1_lemma', language=self.language, time=NumericalTime(1), feature="lemma")
             self.corpus2_lemma = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus2', 'lemma'),
-                name='corpus2_lemma', language=self.language, time=NumericalTime(2),
-                is_lemmatized=True)
+                name='corpus2_lemma', language=self.language, time=NumericalTime(2), feature="lemma")
             self.corpus1_token = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus1', 'token'),
-                name='corpus1_token', language=self.language, time=NumericalTime(1),
-                is_tokenized=True)
+                name='corpus1_token', language=self.language, time=NumericalTime(1), feature="token")
             self.corpus2_token = LinebyLineCorpus(
                 os.path.join(self.home_path, 'corpus2', 'token'),
-                name='corpus2_token', language=self.language, time=NumericalTime(2),
-                is_tokenized=True)
+                name='corpus2_token', language=self.language, time=NumericalTime(2), feature="token")
 
         self.binary_task = {}
         self.graded_task = {}
@@ -370,6 +366,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
                 u['offsets'] = [int(i) for i in u['indexes_target_token'].split(':')]
                 u['time'] = NumericalTime(u['date'])
                 usages.append(DWUGUsage(**u))
+        #TODO: add returning usages from the other SemEval2020Task1 corpora
 
         return usages
 
