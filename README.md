@@ -3,7 +3,7 @@
 LanguageChange is a Python toolkit for exploring lexical semantic change across corpora and time. It comes with data loaders, embedding pipelines, cluster and comparison methods, evaluation utilities as well as plotting helpers so you can go from raw corpora to change scores and visual analyses in a single workflow.
 
 ## Key Features
-- Ready-to-use benchmarks (SemEval 2020 Task 1, DWUG) plus helpers for your own corpora.
+- Ready-to-use benchmarks (SemEval 2020, DWUG) plus helpers for your own corpora.
 - Static and contextualised representation pipelines (count, PPMI, SVD, transformer-based) with caching.
 - Alignment and comparison utilities (e.g. Orthogonal Procrustes) and standard change metrics such as PRT and APD.
 - Plotting helpers for DWUG graphs, embeddings clusters to inspect model behaviour visually.
