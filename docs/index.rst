@@ -15,8 +15,7 @@ go from raw corpora to change scores and visual analyses in a single workflow. M
 - Alignment and comparison utilities (e.g. Orthogonal Procrustes) and standard change metrics such as PRT and APD.
 - Plotting helpers for DWUG graphs and embeddings to inspect model behaviour visually.
 
-To get started check out our tutorial on
-:ref:`source/tutorials/isle`. It shows show how to compare variation across corpora with the same pipeline.
+To get started, explore the tutorials below.
 
 For more details on how to use the library, check our reference API:
 
@@ -26,7 +25,6 @@ For more details on how to use the library, check our reference API:
    :caption: Contents:
 
    source/api/languagechange
-   source/tutorials/isle
    tutorials/index
 
 Indices and tables

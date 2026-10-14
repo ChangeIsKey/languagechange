@@ -8,4 +8,4 @@ exploration, lexical semantic change analysis, and visualization.
    :maxdepth: 1
 
    corpora
-   benchmarks
+   ../source/tutorials/isle
