@@ -1,5 +1,5 @@
 Working with Corpora
-=====================
+====================
 
 Introduction
 ------------
@@ -113,9 +113,9 @@ inspect how many usages were found:
 
 Output:
 
-.. code-block:: text
-
-   480
+.. literalinclude:: outputs/corpora_outputs.jsonl
+   :language: json
+   :lines: 1
 
 To inspect the first usage, print its sentence and the matched token. The
 ``start()`` and ``end()`` methods give character offsets into the sentence:
@@ -128,10 +128,9 @@ To inspect the first usage, print its sentence and the matched token. The
 
 Output:
 
-.. code-block:: text
-
-   Am:ts Sjukhuset döde 37 Man , samt 2tne pä wädeligit sätt omkomne ditförde och jordfäste .
-   Man
+.. literalinclude:: outputs/corpora_outputs.jsonl
+   :language: json
+   :lines: 2
 
 We can also sample a smaller number of usages for closer inspection:
 
@@ -143,10 +142,9 @@ We can also sample a smaller number of usages for closer inspection:
 
 Output:
 
-.. code-block:: text
-
-   10
-   Han wnrdt framledd för öswerste-Prä » sterna , Pilatus och Herodes : och Eder lärer man äfwenledes leda fram för Dömarena .
+.. literalinclude:: outputs/corpora_outputs.jsonl
+   :language: json
+   :lines: 3
 
 The random seed makes the sample reproducible for the same corpus and
 NumPy version. Without a seed, the selected usages can differ between runs.
@@ -159,22 +157,32 @@ When the corpus contains time information, usages can be grouped by year:
 .. code-block:: python
 
    usages_by_year = man_usages.group_by_time()
-
    for year, usages in usages_by_year.items():
        print(year, len(usages))
 
 Output:
 
-.. code-block:: text
-
-   1780 76
-   1781 114
-   1782 281
-   1784 9
+.. literalinclude:: outputs/corpora_outputs.jsonl
+   :language: json
+   :lines: 4
 
 These are the years with matches in this corpus, and the counts sum to 480.
 Grouping allows us to inspect usages from different periods. The counts
 alone do not demonstrate a change in meaning.
+
+Outputs saved as JSONL
+----------------------
+
+The file below contains the selected outputs shown in this tutorial,
+formatted as JSONL. Each line is one JSON record with the example name and
+its printed output lines. Execution records for ``corpora_examples.py``
+are stored separately from these selected tutorial results.
+
+Download :download:`corpora_outputs.jsonl <outputs/corpora_outputs.jsonl>`.
+The selected tutorial outputs are shown together below:
+
+.. literalinclude:: outputs/corpora_outputs.jsonl
+   :language: json
 
 Summary
 -------
