@@ -22,38 +22,63 @@ In this tutorial, we will learn how to:
 Prerequisites
 -------------
 
-Before starting, make sure that you have installed ``languagechange``
-and have access to a corpus file supported by the package.
+Before starting, make sure that you have installed ``languagechange``.
+Run the examples in order in the same Python session or notebook.
 
 Loading a corpus
 ----------------
 
-LanguageChange supports several corpus formats. For example, ``SprakBankenCorpus``
-can load a corpus stored as XML, while ``ParquetCorpus`` can load a corpus stored
-in Parquet format.
+We will use *Kubhist 2: Carlscronas Wekoblad 1780-talet*, a corpus of historical
+Swedish newspaper text distributed by Språkbanken. It already contains tokens,
+lemmas, part-of-speech tags, sentence identifiers, and dates.
 
-If you already have a Parquet corpus, load it directly. Replace the path below
-with the path to your own file:
+Download :download:`the example Parquet corpus
+<data/kubhist2-carlscronaswekoblad-1780.parquet>` (about 1.9 MB) and save it as
+``kubhist2-carlscronaswekoblad-1780.parquet`` in your working directory. In a
+notebook, this is normally the directory containing the notebook. Then load it:
 
 .. code-block:: python
 
    from languagechange.corpora import ParquetCorpus
 
-   corpus = ParquetCorpus("path/to/your-corpus.parquet")
+   corpus = ParquetCorpus("kubhist2-carlscronaswekoblad-1780.parquet")
 
-If your corpus is in a supported XML format, you can load it and convert it to
-Parquet. For example:
+The file is a Parquet conversion of the XML corpus from
+`Språkbanken's resource page
+<https://sprakbanken.se/resurser/kubhist2-carlscronaswekoblad-1780>`_.
+Source: Språkbanken (2024), *Kubhist 2: Carlscronas Wekoblad 1780-talet*,
+updated 2024-01-06, `doi:10.23695/4qx9-j028
+<https://doi.org/10.23695/4qx9-j028>`_. The data is available under
+`CC BY 4.0 <https://creativecommons.org/licenses/by/4.0/>`_. The conversion
+changes the file format and retains the text and annotations, including
+historical spellings and OCR errors.
+
+Starting from XML instead
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can also download the compressed XML file directly from Språkbanken and
+convert it yourself. This is an alternative to loading the supplied Parquet
+file above; you do not need to run both examples.
 
 .. code-block:: python
 
+   from urllib.request import urlretrieve
    from languagechange.corpora import SprakBankenCorpus
 
-   xml_corpus = SprakBankenCorpus("path/to/your-corpus.xml")
+   xml_filename = "kubhist2-carlscronaswekoblad-1780.xml.bz2"
+   urlretrieve(
+       "https://spraakbanken.gu.se/resurser/meningsmangder/" + xml_filename,
+       xml_filename,
+   )
+   xml_corpus = SprakBankenCorpus(xml_filename)
    corpus = xml_corpus.cast_to_parquet()
 
-Replace ``path/to/your-corpus.xml`` with the path to your own XML corpus file.
-The conversion may take some time for large corpora. Consult the corpus
-documentation for any format-specific requirements.
+``SprakBankenCorpus`` reads the ``.xml.bz2`` file without a separate
+decompression step. The conversion writes
+``kubhist2-carlscronaswekoblad-1780.parquet`` in the working directory and
+returns a ``ParquetCorpus``. It replaces a file of the same name if one already
+exists. Downloading and converting may take a little time.
+
 Searching for a word
 --------------------
 
@@ -73,6 +98,9 @@ group corresponding to our search term:
 
    man_usages = results["lemma=man"]
 
+The key ``"lemma=man"`` describes the search we performed. A lemma search can
+match different surface forms; below, the first matching token is ``Man``.
+
 Exploring word usages
 ---------------------
 
@@ -83,11 +111,45 @@ inspect how many usages were found:
 
    print(len(man_usages))
 
+Output:
+
+.. code-block:: text
+
+   480
+
+To inspect the first usage, print its sentence and the matched token. The
+``start()`` and ``end()`` methods give character offsets into the sentence:
+
+.. code-block:: python
+
+   first_usage = man_usages[0]
+   print(first_usage.text())
+   print(first_usage.text()[first_usage.start():first_usage.end()])
+
+Output:
+
+.. code-block:: text
+
+   Am:ts Sjukhuset döde 37 Man , samt 2tne pä wädeligit sätt omkomne ditförde och jordfäste .
+   Man
+
 We can also sample a smaller number of usages for closer inspection:
 
 .. code-block:: python
 
-   sample = man_usages.sample(10)
+   sample = man_usages.sample(10, random_seed=42)
+   print(len(sample))
+   print(sample[0].text())
+
+Output:
+
+.. code-block:: text
+
+   10
+   Han wnrdt framledd för öswerste-Prä » sterna , Pilatus och Herodes : och Eder lärer man äfwenledes leda fram för Dömarena .
+
+The random seed makes the sample reproducible for the same corpus and
+NumPy version. Without a seed, the selected usages can differ between runs.
 
 Grouping usages by time
 -----------------------
@@ -101,7 +163,18 @@ When the corpus contains time information, usages can be grouped by year:
    for year, usages in usages_by_year.items():
        print(year, len(usages))
 
-This allows us to examine how a word appears across different periods.
+Output:
+
+.. code-block:: text
+
+   1780 76
+   1781 114
+   1782 281
+   1784 9
+
+These are the years with matches in this corpus, and the counts sum to 480.
+Grouping allows us to inspect usages from different periods. The counts
+alone do not demonstrate a change in meaning.
 
 Summary
 -------
