@@ -1,7 +1,7 @@
 # Building the documentation
 
-From the repository root, use Python 3.13 (the version also used by GitHub
-Actions and Read the Docs):
+From the repository root, use Python 3.13 (the version also used by Read the
+Docs):
 
 ```sh
 python -m venv .venv-docs
@@ -15,39 +15,34 @@ files, rather than the generated HTML. The API reference imports the local
 source with external dependencies mocked, so building the docs does not require
 installing the library's machine-learning dependencies or a PyPI release.
 
-## GitHub Actions
+## Automatic builds on Read the Docs
 
-`.github/workflows/build-docs.yml` builds HTML on pushes to every branch,
-on pull requests, and on manual runs. It runs on all file changes because the
-API reference also depends on Python source outside `docs/`.
+Read the Docs builds and publishes the documentation when GitHub sends a push
+notification through the project's webhook. It uses `.readthedocs.yaml` and
+`docs/requirements.txt`; a separate GitHub Actions documentation build is not
+required. Sphinx warnings and errors fail the Read the Docs build.
 
-Open the **Build documentation** run under the repository's **Actions** tab.
-Download the `documentation-html` artifact, extract it, and open `index.html`.
-Artifacts are retained for 14 days. Sphinx warnings and errors fail the workflow
-and the Read the Docs build, so incomplete API pages cannot silently pass.
+Maintainers can inspect the existing [languagechange project](https://app.readthedocs.org/projects/languagechange/)
+and its [build history](https://app.readthedocs.org/projects/languagechange/builds/).
+Request access to that project if it is not available in your dashboard.
 
-## Read the Docs hosting
+The project settings needed for builds on every branch are:
 
-Read the Docs uses `.readthedocs.yaml` and the same `docs/requirements.txt`.
-The GitHub workflow provides a build check and artifact; Read the Docs publishes
-the documentation through its GitHub integration.
+1. A working GitHub integration for `ChangeIsKey/languagechange`. Under
+   **Settings > Integrations**, inspect incoming webhook activity. A GitHub
+   repository administrator may need to configure or re-sync the webhook.
+2. An enabled automation rule with version type **Branch**, match **Any
+   version**, and action **Activate version**. This enables new branch versions;
+   activate existing branches separately under **Versions** when needed.
+3. Default branch `main` and the repository-root `.readthedocs.yaml` configuration.
 
-After creating an account at <https://app.readthedocs.org/>:
+To verify automation, push a documentation change and check that a Read the
+Docs build starts without clicking **Build** or **Rebuild**. Confirm that the
+build uses the pushed commit, succeeds, and publishes a working **View docs**
+link. For troubleshooting, inspect webhook delivery activity as well as the
+build log.
 
-1. Ask an existing maintainer for access to the `languagechange` project linked
-   from the repository README. If the project has not been imported yet, add
-   `ChangeIsKey/languagechange` with the GitHub integration. Connecting the
-   repository may require an organization administrator.
-2. Confirm that the project uses `.readthedocs.yaml` and the default branch is
-   `main`. Check that the GitHub integration is connected.
-3. For automatic hosting of new branches, add an automation rule with version
-   type **Branch**, match **Any version**, and action **Activate version**.
-   Activate existing branches in **Versions** as needed; the rule does not
-   retroactively activate them.
-4. Enable pull request builds in the project's settings if hosted previews
-   are wanted.
-5. Push a documentation change to a branch and verify both its GitHub Actions
-   run and its Read the Docs build and version URL.
+Pull request previews can be enabled separately in **Pull request builds**.
 
 See the official [Git integration guide](https://docs.readthedocs.com/platform/stable/reference/git-integration.html)
 and [automation rules guide](https://docs.readthedocs.com/platform/stable/automation-rules.html).
