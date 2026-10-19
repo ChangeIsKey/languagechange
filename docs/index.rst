@@ -48,10 +48,11 @@ The library is under active development, but if it supports your research, pleas
 
 .. code-block:: bibtex
 
-.. Temporary test of automatic Read the Docs builds.
-
    @misc{languagechange,
      title = {LanguageChange: A Python library for studying semantic change},
      author = {{Change is Key!}},
      year = {n.d.}
    }
+
+.. Temporary test of automatic Read the Docs builds.
+
