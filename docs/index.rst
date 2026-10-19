@@ -54,5 +54,5 @@ The library is under active development, but if it supports your research, pleas
      year = {n.d.}
    }
 
-.. Temporary test of automatic Read the Docs builds.
+.. Testing automatic Read the Docs builds after webhook resync.
 
