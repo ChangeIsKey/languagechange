@@ -7,7 +7,7 @@ Actions and Read the Docs):
 python -m venv .venv-docs
 source .venv-docs/bin/activate
 python -m pip install -r docs/requirements.txt
-python -m sphinx -b html --fresh-env docs docs/_build/html
+python -m sphinx -b html --fresh-env --fail-on-warning --keep-going docs docs/_build/html
 ```
 
 Open `docs/_build/html/index.html` to view the result. Edit the `.rst` source
@@ -23,8 +23,8 @@ API reference also depends on Python source outside `docs/`.
 
 Open the **Build documentation** run under the repository's **Actions** tab.
 Download the `documentation-html` artifact, extract it, and open `index.html`.
-Artifacts are retained for 14 days. Build errors fail the workflow; existing
-Sphinx warnings remain visible in the build log and do not fail it.
+Artifacts are retained for 14 days. Sphinx warnings and errors fail the workflow
+and the Read the Docs build, so incomplete API pages cannot silently pass.
 
 ## Read the Docs hosting
 
