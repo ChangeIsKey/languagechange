@@ -9,4 +9,5 @@ exploration, lexical semantic change analysis, and visualization.
 
    corpora
    benchmarks
+   usages
    ../source/tutorials/isle
