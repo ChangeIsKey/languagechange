@@ -27,6 +27,7 @@ For more details on how to use the library, check our reference API:
 
    source/api/languagechange
    source/tutorials/isle
+   tutorials/prompting
 
 Indices and tables
 ==================
