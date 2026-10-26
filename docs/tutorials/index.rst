@@ -11,4 +11,5 @@ exploration, lexical semantic change analysis, and visualization.
    benchmarks
    usages
    definitions
+   prompting
    ../source/tutorials/isle
