@@ -101,6 +101,20 @@ Each record retains the text, offsets, full date, token, lemma,
 part-of-speech, and search-target metadata supplied by the corpus. These
 records have no ``id`` field. Historical spelling is preserved.
 
+Understanding ``man``, its lemma, and its word class
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* ``token`` is the word as written, such as ``Man``; ``lemma`` is its
+  dictionary form, ``man``.
+* In Swedish, ``man`` can mean "one" or "people" as a pronoun, or "man"
+  or "husband" as a noun. For example, ``man ser`` means "one sees".
+* ``PN`` means pronoun; ``NN`` means noun.
+* In ``37 Man``, the word appears to be a noun despite its ``PN`` tag.
+  This may be a tagging error; the saved output keeps the original tag.
+
+See the `Swedish dictionary <https://svenska.se/?activeTab=alla&q=man>`_
+and `tag definitions <https://spraakbanken.gu.se/verktyg/korp/msdtags>`_.
+
 :download:`Download all 480 usages <outputs/usages_outputs.jsonl>`.
 
 Grouping usages by time
