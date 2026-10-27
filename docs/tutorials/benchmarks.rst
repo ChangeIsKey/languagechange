@@ -22,7 +22,6 @@ This tutorial follows ``benchmark_examples.py``. We will learn how to:
 
 .. contents:: In this tutorial
    :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -79,8 +78,11 @@ analysis. See the `DURel Annotation Tool article
 This explains why a DWUG resource can supply WiC pairs, WSD labels, WSI
 clusters, and change annotations in the same tutorial.
 
+Working with custom datasets
+----------------------------
+
 Creating a custom WiC dataset
------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 WiC (Word-in-Context) asks whether a word has the same meaning in two
 different contexts.
@@ -122,7 +124,7 @@ positions in each text. The labels in these examples use ``0`` for
 different meanings and ``1`` for the same meaning.
 
 Inspecting the dataset
-----------------------
+^^^^^^^^^^^^^^^^^^^^^^
 
 We can retrieve all examples and count them:
 
@@ -154,7 +156,7 @@ Output:
    jam jam 1
 
 Creating a dataset from target usages
--------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 If you already have ``TargetUsage`` objects, pass pairs of them with one
 label per pair:
@@ -185,7 +187,7 @@ Output:
    [0, 1, 0]
 
 Evaluating predictions
-----------------------
+^^^^^^^^^^^^^^^^^^^^^^
 
 For the original two-example ``wic`` dataset, predictions must be in the
 same order as the examples. Our custom data is stored under ``"all"``, so
@@ -217,7 +219,7 @@ For graded WiC labels, ``evaluate_spearman()`` compares rankings of scores
 instead of binary decisions.
 
 Splitting the dataset
----------------------
+^^^^^^^^^^^^^^^^^^^^^
 
 ``split_train_dev_test()`` creates partitions using proportions that sum
 to one. A fixed seed makes shuffling reproducible. To illustrate the API
@@ -246,7 +248,7 @@ Once a test partition exists, provide one prediction per test example
 and use ``dataset="test"``.
 
 Word Sense Disambiguation
--------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 WSD assigns a known sense label to each usage. Reuse the three usages,
 with the food label assigned to the first and third sentences:
@@ -271,7 +273,7 @@ Here too, using the gold labels as predictions only checks how evaluation
 works. In an experiment, replace them with predictions from your model.
 
 Word Sense Induction
---------------------
+~~~~~~~~~~~~~~~~~~~~
 
 WSI groups usages into clusters. Unlike WSD, the numerical cluster names
 do not have to match the gold sense names. What matters is which usages
@@ -316,7 +318,7 @@ Output:
    3
 
 Casting WSD to WiC
-------------------
+~~~~~~~~~~~~~~~~~~
 
 ``cast_to_WiC()`` creates pairs of usages for each target word. Pairs
 receive label ``1`` if their sense labels match, and ``0`` otherwise:
@@ -400,7 +402,7 @@ reuse conditions with any downloaded data. The examples below publish
 counts and evaluation results rather than copies of the source sentences.
 
 Loading the English WiC resource
---------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Inspect the downloaded partitions before changing them. In contrast to
 the inline ``jam`` examples, these are usages from the WiC resource.
@@ -442,7 +444,7 @@ An always-different prediction is a baseline, not a trained model. Keep
 labels separate from model inputs when evaluating a real system.
 
 Loading Danish XL-WSD and evaluating WSI
-----------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Load the Danish selection from XL-WSD. The file layout determines which
 published partitions are available.
@@ -512,7 +514,7 @@ For larger datasets, set ``max_per_word`` to limit pair generation because
 the number of possible pairs grows quadratically.
 
 Loading the three DWUG selections
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The script selects Swedish DWUG, Norwegian NorDiaChange subset 1, and German
 DWUG Sense. They contain related annotations but serve different language
@@ -541,7 +543,7 @@ Use ``config="maj_3"`` for this German sense dataset to load its supplied
 statistics alongside the usage data.
 
 Exporting Norwegian usage records
----------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Use the library's native writer to save the Norwegian usages. A missing
 ``description`` appears as ``" "`` (one space) in these exported records.
@@ -568,7 +570,7 @@ the library-created export. Text and annotations come from
 under CC BY 4.0. Existing descriptions and usage metadata are preserved.
 
 Understanding a Norwegian usage graph
---------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A usage graph helps us inspect how a word is used in different contexts.
 Here we use ``leilighet`` from NorDiaChange subset 1. Its supplied clusters
@@ -646,7 +648,7 @@ are unchanged copies of the library-created usage export and dataset
 cluster file, respectively.
 
 Annotating egg with XL-LEXEME
------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ``XL_LEXEME`` embeds target words in their contexts. ``annotate_word()``
 compares embeddings to generate pair judgments. Here, the score is cosine
@@ -689,7 +691,7 @@ weights are downloaded on the first run and reused from the Hugging Face
 cache afterward.
 
 Clustering the model judgments
-------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Pass the generated file explicitly to ``cluster()`` so the clustering uses
 model judgments rather than the downloaded human annotations. Save the
@@ -745,7 +747,7 @@ same model-generated judgments and keep all generated files separate.
    Combined clusters saved: True
 
 Converting Swedish DWUG into task datasets
-------------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A DWUG can supply several evaluation tasks. Pairwise relatedness judgments
 become WiC examples; cluster assignments become WSD or WSI labels.
@@ -773,7 +775,7 @@ These conversions reuse supplied annotations. They do not train a WSD model
 or establish a new dictionary sense inventory.
 
 Evaluating lexical semantic change
-----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``SemEval2020Task1`` exposes change evaluation methods. With ``"NO"`` it
 loads NorDiaChange, not a Norwegian dataset from the original SemEval-2020

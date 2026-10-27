@@ -67,6 +67,12 @@ exclude_patterns: list[str] = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = 'piccolo_theme'
 
+# Keep nested tutorial headings visible at every level in the sidebar.
+html_theme_options = {
+    "globaltoc_maxdepth": -1,
+    "globaltoc_collapse": True,
+}
+
 # Configure autodoc defaults.
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"

@@ -17,7 +17,6 @@ In this tutorial, we will learn how to:
 
 .. contents:: In this tutorial
    :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -79,8 +78,11 @@ decompression step. The conversion writes
 returns a ``ParquetCorpus``. It replaces a file of the same name if one already
 exists. Downloading and converting may take a little time.
 
+Searching and inspecting usages
+-------------------------------
+
 Searching for a word
---------------------
+~~~~~~~~~~~~~~~~~~~~
 
 We can search the corpus for usages associated with a particular lemma.
 For example, to search for the lemma ``man``:
@@ -102,7 +104,7 @@ The key ``"lemma=man"`` describes the search we performed. A lemma search can
 match different surface forms; below, the first matching token is ``Man``.
 
 Exploring word usages
----------------------
+~~~~~~~~~~~~~~~~~~~~~
 
 The search returns 480 usages for this corpus and query. To inspect the
 first sentence and its matched token:
@@ -126,8 +128,11 @@ The ``start()`` and ``end()`` methods give character offsets into the
 sentence. The end offset is exclusive. Printed counts and sentences are
 diagnostics; the JSONL files below contain the exported data records.
 
+Saving and organizing usages
+----------------------------
+
 Saving the search results as JSONL
-----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use the search result's ``save()`` method. This is the library's
 ``UsageDictionary.save()`` exporter; it writes one usage object per line.
@@ -156,7 +161,7 @@ Download :download:`all 480 exported usage records
 copy of the library-created file, renamed for this documentation page.
 
 Sampling usages
----------------
+~~~~~~~~~~~~~~~
 
 Select ten usages with a fixed seed and export them through the same
 library method. Constructing a ``UsageDictionary`` lets a selected list of
@@ -188,7 +193,7 @@ Download :download:`the ten sampled records
 repeatable for the same input order and NumPy version.
 
 Grouping usages by time
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 When usages contain time information, group them by year and export each
 group. The grouping keys are years; each record keeps its original date.

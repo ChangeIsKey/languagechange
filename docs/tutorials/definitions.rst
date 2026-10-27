@@ -19,7 +19,6 @@ The verification metadata records both environments and model revisions.
 
 .. contents:: In this tutorial
    :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -55,8 +54,11 @@ Run ``generate`` in the GPU runtime. Run ``encode`` where the saved
 The recorded definitions were produced in Colab. Their embeddings were
 then computed and saved on a CPU.
 
+Generating context-specific definitions
+---------------------------------------
+
 Preparing target usages
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Load the dataset and keep the first ten usages in their original order:
 
@@ -80,7 +82,7 @@ Printed output:
 Keeping the order lets us match each input, prediction, and vector.
 
 Generating definitions with T5 XL
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In the GPU runtime, download the recorded model revision and initialize
 T5 XL without an embedding model. This leaves encoding for the next stage:
@@ -131,7 +133,7 @@ not take a ``language`` argument. Different dependency versions or hardware
 can still affect results, so retain the run metadata.
 
 Saving and checking JSONL records
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Write one actual table record per line, with no wrapper around the output:
 

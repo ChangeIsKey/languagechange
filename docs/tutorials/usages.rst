@@ -11,7 +11,6 @@ and sample them, and save the resulting records as JSONL.
 
 .. contents:: In this tutorial
    :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -104,8 +103,11 @@ records have no ``id`` field. Historical spelling is preserved.
 
 :download:`Download all 480 usages <outputs/usages_outputs.jsonl>`.
 
+Grouping usages by time
+-----------------------
+
 Grouping by year
-----------------
+~~~~~~~~~~~~~~~~
 
 By default, ``group_by_time()`` groups usages by year. Its keys are time
 objects; convert them to strings when printing them:
@@ -135,7 +137,7 @@ For example, the 76 usages from 1780 are written to
 ``outputs/usages_native/by_year/1780_usages.jsonl``.
 
 Grouping by exact date
-----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 Pass ``use_year=False`` to group by individual dates instead of years:
 
@@ -155,7 +157,7 @@ Printed output:
    Total usages: 480
 
 Grouping by year intervals
---------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Pass ``use_year=True`` when your boundaries are complete calendar years.
 This includes every date in both the starting and ending years:
@@ -194,8 +196,11 @@ Download the :download:`190 usages from 1780–1781
 :download:`290 usages from 1782–1784
 <outputs/usages_interval_1782_1784_outputs.jsonl>`.
 
+Sampling usages
+---------------
+
 Sampling ten usages
--------------------
+~~~~~~~~~~~~~~~~~~~
 
 Sampling selects usages without changing the full list. A fixed random
 seed repeats the selection for the same input order and sampling environment:
@@ -229,7 +234,7 @@ The first two records are:
 :download:`Download the ten sampled usages <outputs/usages_sample_outputs.jsonl>`.
 
 Sampling per year
------------------
+~~~~~~~~~~~~~~~~~
 
 ``sample_per_time()`` selects up to the requested number from each year.
 It does not duplicate usages to fill a small group:
