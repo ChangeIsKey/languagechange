@@ -12,4 +12,5 @@ exploration, lexical semantic change analysis, and visualization.
    usages
    definitions
    prompting
+   visualization
    ../source/tutorials/isle
