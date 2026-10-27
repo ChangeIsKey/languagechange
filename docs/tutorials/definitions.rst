@@ -12,10 +12,15 @@ and turn those definitions into numerical vectors with MPNet. The page
 highlights two selected examples: a geometric plane and a woodworking tool.
 The complete ten-record output remains available for download.
 
-The definitions shown here were generated in Google Colab on a Tesla T4.
-The saved definitions were then encoded with MPNet on a local CPU. These
-are separate steps: T5 XL writes definitions, and MPNet encodes their text.
-The verification metadata records both environments and model revisions.
+T5 XL generated the definitions in Google Colab using a T4 GPU. MPNet
+then turned the saved definitions into numerical vectors on a local CPU.
+
+Definitions help us understand which meaning a word has in each context.
+For example, ``plane`` can refer to a flat surface or a woodworking tool.
+The vectors let us compare these definitions numerically. In a later
+clustering step, similar definition vectors can help group usages with
+similar meanings. The quality of these groups depends on the generated
+definitions, which can contain mistakes.
 
 .. contents:: In this tutorial
    :local:
