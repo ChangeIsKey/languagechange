@@ -1,0 +1,47 @@
+.sphinxsidebar li.has-toc-toggle {
+  position: relative;
+}
+
+.sphinxsidebar li.has-toc-toggle > a {
+  padding-right: 2rem;
+}
+
+.sphinxsidebar .toc-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--faintFontColor, #667085);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.sphinxsidebar .toc-toggle::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.sphinxsidebar .toc-toggle[aria-expanded="true"]::before {
+  transform: rotate(225deg);
+}
+
+.sphinxsidebar .toc-toggle:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.sphinxsidebar .toc-toggle:focus-visible {
+  outline: 2px solid currentColor;
+}
+
+.sphinxsidebar ul[hidden] {
+  display: none !important;
+}

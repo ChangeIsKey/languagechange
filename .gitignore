@@ -1,0 +1,12 @@
+# Local Python environment
+.venv/
+
+# Generated package metadata
+*.egg-info/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Generated documentation build files
+docs/_build/

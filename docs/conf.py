@@ -67,6 +67,12 @@ exclude_patterns: list[str] = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = 'piccolo_theme'
 
+# Keep nested tutorial headings visible at every level in the sidebar.
+html_theme_options = {
+    "globaltoc_maxdepth": -1,
+    "globaltoc_collapse": False,
+}
+
 # Configure autodoc defaults.
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
@@ -75,3 +81,8 @@ autodoc_typehints = "description"
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
 }
+
+# Custom expand/collapse controls for the documentation sidebar.
+html_static_path = ["_static"]
+html_css_files = ["sidebar-toggle.css"]
+html_js_files = ["sidebar-toggle.js"]
