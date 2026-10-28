@@ -13,4 +13,5 @@ exploration, lexical semantic change analysis, and visualization.
    definitions
    prompting
    timeseries
+   visualization
    ../source/tutorials/isle
