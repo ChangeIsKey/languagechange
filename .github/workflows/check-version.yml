@@ -1,0 +1,60 @@
+name: Check version
+
+on:
+  push:
+    branches:
+      - main
+      - ci/automatic-releases
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Show current version
+        run: |
+          python -c "import tomllib; print('Current version:', tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+      
+      - name: Show previous version
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git show "$BEFORE:pyproject.toml" | python -c "import sys, tomllib; print('Previous version:', tomllib.loads(sys.stdin.read())['project']['version'])"   
+       
+      - name: Compare versions
+        id: compare
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git show "${BEFORE}:pyproject.toml" > /tmp/previous-pyproject.toml
+          python -c "
+          import tomllib
+          with open('/tmp/previous-pyproject.toml', 'rb') as f:
+              previous = tomllib.load(f)['project']['version']
+          with open('pyproject.toml', 'rb') as f:
+              current = tomllib.load(f)['project']['version']
+          print(f'Previous version: {previous}')
+          print(f'Current version: {current}')
+          print('Version changed:', previous != current)
+          import os
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'changed={str(previous != current).lower()}', file=output)
+          "
+            
+      - name: Report a version change
+        if: steps.compare.outputs.changed == 'true'
+        run: echo "The version changed. A release would be considered."    
+      
