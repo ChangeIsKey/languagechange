@@ -56,5 +56,27 @@ jobs:
             
       - name: Report a version change
         if: steps.compare.outputs.changed == 'true'
-        run: echo "The version changed. A release would be considered."    
+        run: echo "The version changed. A release would be considered."  
+        
+      - name: Install test dependencies
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install .
+          python -m pip install pytest
+          wget https://spraakbanken.gu.se/resurser/meningsmangder/svt-2004.xml.bz2
+          test -f svt-2004.xml.bz2
+
+      - name: Run tests
+        if: steps.compare.outputs.changed == 'true'
+        run: pytest tests
+      
+      - name: Install build tool
+        if: steps.compare.outputs.changed == 'true'
+        run: python -m pip install build
+
+      - name: Build package
+        if: steps.compare.outputs.changed == 'true'
+        run: python -m build
+
       
