@@ -73,25 +73,7 @@ jobs:
       
       - name: Install build tool
         if: steps.compare.outputs.changed == 'true'
-        run: python -m pip install build tomlkit
-
-      - name: Add commit link to package metadata
-        if: steps.compare.outputs.changed == 'true'
-        env:
-          SOURCE_COMMIT: ${{ github.sha }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          python -c "
-          import os
-          from pathlib import Path
-          import tomlkit
-
-          path = Path('pyproject.toml')
-          document = tomlkit.parse(path.read_text())
-          url = f\"https://github.com/{os.environ['REPOSITORY']}/commit/{os.environ['SOURCE_COMMIT']}\"
-          document['project']['urls']['Commit'] = url
-          path.write_text(tomlkit.dumps(document))
-          "
+        run: python -m pip install build 
 
       - name: Build package
         if: steps.compare.outputs.changed == 'true'
