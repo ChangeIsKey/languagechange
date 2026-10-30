@@ -103,6 +103,7 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           echo "Would release version: $VERSION"
+          echo "Would use Git tag: v$VERSION"
           echo "Source commit: $COMMIT"
 
   prepare-publish:
