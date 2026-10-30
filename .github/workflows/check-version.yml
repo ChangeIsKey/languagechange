@@ -86,4 +86,13 @@ jobs:
         if: steps.compare.outputs.changed == 'true'
         run: python -m twine check dist/*
 
+      - name: Preview release
+        if: github.ref == 'refs/heads/main' && steps.compare.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.compare.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          echo "Would release version: $VERSION"
+          echo "Source commit: $COMMIT"
+
       
