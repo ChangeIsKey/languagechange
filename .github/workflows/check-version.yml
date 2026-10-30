@@ -10,6 +10,9 @@ on:
 jobs:
   check-version:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
 
     steps:
       - name: Check out the repository
@@ -86,6 +89,13 @@ jobs:
         if: steps.compare.outputs.changed == 'true'
         run: python -m twine check dist/*
 
+      - name: Save package files
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: dist/ 
+
       - name: Preview release
         if: github.ref == 'refs/heads/main' && steps.compare.outputs.changed == 'true'
         env:
@@ -95,4 +105,20 @@ jobs:
           echo "Would release version: $VERSION"
           echo "Source commit: $COMMIT"
 
+  prepare-publish:
+    needs: check-version
+    if: github.ref == 'refs/heads/main' && needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download package files
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: dist/
+
+      - name: Show files ready for publishing
+        run: ls -l dist/
+
+  
       
