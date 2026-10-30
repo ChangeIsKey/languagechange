@@ -52,11 +52,14 @@ jobs:
           import os
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               print(f'changed={str(previous != current).lower()}', file=output)
+              print(f'version={current}', file=output)
           "
             
       - name: Report a version change
         if: steps.compare.outputs.changed == 'true'
-        run: echo "The version changed. A release would be considered."  
+        env:
+          VERSION: ${{ steps.compare.outputs.version }}
+        run: echo "Version $VERSION would be considered for release." 
         
       - name: Install test dependencies
         if: steps.compare.outputs.changed == 'true'
