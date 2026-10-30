@@ -76,10 +76,14 @@ jobs:
       
       - name: Install build tool
         if: steps.compare.outputs.changed == 'true'
-        run: python -m pip install build 
+        run: python -m pip install build twine 
 
       - name: Build package
         if: steps.compare.outputs.changed == 'true'
         run: python -m build
+
+      - name: Check built package
+        if: steps.compare.outputs.changed == 'true'
+        run: python -m twine check dist/*
 
       
