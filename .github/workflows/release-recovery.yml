@@ -1,0 +1,74 @@
+name: Inspect release recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Original release workflow run ID
+        required: true
+        type: string
+      create_github_release:
+        description: Create the missing GitHub release after verification
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out recovery tools
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Validate original workflow run
+        id: original
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'Run ID must contain only digits'; exit 1; }
+          gh api "repos/$REPOSITORY/actions/runs/$RUN_ID" > /tmp/release-run.json
+          gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" > /tmp/release-jobs.json
+          python .github/scripts/validate_recovery_run.py /tmp/release-run.json /tmp/release-jobs.json
+
+      - name: Check out original release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.original.outputs.source_sha }}
+
+      - name: Download original release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: .
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify original package and source
+        env:
+          RELEASE_SOURCE_SHA: ${{ steps.original.outputs.source_sha }}
+        run: |
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py verify
+
+      - name: Inspect PyPI status
+        id: pypi-status
+        run: python .github/scripts/check_pypi_release.py --lookup
+
+      - name: Create matching GitHub release
+        if: inputs.create_github_release && steps.pypi-status.outputs.decision == 'already-published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_SHA: ${{ steps.original.outputs.source_sha }}
+        run: python .github/scripts/ensure_github_release.py

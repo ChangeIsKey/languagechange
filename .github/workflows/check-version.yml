@@ -43,20 +43,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           git show "${BEFORE}:pyproject.toml" > /tmp/previous-pyproject.toml
-          python -c "
-          import tomllib
-          with open('/tmp/previous-pyproject.toml', 'rb') as f:
-              previous = tomllib.load(f)['project']['version']
-          with open('pyproject.toml', 'rb') as f:
-              current = tomllib.load(f)['project']['version']
-          print(f'Previous version: {previous}')
-          print(f'Current version: {current}')
-          print('Version changed:', previous != current)
-          import os
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              print(f'changed={str(previous != current).lower()}', file=output)
-              print(f'version={current}', file=output)
-          "
+          python .github/scripts/compare_versions.py /tmp/previous-pyproject.toml pyproject.toml
             
       - name: Report a version change
         if: steps.compare.outputs.changed == 'true'
@@ -87,14 +74,23 @@ jobs:
 
       - name: Check built package
         if: steps.compare.outputs.changed == 'true'
-        run: python -m twine check dist/*
+        run: |
+          python -m twine check dist/*
+          python .github/scripts/check_distributions.py
+
+      - name: Record release evidence
+        if: steps.compare.outputs.changed == 'true'
+        run: python .github/scripts/release_evidence.py create
 
       - name: Save package files
         if: steps.compare.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: python-package
-          path: dist/ 
+          path: |
+            dist/
+            release-evidence/manifest.json
+          if-no-files-found: error
 
       - name: Preview release
         if: github.ref == 'refs/heads/main' && steps.compare.outputs.changed == 'true'
@@ -113,16 +109,44 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
+      contents: write
 
     steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
       - name: Download package files
         uses: actions/download-artifact@v4
         with:
           name: python-package
-          path: dist/
+          path: .
 
       - name: Show files ready for publishing
         run: ls -l dist/
+
+      - name: Verify package metadata
+        run: |
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py verify
+
+      - name: Preview PyPI release status
+        id: pypi-status
+        run: python .github/scripts/check_pypi_release.py --lookup
+
+      - name: Create matching GitHub release
+        if: steps.pypi-status.outputs.decision == 'already-published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/ensure_github_release.py
+
+      - name: Explain missing PyPI release
+        if: steps.pypi-status.outputs.decision == 'publish'
+        run: echo 'PyPI upload is disabled; no GitHub release was created.'
 
   test-release-workflow:
     if: github.event_name == 'push' && github.ref == 'refs/heads/ci/automatic-releases'
@@ -136,6 +160,9 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+
+      - name: Test release and recovery decisions offline
+        run: python .github/scripts/test_release_flow.py
 
       - name: Install test dependencies
         run: |
@@ -152,11 +179,39 @@ jobs:
         run: |
           python -m build
           python -m twine check dist/*
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py create
 
       - name: Save package files
         uses: actions/upload-artifact@v4
         with:
           name: test-python-package
-          path: dist/
+          path: |
+            dist/
+            release-evidence/manifest.json
           if-no-files-found: error
-      
+
+  test-artifact-handoff:
+    needs: test-release-workflow
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/automatic-releases'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out test source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Download test package files
+        uses: actions/download-artifact@v4
+        with:
+          name: test-python-package
+          path: .
+
+      - name: Verify both distribution formats exist
+        run: |
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py verify
+          ls -l dist/
