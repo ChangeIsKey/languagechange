@@ -1,0 +1,5 @@
+# Local documentation environment and generated output
+.venv-docs/
+docs/_build/
+__pycache__/
+*.py[cod]
