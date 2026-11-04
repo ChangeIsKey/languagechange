@@ -1,0 +1,59 @@
+{
+  "definition_model": "ltg/flan-t5-definition-en-xl",
+  "definition_model_revision": "f84a7b316a8787a0f1a10f93daf60fc4eb5dda9c",
+  "definition_library_commit": "152a6df796a9900d75df0ed494113feed679f864",
+  "definition_generation_gpu": "Tesla T4",
+  "definition_generation_settings": {
+    "bsize": 1,
+    "max_length": 256,
+    "filter_target": true,
+    "sampling": false,
+    "num_beams": 1,
+    "num_beam_groups": 1,
+    "prompt_index": 8,
+    "embedding_model": null
+  },
+  "definition_runtime_packages": {
+    "torch": "2.11.0+cu130",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "sentence-transformers": "6.1.0",
+    "datasets": "5.1.0",
+    "accelerate": "1.15.0",
+    "huggingface-hub": "1.33.0",
+    "numpy": "2.1.3",
+    "pandas": "2.2.3"
+  },
+  "definition_records_sha256": "f6ff974be4eba86a611048eac638a66fd3dc9e47fac7108215c465213bc6c85c",
+  "prediction_records_sha256": "daaa59b776d6b0ffea4b9ef0550a88813f063d4300f0a3a372958bfc984ed252",
+  "embedding_model": "sentence-transformers/all-mpnet-base-v2",
+  "embedding_model_revision": "e8c3b32edf5434bc2275fc9bab85f82640a19130",
+  "embedding_device": "cpu",
+  "embedding_runtime_packages": {
+    "torch": "2.14.1",
+    "sentence-transformers": "6.1.0",
+    "transformers": "5.19.0",
+    "numpy": "2.5.4"
+  },
+  "embedding_shape": [
+    10,
+    768
+  ],
+  "embedding_dtype": "float32",
+  "embedding_sha256": "9e77e3b01d9ec318c695880059416d19c8ded77957fb340bfa1698976e3ef0cb",
+  "saved_array_equal": true,
+  "repeated_encoding_equal": true,
+  "all_rows_aligned": true,
+  "per_row_max_absolute_difference": [
+    1.1175870895385742e-07,
+    8.940696716308594e-08,
+    8.381903171539307e-08,
+    0.0,
+    0.0,
+    8.940696716308594e-08,
+    0.0,
+    8.940696716308594e-08,
+    1.0058283805847168e-07,
+    8.381903171539307e-08
+  ]
+}

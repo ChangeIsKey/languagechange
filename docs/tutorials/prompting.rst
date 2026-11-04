@@ -14,7 +14,6 @@ come from the completed execution with this model.
 
 .. contents:: In this tutorial
    :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -44,8 +43,11 @@ inside a Python session remain in that session and its child processes;
 a separate terminal process does not inherit them from an already running
 Python session.
 
+Setting up the example
+----------------------
+
 Configuring keys privately
---------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use hidden input rather than putting credentials in the script:
 
@@ -65,7 +67,7 @@ correct key and recreate the model client, which otherwise retains the
 previous key. Keep credentials out of output files and version control.
 
 Preparing the usage pairs
---------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``TargetUsage`` holds a context and the target's character offsets.
 The end offset is excluded:
@@ -94,7 +96,7 @@ Pair 1 compares food with congestion. Pair 2 compares two food usages.
 Both result files retain this order.
 
 Initializing the provider model
--------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Select Groq and the model used for this execution:
 
@@ -113,8 +115,11 @@ integer ``durel`` field. Its scale is 1 for unrelated meanings, 2 for
 distantly related meanings, 3 for closely related meanings, and 4 for
 identical meanings. The schema description supplies this scale to the model.
 
+Comparing meanings
+------------------
+
 Requesting DURel scores
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 The placeholders in the prompt are filled from the two target usages:
 
@@ -148,7 +153,7 @@ predictions, not a measured accuracy score. Responses may differ between
 requests or when a provider updates its model.
 
 Requesting a WiC decision
--------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Define a custom schema for a boolean decision about the same meaning:
 
@@ -206,8 +211,11 @@ meaning. The schema controls the structure and types of the answer.
 Inspecting the contexts is still necessary to assess whether the prediction
 makes sense.
 
+Saving and checking responses
+-----------------------------
+
 Saving actual responses as JSONL
---------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``model_dump()`` returns each response's actual schema fields. Save these
 objects directly, one per line:
@@ -233,7 +241,7 @@ Printed counts, prompts, and validation messages are kept separate.
 Python's ``True`` and ``False`` are written as JSON ``true`` and ``false``.
 
 Checking saved records
-----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 Read both files back and compare them with the response objects:
 

@@ -1,0 +1,28 @@
+{
+  "model": "pierluigic/xl-lexeme",
+  "device": "cpu",
+  "batch_size": 2,
+  "embedding_source": "saved aligned embeddings",
+  "corpus_sha256": "111410d630aea6c52b245074860a632566b9fb5f8e95c8a9ab4d150a505ffa0b",
+  "year_counts": {
+    "1780": 76,
+    "1781": 114,
+    "1782": 281,
+    "1784": 9
+  },
+  "clustering": {
+    "metric": "cosine",
+    "linkage": "complete",
+    "distance_threshold": 0.5
+  },
+  "tsne": {
+    "random_state": 42,
+    "perplexity": 30,
+    "metric": "cosine",
+    "init": "random",
+    "learning_rate": "auto"
+  },
+  "usage_count": 480,
+  "cluster_count": 26,
+  "row_order": "Ascending year; original order within each year; usage_index is zero-based."
+}
