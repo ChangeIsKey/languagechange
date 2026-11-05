@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - ci/automatic-releases
+      - ci/test-version-detection
   workflow_dispatch:
 
 jobs:
