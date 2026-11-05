@@ -2,6 +2,8 @@ name: TestPyPI release test
 
 on:
   push:
+    branches:
+      - ci/test-version-detection
     tags:
       - 'testpypi-v*'
 
@@ -9,7 +11,45 @@ permissions:
   contents: read
 
 jobs:
+  detect-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Check whether to run the test
+        id: compare
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git show "${BEFORE}:pyproject.toml" > /tmp/previous-pyproject.toml
+          python .github/scripts/compare_versions.py /tmp/previous-pyproject.toml pyproject.toml
+
   build:
+    needs: detect-version
+    if: needs.detect-version.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -31,7 +71,7 @@ jobs:
       - name: Set isolated test version
         id: version
         env:
-          TEST_TAG: ${{ github.ref_name }}
+          TEST_TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('testpypi-v{0}.dev{1}', needs.detect-version.outputs.version, github.run_number) }}
         run: |
           python - <<'PY'
           import os
