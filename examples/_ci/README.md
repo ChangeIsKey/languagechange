@@ -41,12 +41,16 @@ of free GPU memory. Generation and MPNet encoding run in separate processes
 so they do not keep both models loaded at the same time. There is no model
 substitution or replay of saved predictions.
 
-**CPU feasibility is not yet established on GitHub.** T5 XL has roughly
-11.4 GB of downloaded weights and also needs working memory. Ten contexts
-reduce inference work, not model memory. The standard hosted runner must
-still be checked for available RAM, disk space and completion within the
-120-minute timeout. A successful local test of the smaller XL-LEXEME sample
-does not establish that T5 XL fits or completes on that runner.
+T5 XL generation and MPNet encoding passed on a standard Ubuntu 24.04 CPU
+runner on 6 November 2026. The run generated ten definitions and checked a
+finite 10 × 768 embedding array. The generation/encoding stages took about
+three minutes including their model and dataset downloads. The complete job
+also includes dependency installation and model-cache handling.
+[Hosted run and downloadable results](https://github.com/ChangeIsKey/languagechange/actions/runs/42195029400).
+
+Ten examples reduce inference work rather than model memory. The workflow
+keeps a 120-minute timeout and fails if loading or execution cannot complete;
+it does not silently substitute a smaller model.
 
 Configure repository Actions secrets `GROQ_API_KEY` and `LANGSMITH_API_KEY`
 privately in GitHub settings. The current Groq provider also requests
@@ -142,6 +146,10 @@ python -m pytest -q tests/test_tutorial_usecases_ci.py
 ```
 
 These focused tests exercise CI mode selection, invalid outputs, missing
-prerequisites, failure propagation and data integrity. They do not claim
-T5 XL or API execution. A successful hosted run is still required after
-secrets are configured and publication is authorized.
+prerequisites, failure propagation and data integrity. They are separate
+from the hosted model executions.
+
+All seven cases passed in the hosted run linked above on 6 November 2026.
+The prompting job was retried after its Groq secret was added; its retry
+made fresh API requests and passed the response/export checks. The ordinary
+test and representation-comparison workflows also passed on this branch.
