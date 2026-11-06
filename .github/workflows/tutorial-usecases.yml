@@ -1,0 +1,89 @@
+name: Tutorial use cases
+run-name: Run the seven tutorial use cases
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MPLBACKEND: Agg
+  PYTHONUNBUFFERED: '1'
+  PYTHONHASHSEED: '0'
+  TOKENIZERS_PARALLELISM: 'false'
+  OMP_NUM_THREADS: '2'
+  MKL_NUM_THREADS: '2'
+  HF_HOME: ${{ github.workspace }}/.tutorial-model-cache
+
+jobs:
+  cpu:
+    name: Tutorial / ${{ matrix.usecase }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - usecase: corpora
+            weights: none
+          - usecase: usages
+            weights: none
+          - usecase: benchmarks
+            weights: xl-lexeme
+          - usecase: definitions
+            weights: t5-xl-mpnet
+          - usecase: prompting
+            weights: none
+          - usecase: timeseries
+            weights: xl-lexeme
+          - usecase: visualization
+            weights: xl-lexeme
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            examples/_ci/requirements.txt
+      - name: Cache public model weights
+        if: matrix.weights != 'none'
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.HF_HOME }}
+          key: tutorial-weights-${{ runner.os }}-${{ matrix.weights }}-${{ hashFiles('examples/_ci/data_manifest.json') }}
+      - name: Install CPU PyTorch and the library
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install . -r examples/_ci/requirements.txt
+          python -m pip check
+      - name: Execute and validate the example
+        if: matrix.usecase != 'prompting'
+        run: >-
+          python examples/_ci/run_usecase.py ${{ matrix.usecase }}
+          --output-dir outputs/tutorial-usecases/${{ matrix.usecase }}
+      - name: Execute and validate Groq prompting
+        if: matrix.usecase == 'prompting'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+        run: >-
+          python examples/_ci/run_usecase.py prompting
+          --output-dir outputs/tutorial-usecases/prompting
+      - name: Keep the results and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tutorial-${{ matrix.usecase }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            outputs/tutorial-usecases/${{ matrix.usecase }}/
+            !outputs/tutorial-usecases/**/contextualized-cache/**
+            !outputs/tutorial-usecases/**/cache/**
+            !outputs/tutorial-usecases/**/definitions.jsonl

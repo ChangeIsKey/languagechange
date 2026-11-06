@@ -1,4 +1,4 @@
-"""Generate XL definitions on a GPU, or encode saved predictions on a CPU.
+"""Generate XL definitions on CUDA (CPU in GitHub Actions), then encode on CPU.
 
 Run from the usecases directory containing corpora/dwug_en:
   python variants/definition_t5_xl_examples.py generate
@@ -6,7 +6,13 @@ Run from the usecases directory containing corpora/dwug_en:
 The encode stage reads saved predictions and does not load T5 XL.
 """
 import argparse
+import os
 from pathlib import Path
+
+# GitHub Actions uses CPU; ordinary generation keeps its CUDA requirement.
+in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
+if in_ci:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import jsonlines
 import numpy as np
@@ -18,6 +24,8 @@ from languagechange.models.representation.definition import DefinitionGenerator,
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("stage", choices=["generate", "encode"])
 parser.add_argument("--output-dir", type=Path, default=Path("outputs/definitions_xl"))
+parser.add_argument("--download-dataset", action="store_true",
+                    help="Load DWUG EN 3.0.0 through the resource manager instead of corpora/dwug_en.")
 args = parser.parse_args()
 output_dir = args.output_dir
 output_dir.mkdir(parents=True, exist_ok=True)
@@ -27,16 +35,19 @@ if args.stage == "generate":
     from huggingface_hub import snapshot_download
     from languagechange.benchmark import DWUG
 
-    if not torch.cuda.is_available():
+    if not in_ci and not torch.cuda.is_available():
         raise RuntimeError("Generation needs a CUDA-capable GPU on a workstation, server, or cloud runtime.")
-    free_bytes, _ = torch.cuda.mem_get_info()
-    if free_bytes < 13 * 1024**3:
-        raise RuntimeError("Start with at least 13 GiB of free GPU memory.")
+    if not in_ci:
+        free_bytes, _ = torch.cuda.mem_get_info()
+        if free_bytes < 13 * 1024**3:
+            raise RuntimeError("Start with at least 13 GiB of free GPU memory.")
+    print("Generation device:", "cpu" if in_ci else "cuda", "; examples: 10")
     model_path = snapshot_download(
         "ltg/flan-t5-definition-en-xl",
         revision="f84a7b316a8787a0f1a10f93daf60fc4eb5dda9c",
     )
-    dwug = DWUG(path="corpora/dwug_en")
+    dwug = (DWUG(dataset="DWUG", language="EN", version="3.0.0")
+            if args.download_dataset else DWUG(path="corpora/dwug_en"))
     usages = dwug.get_word_usages("plane_nn")[:10]
     generator = T5DefinitionGenerator(
         model_path, bsize=1, max_length=256, filter_target=True,

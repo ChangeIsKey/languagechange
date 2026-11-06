@@ -10,3 +10,7 @@ __pycache__/
 
 # Generated documentation build files
 docs/_build/
+
+# Outputs produced by the tutorial CI runner
+outputs/
+.tutorial-model-cache/
