@@ -102,7 +102,7 @@ part-of-speech, and search-target metadata supplied by the corpus. These
 records have no ``id`` field. Historical spelling is preserved.
 
 Understanding ``man``, its lemma, and its word class
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * ``token`` is the word as written, such as ``Man``; ``lemma`` is its
   dictionary form, ``man``.

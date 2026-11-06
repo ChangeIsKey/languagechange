@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 # Ensure the project root can be imported when building docs.
-sys.path.insert(0, os.path.abspath(".."))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 project = "languagechange"
 author = "Change is Key!"
@@ -28,6 +28,7 @@ extensions = [
 ]
 
 autodoc_mock_imports = [
+    "IPython",
     "WordTransformer",
     "LSCDetection",
     "dload",
@@ -36,6 +37,7 @@ autodoc_mock_imports = [
     "gensim",
     "huggingface_hub",
     "jsonlines",
+    "jsonschema",
     "langchain",
     "langchain_core",
     "lxml",
@@ -43,6 +45,7 @@ autodoc_mock_imports = [
     "matplotlib.cm",
     "matplotlib.colors",
     "matplotlib.pyplot",
+    "mlrose_hiive",
     "networkx",
     "numpy",
     "pandas",
@@ -54,8 +57,10 @@ autodoc_mock_imports = [
     "pyarrow.parquet",
     "scipy",
     "sentence_transformers",
+    "six",
     "sklearn",
     "sortedcontainers",
+    "spacy",
     "torch",
     "transformers",
     "trankit",

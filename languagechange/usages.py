@@ -105,6 +105,7 @@ class DWUGUsage(TargetUsage):
         self.description = description
 
     def to_dict(self):
+        """Serialize metadata, using one space for a missing description."""
         d = self.__dict__.copy()
         t = d['time'].time
         if isinstance(t, NumericalTime):
@@ -115,6 +116,11 @@ class DWUGUsage(TargetUsage):
         else:
             d['time'] = str(t)
         d['target'] = str(d['target'])
+        description = d['description']
+        if description is None or (
+            isinstance(description, (float, np.floating)) and np.isnan(description)
+        ):
+            d['description'] = ' '
         return d
 
 

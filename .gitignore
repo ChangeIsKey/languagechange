@@ -1,5 +1,6 @@
-# Local Python environment
+# Local Python environments
 .venv/
+.venv-docs/
 
 # Generated package metadata
 *.egg-info/

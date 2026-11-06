@@ -1532,10 +1532,11 @@ class WiC(Benchmark):
     
     Parameters:
         path (str, default=None) : a path to the dataset, if it is not stored by the resource hub.
-        wic_data (Union[list[dict], list[tuple(TargetUsage)]], default=None): already loaded WiC data to use. Can be 
-            either 
-                1. a list of dictionaries with the keys 'text1', 'start1', 'end1', 'text2', 'start2', 'end2', 'label'
-                2. a list of pairs of TargetUsage. For this, `labels` also need to be provided. 
+        wic_data (Union[list[dict], list[tuple(TargetUsage)]], default=None): Already loaded WiC data to use. Can be either:
+
+            1. A list of dictionaries with the keys 'text1', 'start1', 'end1', 'text2', 'start2', 'end2', 'label'.
+            2. A list of pairs of TargetUsage. For this, ``labels`` also need to be provided.
+
         labels (list[Union[int, float]], default=None): labels for each example pair, if initializing from target
             usages.
         dataset (str|list|dict) : the dataset to be loaded. One of ['WiC', 'XL-WiC', 'TempoWiC', 'MCL-WiC', 
