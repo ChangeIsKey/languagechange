@@ -60,7 +60,7 @@ def test_definitions_reject_unsuitable_hardware_before_model_loading(monkeypatch
 
 
 def test_workflow_covers_every_registered_usecase_on_push():
-    text = (ROOT / '.github/workflows/tutorial-usecases.yml').read_text()
+    text = (ROOT / '.github/workflows/usecases.yml').read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
     cpu = {row['usecase'] for row in workflow['jobs']['cpu']['strategy']['matrix']['include']}
     assert cpu == set(runner.SCRIPTS)

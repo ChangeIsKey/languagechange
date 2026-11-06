@@ -1,4 +1,4 @@
-"""Execute one tutorial example in a fresh directory and validate its outputs.
+"""Execute one use case in a fresh directory and validate its outputs.
 
 No saved predictions or embedding snapshots are used as execution substitutes.
 Model weights may be cached by Hugging Face; example result caches are local

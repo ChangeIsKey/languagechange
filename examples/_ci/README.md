@@ -1,7 +1,7 @@
-# Tutorial examples in GitHub Actions
+# Use case checks in GitHub Actions
 
-This is the setup for issue #25. `tutorial-usecases.yml` runs the seven
-tutorial topics on each push and on an explicit workflow dispatch. There are
+This is the setup for issue #25. `usecases.yml` runs the seven
+use cases on each push and on an explicit workflow dispatch. There are
 no path filters or branches that bypass these checks. The existing tests and
 representation-comparison example workflows remain unchanged.
 
@@ -15,7 +15,7 @@ representation-comparison example workflows remain unchanged.
 | Time series | `examples/timeseries/timeseries_examples.py` | Fresh XL-LEXEME embeddings, APD and both JSD approaches; 10 usages in CI, 100 normally |
 | Visualization | `examples/visualizations/visualization_examples.py` | Fresh embeddings, clustering, t-SNE, graph and context inspection; 10 usages in CI, 480 normally |
 
-These are the tutorial entry points, including the tutorial's Parquet route
+These are the use case entry points, including the Parquet route
 for corpora. The optional XML conversion/raw-text processing route and the
 older Desktop Llama/local-prompt variants are not substituted for these
 entry points. The benchmark case loads the real resources in both modes. In CI it selects up
@@ -62,7 +62,7 @@ The lighter corpora/usages cases retain all 480 records because they do not
 load a neural model. Their full-year interval and export checks stay intact.
 There is no `continue-on-error` or saved-response fallback.
 
-The tutorial workflow uses `push` rather than `pull_request` to avoid
+The use case workflow uses `push` rather than `pull_request` to avoid
 duplicate model runs. Every branch pushed to this repository triggers it.
 The existing PR test/example workflows remain enabled. Forks need their own
 API secrets for the prompting case.
@@ -87,7 +87,7 @@ the versions selected in the example. Some resources are named
 errors fail the corresponding run. Dataset licenses remain applicable.
 The definitions run downloads DWUG EN 3.0.0 from its recorded resource.
 
-Only public Hugging Face model weights are cached by the tutorial workflow.
+Only public Hugging Face model weights are cached by the use case workflow.
 Embeddings, generated definitions, Groq responses and t-SNE coordinates are
 computed again. Each command requires a fresh output directory and the
 examples use run-local result caches, for both local and GitHub Actions execution.
@@ -142,7 +142,7 @@ contains the prediction-only file and embeddings instead.
 ## Validate the CI support code
 
 ```sh
-python -m pytest -q tests/test_tutorial_usecases_ci.py
+python -m pytest -q tests/test_usecases_ci.py
 ```
 
 These focused tests exercise CI mode selection, invalid outputs, missing

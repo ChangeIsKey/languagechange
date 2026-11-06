@@ -1,4 +1,4 @@
-"""Run the corpus tutorial's Parquet search, sampling and export workflow."""
+"""Run the corpus example: Parquet search, sampling and export workflow."""
 import argparse
 from pathlib import Path
 

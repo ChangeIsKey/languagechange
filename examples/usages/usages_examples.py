@@ -6,7 +6,7 @@ from pathlib import Path
 
 from languagechange.usages import TargetUsage, UsageDictionary
 
-parser = argparse.ArgumentParser(description="Run the word-usage tutorial examples.")
+parser = argparse.ArgumentParser(description="Run the word-usage examples.")
 parser.add_argument('--output-dir', type=Path, default=Path('outputs/usages_native'))
 args = parser.parse_args()
 

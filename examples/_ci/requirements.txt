@@ -1,4 +1,4 @@
-# Additional packages needed by the tutorial entry points.
+# Additional packages needed by the use case entry points.
 # Install the repository itself separately with: python -m pip install .
 accelerate>=1.0
 sentencepiece>=0.2

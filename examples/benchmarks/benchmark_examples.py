@@ -15,7 +15,7 @@ from pathlib import Path
 from languagechange.usages import TargetUsage
 from languagechange.benchmark import WiC, WSD, WSI
 
-parser = argparse.ArgumentParser(description="Run the benchmark tutorial examples.")
+parser = argparse.ArgumentParser(description="Run the benchmark examples.")
 parser.add_argument('--output-dir', type=Path, default=Path('benchmark_artifacts'))
 parser.add_argument('--seed', type=int, default=42)
 args = parser.parse_args()
