@@ -6,6 +6,7 @@ embeddings after checking the corresponding usage texts, offsets and dates.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import jsonlines
@@ -19,6 +20,7 @@ from languagechange.corpora import ParquetCorpus
 from languagechange.models.meaning.clustering import Clustering
 from languagechange.search import SearchTerm
 from languagechange.usages import UsageDictionary
+from languagechange.usages import TargetUsageList
 from languagechange.visualization import Visualizer, generate_cache_key, text_formatting
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -30,6 +32,11 @@ output_dir = args.output_dir
 output_dir.mkdir(parents=True, exist_ok=True)
 
 all_usages = ParquetCorpus(str(args.corpus)).search(SearchTerm(lemma="man"))["lemma=man"]
+in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
+if in_ci:
+    grouped = all_usages.group_by_time()
+    all_usages = TargetUsageList([u for i, year in enumerate(sorted(grouped))
+                                  for u in grouped[year].sample(3 if i < 2 else 2, random_seed=42)])
 usages = all_usages.group_by_time()
 years = sorted(usages)
 ordered_usages = [usage for year in years for usage in usages[year]]
@@ -45,7 +52,9 @@ if args.reuse_run:
     embeddings = {year: vectors[boundaries[i]:boundaries[i + 1]] for i, year in enumerate(years)}
 else:
     from languagechange.models.representation.contextualized import XL_LEXEME
+    from languagechange.cache import CacheManager
     model = XL_LEXEME(device="cpu")
+    model.cache_mgr = CacheManager(str(output_dir / "contextualized-cache"))
     embeddings = {year: model.encode(usages[year], batch_size=2) for year in years}
     vectors = np.concatenate([embeddings[year] for year in years])
 assert vectors.shape == (len(ordered_usages), 1024)
@@ -76,7 +85,8 @@ figure.savefig(graph_path, dpi=150)
 plt.close(figure)
 
 # Read the exact coordinates saved by Visualizer, without recomputing t-SNE.
-cache_key = generate_cache_key({"emb": vectors, "random_state": 42, "perplexity": 30})
+perplexity = min(30, len(vectors) - 1)
+cache_key = generate_cache_key({"emb": vectors, "random_state": 42, "perplexity": perplexity})
 coordinates = np.load(Path(visualizer.cache_mgr.cache_dir) / f"{cache_key}.npy", allow_pickle=False)
 assert coordinates.shape == (len(ordered_usages), 2)
 assert np.isfinite(coordinates).all()
@@ -107,7 +117,7 @@ metadata = {
     "corpus_sha256": hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
     "year_counts": {str(year): len(usages[year]) for year in years},
     "clustering": {"metric": "cosine", "linkage": "complete", "distance_threshold": 0.5},
-    "tsne": {"random_state": 42, "perplexity": 30, "metric": "cosine", "init": "random", "learning_rate": "auto"},
+    "tsne": {"random_state": 42, "perplexity": perplexity, "metric": "cosine", "init": "random", "learning_rate": "auto"},
     "usage_count": len(vectors), "cluster_count": len(np.unique(labels)),
     "row_order": "Ascending year; original order within each year; usage_index is zero-based.",
 }

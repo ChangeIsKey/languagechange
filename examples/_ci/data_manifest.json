@@ -1,0 +1,22 @@
+{
+  "corpus": {
+    "path": "docs/tutorials/data/kubhist2-carlscronaswekoblad-1780.parquet",
+    "sha256": "111410d630aea6c52b245074860a632566b9fb5f8e95c8a9ab4d150a505ffa0b",
+    "source": "https://sprakbanken.se/resurser/kubhist2-carlscronaswekoblad-1780",
+    "doi": "https://doi.org/10.23695/4qx9-j028",
+    "license": "CC BY 4.0",
+    "changes": "XML converted to Parquet; source text and annotations retained.",
+    "expected_usages": 480,
+    "expected_year_counts": {"1780": 76, "1781": 114, "1782": 281, "1784": 9}
+  },
+  "definitions": {
+    "dataset": "DWUG",
+    "language": "EN",
+    "version": "3.0.0",
+    "source": "https://zenodo.org/records/14028531",
+    "model": "ltg/flan-t5-definition-en-xl",
+    "model_revision": "f84a7b316a8787a0f1a10f93daf60fc4eb5dda9c",
+    "embedding_model": "sentence-transformers/all-mpnet-base-v2",
+    "embedding_revision": "e8c3b32edf5434bc2275fc9bab85f82640a19130"
+  }
+}

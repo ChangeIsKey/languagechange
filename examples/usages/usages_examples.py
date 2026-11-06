@@ -1,9 +1,14 @@
 # Example usage of the classes in languagechange.usages
+import argparse
 from languagechange.search import SearchTerm
 from languagechange.corpora import ParquetCorpus
 from pathlib import Path
 
 from languagechange.usages import TargetUsage, UsageDictionary
+
+parser = argparse.ArgumentParser(description="Run the word-usage examples.")
+parser.add_argument('--output-dir', type=Path, default=Path('outputs/usages_native'))
+args = parser.parse_args()
 
 # A TargetUsage consists of a text and the character offsets specifying where the target word is in the text.
 target_usage = TargetUsage("I have a dog", offsets=[9, 12])
@@ -35,7 +40,7 @@ sampled = man_usages.sample(10, random_seed=42)
 sampled_per_year = man_usages.sample_per_time(n_samples=10, random_seed=42)
 
 # Save actual usage records, one JSON object per line.
-output_dir = Path("outputs/usages_native")
+output_dir = args.output_dir
 usages.save(str(output_dir))
 UsageDictionary({"lemma=man": sampled}).save(str(output_dir / "sample"))
 UsageDictionary({"lemma=man": sampled_per_year}).save(str(output_dir / "sample_per_year"))
