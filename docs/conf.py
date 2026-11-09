@@ -25,6 +25,8 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
+    "sphinx_design",
+    "sphinx_copybutton",
 ]
 
 autodoc_mock_imports = [
@@ -70,24 +72,30 @@ autodoc_mock_imports = [
 templates_path = ["_templates"]
 exclude_patterns: list[str] = ["_build", "Thumbs.db", ".DS_Store"]
 
-html_theme = 'piccolo_theme'
-
-# Keep nested tutorial headings visible at every level in the sidebar.
+html_theme = "pydata_sphinx_theme"
+html_title = "LanguageChange"
 html_theme_options = {
-    "globaltoc_maxdepth": -1,
-    "globaltoc_collapse": False,
+    "logo": {
+        "image_light": "languagechange-logo-light.svg",
+        "image_dark": "languagechange-logo-dark.svg",
+    },
+    "navigation_depth": 3,
+    "show_toc_level": 2,
+    "collapse_navigation": True,
+    "show_nav_level": 1,
+    "navbar_end": ["theme-switcher", "navbar-icon-links"],
+    "icon_links": [
+        {"name": "GitHub", "url": "https://github.com/ChangeIsKey/languagechange", "icon": "fa-brands fa-github"},
+    ],
+    "footer_start": ["copyright"],
+    "footer_end": ["sphinx-version"],
 }
+html_sidebars = {"**": ["sidebar-nav-bs"]}
+html_static_path = ["_static"]
+html_css_files = ["custom.css"]
+html_favicon = "_static/languagechange-icon.svg"
 
 # Configure autodoc defaults.
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
-
-# Provide links to the standard library documentation.
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-}
-
-# Custom expand/collapse controls for the documentation sidebar.
-html_static_path = ["_static"]
-html_css_files = ["sidebar-toggle.css"]
-html_js_files = ["sidebar-toggle.js"]
+intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}

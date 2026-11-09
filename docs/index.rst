@@ -1,49 +1,78 @@
 .. raw:: html
 
-   <h1 style="text-align: center; font-size: 2.625rem;">LanguageChange documentation</h1>
+   <div class="lc-hero">
+     <div class="lc-eyebrow">OPEN-SOURCE · PYTHON · LANGUAGE RESEARCH</div>
+     <h1>Understand how <span>language changes.</span></h1>
+     <p class="lc-lead">A Python toolkit for exploring lexical semantic change across corpora, contexts, and time.</p>
+     <div class="lc-actions">
+       <a class="lc-button lc-button-primary" href="tutorials/index.html">Explore tutorials <span aria-hidden="true">→</span></a>
+       <a class="lc-button lc-button-secondary" href="source/api/languagechange.html">API reference <span aria-hidden="true">↗</span></a>
+     </div>
+   </div>
 
-.. image:: cluster-viz-altered.png
-   :align: center
-   :alt: alternate text
+.. grid:: 2 2 2 4
+   :gutter: 3
+   :class-container: lc-features
 
-LanguageChange is a Python toolkit for exploring lexical semantic change across corpora and time. 
-It bundles data loaders, embedding pipelines, alignment strategies, and evaluation utilities so you can 
-go from raw corpora to change scores and visual analyses in a single workflow. More specifically, the library provides:
+   .. grid-item-card:: 📚 Corpora & benchmarks
+      :link: tutorials/corpora
+      :link-type: doc
 
-- Ready-to-use benchmarks (SemEval 2020 Task 1, DWUG) plus helpers for your own corpora.
-- Static and contextualised representation pipelines (count, PPMI, SVD, transformer-based) with caching.
-- Alignment and comparison utilities (e.g. Orthogonal Procrustes) and standard change metrics such as PRT and APD.
-- Plotting helpers for DWUG graphs and embeddings to inspect model behaviour visually.
+      Work with historical corpora, SemEval 2020 Task 1, and DWUG datasets.
 
-To get started, explore the tutorials below.
+   .. grid-item-card:: 🧠 Representations
+      :link: tutorials/usages
+      :link-type: doc
 
-For more details on how to use the library, check our reference API:
+      Explore static and contextualized word representations.
 
+   .. grid-item-card:: 📈 Measure change
+      :link: tutorials/timeseries
+      :link-type: doc
+
+      Compare meanings across periods with established metrics.
+
+   .. grid-item-card:: 🎨 Visualize results
+      :link: tutorials/visualization
+      :link-type: doc
+
+      Inspect semantic shifts, embeddings, and change patterns.
+
+Get started
+===========
+
+Install LanguageChange from PyPI:
+
+.. code-block:: console
+
+   pip install langchange
+
+New to the toolkit? Start with the :doc:`tutorials/index` or browse the
+:doc:`API reference <source/api/languagechange>`.
+
+Documentation
+=============
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Learn & explore
 
-   source/api/languagechange
    tutorials/index
 
-Indices and tables
-==================
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference
 
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   source/api/languagechange
 
-Source code
-==================
+About the project
+=================
 
-The source code for this project is available on GitHub: https://github.com/ChangeIsKey/languagechange/.
+LanguageChange is developed by the `Change is Key! team
+<https://github.com/ChangeIsKey/languagechange>`_ with support from
+Riksbankens Jubileumsfond (grant M21-0021).
 
-Credits
-==================
-
-This project is maintained by the ChangeIsKey team with support from Riksbankens Jubileumsfond (grant M21-0021).
-The library is under active development, but if it supports your research, please cite it as:
+If this library supports your research, please cite:
 
 .. code-block:: bibtex
 
