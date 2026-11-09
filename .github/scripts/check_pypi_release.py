@@ -59,8 +59,12 @@ def main():
         data = json.loads(args.metadata.read_text())
     if not isinstance(data, dict) or not isinstance(data.get("urls"), list) or not data["urls"]:
         raise ValueError("PyPI response has no release files; inspect it before retrying")
+    if data.get("info", {}).get("yanked"):
+        raise ValueError("PyPI release is yanked; inspect it before retrying")
     remote = {}
     for item in data["urls"]:
+        if item.get("yanked"):
+            raise ValueError("A PyPI release file is yanked; inspect it before retrying")
         name = item["filename"]
         digest = item["digests"]["sha256"]
         if name in remote or not isinstance(digest, str) or len(digest) != 64:

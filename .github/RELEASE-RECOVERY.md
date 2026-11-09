@@ -9,7 +9,7 @@ The build job saves the wheel, source distribution, and
 records the source commit, project name, version, filenames, and SHA-256 hashes.
 The receiving job verifies the downloaded files against the checked-out source
 and manifest, then compares them with PyPI. A PyPI version that exists with
-different, missing, or extra files stops the preview for investigation.
+different, missing, extra, or yanked files stops the preview for investigation.
 
 For a future retry, preserve and reuse the exact artifact from the original
 release run. Do not assume that a new build from the same commit has identical
