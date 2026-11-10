@@ -1,0 +1,221 @@
+name: Check version
+
+on:
+  push:
+    branches:
+      - main
+      - ci/automatic-releases
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Show current version
+        run: |
+          python -c "import tomllib; print('Current version:', tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+      
+      - name: Show previous version
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git show "$BEFORE:pyproject.toml" | python -c "import sys, tomllib; print('Previous version:', tomllib.loads(sys.stdin.read())['project']['version'])"   
+       
+      - name: Compare versions
+        id: compare
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git show "${BEFORE}:pyproject.toml" > /tmp/previous-pyproject.toml
+          python .github/scripts/compare_versions.py /tmp/previous-pyproject.toml pyproject.toml
+            
+      - name: Report a version change
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.compare.outputs.version }}
+        run: echo "Version $VERSION would be considered for release." 
+
+      - name: Check license is complete
+        if: steps.compare.outputs.changed == 'true'
+        run: python .github/scripts/check_license.py
+        
+      - name: Install test dependencies
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install .
+          python -m pip install pytest
+          wget https://spraakbanken.gu.se/resurser/meningsmangder/svt-2004.xml.bz2
+          test -f svt-2004.xml.bz2
+
+      - name: Run tests
+        if: steps.compare.outputs.changed == 'true'
+        run: pytest tests
+      
+      - name: Install build tool
+        if: steps.compare.outputs.changed == 'true'
+        run: python -m pip install build twine 
+
+      - name: Build package
+        if: steps.compare.outputs.changed == 'true'
+        run: python -m build
+
+      - name: Check built package
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          python -m twine check dist/*
+          python .github/scripts/check_distributions.py
+
+      - name: Record release evidence
+        if: steps.compare.outputs.changed == 'true'
+        run: python .github/scripts/release_evidence.py create
+
+      - name: Save package files
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: |
+            dist/
+            release-evidence/manifest.json
+          if-no-files-found: error
+
+      - name: Preview release
+        if: github.ref == 'refs/heads/main' && steps.compare.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.compare.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          echo "Would release version: $VERSION"
+          echo "Would use Git tag: v$VERSION"
+          echo "Source commit: $COMMIT"
+
+  prepare-publish:
+    needs: check-version
+    if: github.ref == 'refs/heads/main' && needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Download package files
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: .
+
+      - name: Show files ready for publishing
+        run: ls -l dist/
+
+      - name: Verify package metadata
+        run: |
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py verify
+
+      - name: Preview PyPI release status
+        id: pypi-status
+        run: python .github/scripts/check_pypi_release.py --lookup
+
+      - name: Create matching GitHub release
+        if: steps.pypi-status.outputs.decision == 'already-published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/ensure_github_release.py
+
+      - name: Explain missing PyPI release
+        if: steps.pypi-status.outputs.decision == 'publish'
+        run: echo 'PyPI upload is disabled; no GitHub release was created.'
+
+  test-release-workflow:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/automatic-releases'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Test release and recovery decisions offline
+        run: python .github/scripts/test_release_flow.py
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install .
+          python -m pip install pytest build twine
+          wget https://spraakbanken.gu.se/resurser/meningsmangder/svt-2004.xml.bz2
+          test -f svt-2004.xml.bz2
+
+      - name: Run tests
+        run: pytest tests
+
+      - name: Build and check package
+        run: |
+          python -m build
+          python -m twine check dist/*
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py create
+
+      - name: Save package files
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-python-package
+          path: |
+            dist/
+            release-evidence/manifest.json
+          if-no-files-found: error
+
+  test-artifact-handoff:
+    needs: test-release-workflow
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/automatic-releases'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out test source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Download test package files
+        uses: actions/download-artifact@v4
+        with:
+          name: test-python-package
+          path: .
+
+      - name: Verify both distribution formats exist
+        run: |
+          python .github/scripts/check_distributions.py
+          python .github/scripts/release_evidence.py verify
+          ls -l dist/
