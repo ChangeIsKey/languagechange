@@ -46,3 +46,16 @@ Pull request previews can be enabled separately in **Pull request builds**.
 
 See the official [Git integration guide](https://docs.readthedocs.com/platform/stable/reference/git-integration.html)
 and [automation rules guide](https://docs.readthedocs.com/platform/stable/automation-rules.html).
+
+## API reference structure
+
+The API reference starts at `docs/source/api/languagechange.rst`. Its group
+indexes organise pages into Data, Models, Meaning analysis, Change detection
+and Utilities. Each module page has a short title and retains its full Python
+module name and autodoc directive.
+
+Edit these source files rather than the generated HTML. Add a new module page
+to the relevant group index when extending the reference. PyData provides the
+expand/collapse controls; `docs/_static/api-layout.css` handles long names.
+`docs/_static/api-redirects.js` preserves object bookmarks from the earlier
+combined pages. Keep those mappings when moving existing API objects.
