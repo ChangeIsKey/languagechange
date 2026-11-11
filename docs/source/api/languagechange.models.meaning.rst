@@ -1,26 +1,17 @@
-languagechange.models.meaning package
-=====================================
+.. _languagechange-models-meaning-package:
+
+Meaning analysis
+================
+
+Group and analyse representations of word meaning.
+
+.. toctree::
+   :maxdepth: 1
+
+   languagechange.models.meaning.clustering
+   languagechange.models.meaning.meaning
 
 .. automodule:: languagechange.models.meaning
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-Submodules
-----------
-
-languagechange.models.meaning.clustering module
------------------------------------------------
-
-.. automodule:: languagechange.models.meaning.clustering
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.models.meaning.meaning module
---------------------------------------------
-
-.. automodule:: languagechange.models.meaning.meaning
    :members:
    :show-inheritance:
    :undoc-members:

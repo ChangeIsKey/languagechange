@@ -1,34 +1,19 @@
-languagechange.models.change package
-====================================
+.. _languagechange-models-change-package:
+
+Change detection
+================
+
+Measure and inspect differences across time periods.
+
+.. toctree::
+   :maxdepth: 1
+
+   languagechange.models.change.metrics
+   languagechange.models.change.timeseries
+   languagechange.models.type.type_classification
+   languagechange.models.change.widid
 
 .. automodule:: languagechange.models.change
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-Submodules
-----------
-
-languagechange.models.change.metrics module
--------------------------------------------
-
-.. automodule:: languagechange.models.change.metrics
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.models.change.timeseries module
-----------------------------------------------
-
-.. automodule:: languagechange.models.change.timeseries
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.models.change.widid module
------------------------------------------
-
-.. automodule:: languagechange.models.change.widid
    :members:
    :show-inheritance:
    :undoc-members:
