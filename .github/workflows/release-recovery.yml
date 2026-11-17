@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Check out recovery tools
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -42,11 +44,6 @@ jobs:
           gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" > /tmp/release-jobs.json
           python .github/scripts/validate_recovery_run.py /tmp/release-run.json /tmp/release-jobs.json
 
-      - name: Check out original release source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.original.outputs.source_sha }}
-
       - name: Download original release artifact
         uses: actions/download-artifact@v4
         with:
@@ -55,9 +52,21 @@ jobs:
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
 
+      - name: Resolve release source
+        id: source
+        env:
+          RUN_SHA: ${{ steps.original.outputs.source_sha }}
+        run: python .github/scripts/resolve_recovery_source.py "$RUN_SHA" release-evidence/manifest.json
+
+      - name: Check out original release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
+          clean: false
+
       - name: Verify original package and source
         env:
-          RELEASE_SOURCE_SHA: ${{ steps.original.outputs.source_sha }}
+          RELEASE_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
         run: |
           python .github/scripts/check_distributions.py
           python .github/scripts/release_evidence.py verify
@@ -70,5 +79,5 @@ jobs:
         if: inputs.create_github_release && steps.pypi-status.outputs.decision == 'already-published'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SOURCE_SHA: ${{ steps.original.outputs.source_sha }}
+          RELEASE_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
         run: python .github/scripts/ensure_github_release.py
