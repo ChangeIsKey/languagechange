@@ -1,0 +1,34 @@
+/* Keep API navigation labels readable inside PyData's two sidebars. */
+.bd-sidebar-primary .bd-sidenav a,
+.bd-sidebar-primary .bd-sidenav a .pre,
+.bd-sidebar-secondary .nav a,
+.bd-sidebar-secondary .nav a .pre {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Long docstring names and paths must not widen the content column. */
+.bd-main .bd-content,
+.bd-main .bd-article {
+  min-width: 0;
+}
+
+.bd-article {
+  overflow-wrap: anywhere;
+}
+
+.bd-article dt.sig {
+  box-sizing: border-box;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.bd-article dt.sig .pre,
+.bd-article code.literal,
+.bd-article code.literal .pre,
+.bd-article cite {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}

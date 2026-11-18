@@ -1,90 +1,21 @@
-languagechange package
-======================
+.. _languagechange-package:
 
-.. automodule:: languagechange
-   :members:
-   :show-inheritance:
-   :undoc-members:
+API reference
+=============
 
-Subpackages
------------
+Choose a topic below to find its classes, functions and Python import paths.
+For step-by-step examples, see the :doc:`../../tutorials/index`.
 
 .. toctree::
-   :maxdepth: 4
+   :maxdepth: 2
 
+   data
    languagechange.models
+   languagechange.models.meaning
+   languagechange.models.change
+   utilities
 
-Submodules
-----------
-
-languagechange.benchmark module
--------------------------------
-
-.. automodule:: languagechange.benchmark
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.cache module
----------------------------
-
-.. automodule:: languagechange.cache
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.corpora module
------------------------------
-
-.. automodule:: languagechange.corpora
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.pipeline module
-------------------------------
-
-.. automodule:: languagechange.pipeline
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.resource\_manager module
----------------------------------------
-
-.. automodule:: languagechange.resource_manager
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.search module
-----------------------------
-
-.. automodule:: languagechange.search
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.usages module
-----------------------------
-
-.. automodule:: languagechange.usages
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.utils module
----------------------------
-
-.. automodule:: languagechange.utils
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-languagechange.visualization module
------------------------------------
-
-.. automodule:: languagechange.visualization
+.. automodule:: languagechange
    :members:
    :show-inheritance:
    :undoc-members:

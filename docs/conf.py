@@ -81,7 +81,7 @@ html_theme_options = {
     },
     "navigation_depth": 3,
     "show_toc_level": 2,
-    "collapse_navigation": True,
+    "collapse_navigation": False,
     "show_nav_level": 1,
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
     "icon_links": [
@@ -92,10 +92,14 @@ html_theme_options = {
 }
 html_sidebars = {"**": ["sidebar-nav-bs"]}
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
+html_css_files = ["custom.css", "api-layout.css"]
+html_js_files = ["api-redirects.js"]
 html_favicon = "_static/languagechange-icon.svg"
 
 # Configure autodoc defaults.
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
+
+# The containing class is already listed above each method in page contents.
+toc_object_entries_show_parents = "hide"
 intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}

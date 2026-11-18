@@ -1,9 +1,8 @@
 :orphan:
 
-languagechange
-==============
+.. _languagechange:
 
-.. toctree::
-   :maxdepth: 4
+API reference index
+===================
 
-   languagechange
+Browse the :doc:`languagechange` by topic.
