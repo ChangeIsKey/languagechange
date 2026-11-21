@@ -11,3 +11,7 @@ __pycache__/
 
 # Generated documentation build files
 docs/_build/
+
+# Outputs produced by the use case CI runner
+outputs/
+.usecase-model-cache/

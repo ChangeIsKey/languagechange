@@ -7,6 +7,7 @@ import argparse
 import hashlib
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 
 import jsonlines
@@ -23,6 +24,7 @@ from languagechange.models.meaning.clustering import Clustering
 from languagechange.search import SearchTerm
 from languagechange.usages import UsageDictionary
 from languagechange.utils import _parse_year
+from languagechange.usages import TargetUsageList
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir', type=Path, default=Path('outputs/timeseries_native'))
@@ -33,7 +35,14 @@ output_dir.mkdir(parents=True, exist_ok=True)
 corpus_path = Path('corpora/kubhist2-carlscronaswekoblad-1780.parquet')
 corpus = ParquetCorpus(str(corpus_path))
 all_usages = corpus.search(SearchTerm(lemma='man'))['lemma=man']
-usages = all_usages.sample(100, random_seed=42)
+in_ci = os.environ.get('GITHUB_ACTIONS') == 'true'
+if in_ci:
+    # Keep every year represented: 3 + 3 + 2 + 2 = 10 contexts.
+    grouped = all_usages.group_by_time()
+    usages = TargetUsageList([u for i, year in enumerate(sorted(grouped))
+                              for u in grouped[year].sample(3 if i < 2 else 2, random_seed=42)])
+else:
+    usages = all_usages.sample(100, random_seed=42)
 
 if args.reuse_run:
     with jsonlines.open(args.reuse_run / 'sample/lemma=man_usages.jsonl') as reader:
@@ -44,7 +53,9 @@ if args.reuse_run:
     embeddings = np.load(args.reuse_run / 'usage_embeddings.npy', allow_pickle=False)
 else:
     from languagechange.models.representation.contextualized import XL_LEXEME
+    from languagechange.cache import CacheManager
     model = XL_LEXEME(device='cpu')
+    model.cache_mgr = CacheManager(str(output_dir / 'contextualized-cache'))
     embeddings = model.encode(usages, batch_size=2)
 assert embeddings.shape == (len(usages), 1024)
 assert np.isfinite(embeddings).all()
